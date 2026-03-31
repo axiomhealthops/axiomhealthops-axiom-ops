@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from './hooks/useAuth';
+import { AuthProvider, useAuth } from './hooks/useAuth.jsx';
 import { DIRECTOR_ROLES, MISSION_ROLES, COORDINATOR_ROLES } from './lib/constants';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
