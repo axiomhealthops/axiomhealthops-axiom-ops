@@ -62,16 +62,30 @@ function parseVisitCSV(csv) {
 
 function parseCensusCSV(csv) {
   const lines = csv.split('\n').filter(l => l.trim());
-  const rows = lines.slice(1);
+  const rows = lines.slice(1); // skip header
   return rows.map(line => {
-    const cols = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+    // Handle quoted CSV fields properly
+    const cols = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') { inQuotes = !inQuotes; }
+      else if (line[i] === ',' && !inQuotes) { cols.push(current.trim()); current = ''; }
+      else { current += line[i]; }
+    }
+    cols.push(current.trim());
+
+    // A=Patient, B=Address, C=Disc, D=RefSource, E=Region, F=SOC, G=Insurance, H=Status
     return {
       patient_name: cols[0] || '',
-      region:       (cols[1] || '').toUpperCase().trim(),
-      insurance:    cols[2] || '',
-      status:       cols[3] || 'active',
+      address:      cols[1] || '',
+      discipline:   cols[2] || '',
+      ref_source:   cols[3] || '',
+      region:       (cols[4] || '').toUpperCase().trim(),
+      insurance:    cols[6] || '',
+      status:       cols[7] || 'active',
     };
-  }).filter(r => r.patient_name);
+  }).filter(r => r.patient_name && r.patient_name.trim());
 }
 
 function UploadCard({ title, description, storageKey, parseType, onSuccess }) {
