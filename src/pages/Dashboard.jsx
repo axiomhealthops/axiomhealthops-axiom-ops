@@ -6,6 +6,9 @@ import VisitSchedulePage from './dashboard/VisitSchedulePage';
 import PatientCensusPage from './dashboard/PatientCensusPage';
 import AuthTrackerPage from './dashboard/AuthTrackerPage';
 import ActionListPage from './dashboard/ActionListPage';
+import ExpansionPage from './dashboard/ExpansionPage';
+import OnHoldRecoveryPage from './dashboard/OnHoldRecoveryPage';
+import UserManagementPage from './dashboard/UserManagementPage';
 
 const PAGE_COMPONENTS = {
   overview: OverviewPage,
@@ -14,16 +17,19 @@ const PAGE_COMPONENTS = {
   census: PatientCensusPage,
   auth: AuthTrackerPage,
   actions: ActionListPage,
+  expansion: ExpansionPage,
+  'on-hold': OnHoldRecoveryPage,
+  users: UserManagementPage,
 };
 
 function ComingSoon({ page }) {
   return (
-    <div style={{ padding: 40, fontFamily: 'DM Sans, sans-serif' }}>
+    <div style={{ padding: 40 }}>
       <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--gray)', marginBottom: 8 }}>Coming Soon</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--black)', textTransform: 'capitalize' }}>
         {page?.replace(/-/g, ' ')}
       </div>
-      <div style={{ marginTop: 12, fontSize: 14, color: 'var(--gray)' }}>This page is being built and will be available shortly.</div>
+      <div style={{ marginTop: 12, fontSize: 14, color: 'var(--gray)' }}>This page is being built.</div>
     </div>
   );
 }
