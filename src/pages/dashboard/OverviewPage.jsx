@@ -9,9 +9,17 @@ export default function OverviewPage() {
   // Pull from localStorage if available
   const raw = localStorage.getItem('axiom_pariox_data');
   const visits = raw ? JSON.parse(raw) : [];
-  const completedVisits = visits.filter(v =>
-    v.status?.toLowerCase().includes('completed')
-  ).length;
+  const completedVisits = visits.filter(v => {
+  const s = v.status?.toLowerCase() || '';
+  return s.includes('completed') || s.includes('eform') || s === '';
+}).length;
+
+const scheduledVisits = visits.filter(v => {
+  const s = v.status?.toLowerCase() || '';
+  return s.includes('scheduled');
+}).length;
+
+const totalVisits = visits.length;
   const pct = Math.round((completedVisits / METRICS.WEEKLY_VISIT_TARGET) * 100);
 
   const census = (() => {
