@@ -21,10 +21,26 @@ function getStatusStyle(status) {
 function parseDate(raw) {
   if (!raw) return null;
   const clean = raw.replace(/"/g, '').trim();
+  if (!clean) return null;
+
+  // Try MM/DD/YYYY or M/D/YYYY (most common Pariox format)
+  const mdyMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdyMatch) {
+    const [, m, d, y] = mdyMatch;
+    return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+  }
+
+  // Try YYYY-MM-DD
+  const isoMatch = clean.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+  }
+
+  // Fallback
   const d = new Date(clean);
   return isNaN(d.getTime()) ? null : d;
 }
-
 function toDateStr(d) {
   return d.toISOString().split('T')[0];
 }
