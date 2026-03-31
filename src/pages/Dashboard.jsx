@@ -1,16 +1,19 @@
 import React, { useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
-import { useAuth } from '../hooks/useAuth.jsx';
 import OverviewPage from './dashboard/OverviewPage';
 import UploadsPage from './dashboard/UploadsPage';
 import VisitSchedulePage from './dashboard/VisitSchedulePage';
 import PatientCensusPage from './dashboard/PatientCensusPage';
+import AuthTrackerPage from './dashboard/AuthTrackerPage';
+import ActionListPage from './dashboard/ActionListPage';
 
 const PAGE_COMPONENTS = {
   overview: OverviewPage,
   uploads: UploadsPage,
   visits: VisitSchedulePage,
   census: PatientCensusPage,
+  auth: AuthTrackerPage,
+  actions: ActionListPage,
 };
 
 function ComingSoon({ page }) {
@@ -27,9 +30,7 @@ function ComingSoon({ page }) {
 
 export default function Dashboard() {
   const [activePage, setActivePage] = useState('overview');
-
   const PageComponent = PAGE_COMPONENTS[activePage] || (() => <ComingSoon page={activePage} />);
-
   return (
     <DashboardLayout activePage={activePage} onNavigate={setActivePage}>
       <PageComponent />
