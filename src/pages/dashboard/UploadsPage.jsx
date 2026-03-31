@@ -42,7 +42,12 @@ function parseVisitCSV(csv) {
       patient_name: cols[0] || '',
       address:      cols[1] || '',
       ref_source:   cols[2] || '',
-      region:       (cols[3] || '').toUpperCase().trim(),
+      region: (() => {
+  const raw = (cols[3] || '').trim();
+  // Extract single letter — take last character if multi-char, or the value itself
+  const single = raw.slice(-1).toUpperCase();
+  return /^[A-Z]$/.test(single) ? single : raw.toUpperCase();
+})(),
       discipline:   cols[4] || '',
       staff_name:   cols[5] || '',
       event_type:   cols[6] || '',
