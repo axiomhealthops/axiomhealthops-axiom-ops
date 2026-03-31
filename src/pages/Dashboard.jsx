@@ -2,7 +2,7 @@ import { useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import TopBar from '../components/TopBar';
 import StatCard from '../components/StatCard';
-import { useAuth } from '../hooks/useAuth';
+import { useAuth } from '../hooks/useAuth.jsx';
 import { METRICS } from '../lib/constants';
 
 // Page stubs — will be filled in subsequent batches
