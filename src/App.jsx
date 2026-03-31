@@ -1,3 +1,4 @@
+import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth.jsx';
 import { DIRECTOR_ROLES, MISSION_ROLES, COORDINATOR_ROLES } from './lib/constants';
@@ -26,6 +27,14 @@ function CoordinatorPlaceholder() {
   );
 }
 
+function Loader() {
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'DM Sans, sans-serif', color: '#8B6B64' }}>
+      Loading...
+    </div>
+  );
+}
+
 function RoleRouter() {
   const { user, profile, loading } = useAuth();
   if (loading) return <Loader />;
@@ -47,14 +56,6 @@ function ProtectedRoute({ children, allowedRoles }) {
   if (!user) return <Navigate to="/login" replace />;
   if (!allowedRoles.includes(profile?.role)) return <Navigate to="/" replace />;
   return children;
-}
-
-function Loader() {
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'DM Sans, sans-serif', color: '#8B6B64' }}>
-      Loading...
-    </div>
-  );
 }
 
 function LoginGuard() {
