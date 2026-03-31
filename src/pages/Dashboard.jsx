@@ -25,11 +25,26 @@ const PAGE_COMPONENTS = {
 function ComingSoon({ page }) {
   return (
     <div style={{ padding: 40 }}>
-      <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--gray)', marginBottom: 8 }}>Coming Soon</div>
-      <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--black)', textTransform: 'capitalize' }}>
+      <div style={{
+        fontSize: 12,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        color: 'var(--gray)',
+        marginBottom: 8,
+      }}>
+        Coming Soon
+      </div>
+      <div style={{
+        fontSize: 24,
+        fontWeight: 700,
+        color: 'var(--black)',
+        textTransform: 'capitalize',
+      }}>
         {page?.replace(/-/g, ' ')}
       </div>
-      <div style={{ marginTop: 12, fontSize: 14, color: 'var(--gray)' }}>This page is being built.</div>
+      <div style={{ marginTop: 12, fontSize: 14, color: 'var(--gray)' }}>
+        This page is being built and will be available shortly.
+      </div>
     </div>
   );
 }
