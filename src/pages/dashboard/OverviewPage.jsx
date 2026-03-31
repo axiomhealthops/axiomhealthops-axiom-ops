@@ -14,13 +14,14 @@ export default function OverviewPage() {
   return s.includes('completed') || s.includes('eform') || s === '';
 }).length;
 
-const scheduledVisits = visits.filter(v => {
-  const s = v.status?.toLowerCase() || '';
-  return s.includes('scheduled');
-}).length;
-
+const completedVisits = visits.filter(v =>
+  v.status?.toLowerCase().includes('completed')
+).length;
+const scheduledVisits = visits.filter(v =>
+  v.status?.toLowerCase().includes('scheduled')
+).length;
 const totalVisits = visits.length;
-  const pct = Math.round((completedVisits / METRICS.WEEKLY_VISIT_TARGET) * 100);
+const pct = Math.round((totalVisits / METRICS.WEEKLY_VISIT_TARGET) * 100);
 
   const census = (() => {
     try { return JSON.parse(localStorage.getItem('axiom_census') || '[]'); } catch { return []; }
