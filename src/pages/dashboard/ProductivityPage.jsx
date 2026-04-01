@@ -37,20 +37,12 @@ function getBarColor(pct) {
   return '#DC2626';
 }
  
-function getAssignedBg(assigned, target, type) {
-  if (type === 'prn') return '#F9FAFB';
+function getAssignedStyle(assigned, target, type) {
+  if (type === 'prn') return { color: '#374151', bg: '#F9FAFB' };
   var diff = assigned - target;
-  if (diff > 2) return '#EFF6FF';   // over-scheduled, light blue
-  if (diff >= -2) return '#ECFDF5'; // on target or close, green
-  return '#FEF2F2';                 // under, red
-}
- 
-function getAssignedBg(assigned, target, type) {
-  if (type === 'prn') return '#F9FAFB';
-  var diff = assigned - target;
-  if (diff === 0) return '#ECFDF5';
-  if (diff >= -2) return '#FEF3C7';
-  return '#FEF2F2';
+  if (diff > 2)  return { color: '#1565C0', bg: '#EFF6FF' };  // over-scheduled, blue
+  if (diff >= -2) return { color: '#065F46', bg: '#ECFDF5' }; // on target, green
+  return { color: '#991B1B', bg: '#FEF2F2' };                 // under, red
 }
  
 export default function ProductivityPage() {
@@ -106,16 +98,12 @@ export default function ProductivityPage() {
     return clinicians.map(function(c) {
       var s = statsByClinicianId[c.id] || { completed: 0, scheduled: 0, missed: 0, cancelled: 0, evals: 0, reassessments: 0, missedActive: 0 };
       var target = TARGETS[c.employment_type] || 25;
-      var done = s.completed + s.missedActive; // completed includes Missed(Active) — visit happened
+      var done = s.completed + s.missedActive;
       var totalAssigned = done + s.scheduled + s.missed + s.cancelled;
       var pct = target > 0 ? Math.round((done / target) * 100) : 0;
       var projectedDone = done + s.scheduled;
       var projectedPct = target > 0 ? Math.min(Math.round((projectedDone / target) * 100), 100) : 0;
-      return Object.assign({}, c, {
-        stats: s, target: target, done: done,
-        totalAssigned: totalAssigned, pct: pct,
-        projectedPct: projectedPct,
-      });
+      return Object.assign({}, c, { stats: s, target: target, done: done, totalAssigned: totalAssigned, pct: pct, projectedPct: projectedPct });
     });
   }, [clinicians, statsByClinicianId]);
  
@@ -143,21 +131,14 @@ export default function ProductivityPage() {
     var pt = enriched.filter(function(c) { return c.employment_type === 'pt'; });
     var prn = enriched.filter(function(c) { return c.employment_type === 'prn'; });
     var avg = function(arr) { return arr.length > 0 ? Math.round(arr.reduce(function(a, c) { return a + c.pct; }, 0) / arr.length) : 0; };
-    var totalCompleted = enriched.reduce(function(a, c) { return a + c.done; }, 0);
-    var totalScheduled = enriched.reduce(function(a, c) { return a + c.stats.scheduled; }, 0);
-    var totalMissedActive = enriched.reduce(function(a, c) { return a + c.stats.missedActive; }, 0);
-    // Under-scheduled: assigned < target - 2
-    var underScheduled = enriched.filter(function(c) {
-      return c.employment_type !== 'prn' && c.totalAssigned > 0 && c.totalAssigned < (c.target - 2);
-    }).length;
     return {
       ft: { count: ft.length, avg: avg(ft), atRisk: ft.filter(function(c) { return c.pct < 70 && c.done > 0; }).length },
       pt: { count: pt.length, avg: avg(pt), atRisk: pt.filter(function(c) { return c.pct < 70 && c.done > 0; }).length },
       prn: { count: prn.length, alerted: prn.filter(function(c) { return c.pct >= 100; }).length },
-      totalCompleted: totalCompleted,
-      totalScheduled: totalScheduled,
-      totalMissedActive: totalMissedActive,
-      underScheduled: underScheduled,
+      totalCompleted: enriched.reduce(function(a, c) { return a + c.done; }, 0),
+      totalScheduled: enriched.reduce(function(a, c) { return a + c.stats.scheduled; }, 0),
+      totalMissedActive: enriched.reduce(function(a, c) { return a + c.stats.missedActive; }, 0),
+      underScheduled: enriched.filter(function(c) { return c.employment_type !== 'prn' && c.totalAssigned > 0 && c.totalAssigned < (c.target - 2); }).length,
     };
   }, [enriched]);
  
@@ -177,15 +158,14 @@ export default function ProductivityPage() {
         subtitle={filtered.length + ' clinicians \u00b7 Week of ' + new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
  
-        {/* Summary Strip */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
             { label: 'Completed This Week', val: summary.totalCompleted, sub: 'across all clinicians', color: 'var(--green)' },
             { label: 'Scheduled Remaining', val: summary.totalScheduled, sub: 'visits still on calendar', color: 'var(--blue)' },
             { label: 'Notes Not Submitted', val: summary.totalMissedActive, sub: summary.totalMissedActive > 0 ? 'Cannot bill \u2014 follow up now' : 'All notes submitted', color: summary.totalMissedActive > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.totalMissedActive > 0 },
             { label: 'Under-Scheduled', val: summary.underScheduled, sub: 'clinicians below target', color: summary.underScheduled > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.underScheduled > 0 },
-            { label: 'FT Avg (' + summary.ft.count + ')', val: summary.ft.avg + '%', sub: summary.ft.atRisk > 0 ? summary.ft.atRisk + ' below 70%' : 'Target: 25 visits/wk', color: summary.ft.avg >= 80 ? 'var(--green)' : summary.ft.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
-            { label: 'PT Avg (' + summary.pt.count + ')', val: summary.pt.avg + '%', sub: summary.pt.atRisk > 0 ? summary.pt.atRisk + ' below 70%' : 'Target: 15 visits/wk', color: summary.pt.avg >= 80 ? 'var(--green)' : summary.pt.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
+            { label: 'FT Avg (' + summary.ft.count + ')', val: summary.ft.avg + '%', sub: summary.ft.atRisk > 0 ? summary.ft.atRisk + ' below 70%' : 'Target: 25/wk', color: summary.ft.avg >= 80 ? 'var(--green)' : summary.ft.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
+            { label: 'PT Avg (' + summary.pt.count + ')', val: summary.pt.avg + '%', sub: summary.pt.atRisk > 0 ? summary.pt.atRisk + ' below 70%' : 'Target: 15/wk', color: summary.pt.avg >= 80 ? 'var(--green)' : summary.pt.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
           ].map(function(tile) {
             return (
               <div key={tile.label} style={{ flex: 1, padding: '12px 16px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFF5F5' : 'transparent' }}>
@@ -197,7 +177,6 @@ export default function ProductivityPage() {
           })}
         </div>
  
-        {/* Filters */}
         <div style={{ display: 'flex', gap: 10, padding: '10px 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg)', flexShrink: 0, flexWrap: 'wrap', alignItems: 'center' }}>
           <input placeholder="Search clinician..." value={search}
             onChange={function(e) { setSearch(e.target.value); }}
@@ -226,7 +205,6 @@ export default function ProductivityPage() {
           </span>
         </div>
  
-        {/* Table */}
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
           {visits.length === 0 && (
             <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 10, padding: '14px 20px', marginBottom: 16, fontSize: 13, color: '#92400E', fontWeight: 500 }}>
@@ -235,8 +213,6 @@ export default function ProductivityPage() {
           )}
  
           <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
- 
-            {/* Column Headers */}
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.55fr 0.55fr 0.8fr 2fr 0.65fr 0.65fr 0.75fr 0.55fr 0.55fr 0.6fr 0.85fr', padding: '8px 20px', background: 'var(--bg)', borderBottom: '2px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               <span>Clinician</span>
               <span>Rgn</span>
@@ -248,7 +224,7 @@ export default function ProductivityPage() {
               <span style={{ color: '#7C3AED', fontWeight: 800 }}>Total</span>
               <span>Evals</span>
               <span>Re-Asmt</span>
-             <span style={{ color: '#DC2626' }}>Note !</span>
+              <span style={{ color: '#DC2626' }}>Note !</span>
               <span>Status</span>
             </div>
  
@@ -261,13 +237,11 @@ export default function ProductivityPage() {
               var pctBar = c.target > 0 ? Math.min((c.done / c.target) * 100, 100) : 0;
               var schedBar = c.target > 0 ? Math.min((c.stats.scheduled / c.target) * 100, 100 - pctBar) : 0;
               var barColor = getBarColor(c.pct);
-              var assignedColor = hasData ? getAssignedColor(c.totalAssigned, c.target, c.employment_type) : 'var(--gray)';
-              var assignedBg = hasData ? getAssignedBg(c.totalAssigned, c.target, c.employment_type) : 'transparent';
+              var assignedStyle = hasData ? getAssignedStyle(c.totalAssigned, c.target, c.employment_type) : { color: 'var(--gray)', bg: 'transparent' };
               var isUnderScheduled = c.employment_type !== 'prn' && hasData && c.totalAssigned < (c.target - 2);
               var hasMissedActive = c.stats.missedActive > 0;
               var isAlert = c.employment_type === 'prn' && c.pct >= 100;
  
-              // Status label + colors
               var statusLabel, statusColor, statusBg;
               if (isAlert) { statusLabel = '\uD83D\uDD34 Alert'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
               else if (hasMissedActive) { statusLabel = '\uD83D\uDCCB Note Due'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
@@ -277,9 +251,7 @@ export default function ProductivityPage() {
               else if (c.pct >= 70) { statusLabel = 'At Risk'; statusColor = '#92400E'; statusBg = '#FEF3C7'; }
               else { statusLabel = 'Low'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
  
-              var rowBg = (isAlert || hasMissedActive || isUnderScheduled)
-                ? '#FFF8F5'
-                : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
+              var rowBg = (isAlert || hasMissedActive || isUnderScheduled) ? '#FFF8F5' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
  
               return (
                 <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '2fr 0.55fr 0.55fr 0.8fr 2fr 0.65fr 0.65fr 0.75fr 0.55fr 0.55fr 0.6fr 0.85fr', padding: '10px 20px', alignItems: 'center', borderBottom: '1px solid var(--border)', background: rowBg }}>
@@ -296,7 +268,6 @@ export default function ProductivityPage() {
                     {c.employment_type === 'ft' ? 'Full Time' : c.employment_type === 'pt' ? 'Part Time' : 'PRN'}
                   </span>
  
-                  {/* Dual bar */}
                   <div>
                     {hasData ? (
                       <>
@@ -313,9 +284,7 @@ export default function ProductivityPage() {
                           {schedBar > 0 && <div style={{ height: '100%', width: schedBar + '%', background: '#93C5FD', flexShrink: 0 }} />}
                         </div>
                         {c.projectedPct > c.pct && (
-                          <div style={{ fontSize: 9, color: '#1565C0', marginTop: 2 }}>
-                            Projected {c.projectedPct}% if all scheduled complete
-                          </div>
+                          <div style={{ fontSize: 9, color: '#1565C0', marginTop: 2 }}>Projected {c.projectedPct}% if all scheduled complete</div>
                         )}
                       </>
                     ) : (
@@ -323,48 +292,38 @@ export default function ProductivityPage() {
                     )}
                   </div>
  
-                  {/* Done */}
                   <span style={{ fontSize: 16, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: hasData ? '#065F46' : 'var(--gray)', textAlign: 'center' }}>
                     {hasData ? c.done : '\u2014'}
                   </span>
  
-                  {/* Scheduled */}
                   <span style={{ fontSize: 14, fontWeight: 600, fontFamily: 'DM Mono, monospace', color: c.stats.scheduled > 0 ? '#1565C0' : 'var(--gray)', textAlign: 'center' }}>
                     {hasData ? c.stats.scheduled : '\u2014'}
                   </span>
  
-                  {/* TOTAL ASSIGNED — the key spot-check column */}
                   <div style={{ textAlign: 'center' }}>
                     {hasData ? (
-                      <span style={{ fontSize: 14, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: assignedColor, background: assignedBg, padding: '3px 8px', borderRadius: 6, display: 'inline-block' }}>
+                      <span style={{ fontSize: 14, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: assignedStyle.color, background: assignedStyle.bg, padding: '3px 8px', borderRadius: 6, display: 'inline-block' }}>
                         {c.totalAssigned}/{c.target}
                       </span>
-                    ) : (
-                      <span style={{ color: 'var(--gray)' }}>\u2014</span>
-                    )}
+                    ) : <span style={{ color: 'var(--gray)' }}>\u2014</span>}
                   </div>
  
-                  {/* Evals */}
                   <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'DM Mono, monospace', color: c.stats.evals > 0 ? '#1565C0' : 'var(--gray)', textAlign: 'center' }}>
                     {c.stats.evals > 0 ? c.stats.evals : '\u2014'}
                   </span>
  
-                  {/* Reassessments */}
                   <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'DM Mono, monospace', color: c.stats.reassessments > 0 ? '#7C3AED' : 'var(--gray)', textAlign: 'center' }}>
                     {c.stats.reassessments > 0 ? c.stats.reassessments : '\u2014'}
                   </span>
  
-                  {/* Missed Active */}
                   <span style={{ fontSize: 12, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: hasMissedActive ? '#DC2626' : 'var(--gray)', textAlign: 'center' }}
-                    title="Missed (Active) — note not submitted, cannot bill">
+                    title="Missed (Active) = note not submitted, cannot bill">
                     {hasMissedActive ? c.stats.missedActive : '\u2014'}
                   </span>
  
-                  {/* Status */}
                   <span style={{ fontSize: 10, fontWeight: 700, color: statusColor, background: statusBg, padding: '3px 8px', borderRadius: 999, whiteSpace: 'nowrap' }}>
                     {statusLabel}
                   </span>
- 
                 </div>
               );
             })}
