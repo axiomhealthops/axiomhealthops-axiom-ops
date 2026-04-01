@@ -9,8 +9,11 @@ import ActionListPage from './dashboard/ActionListPage';
 import ExpansionPage from './dashboard/ExpansionPage';
 import OnHoldRecoveryPage from './dashboard/OnHoldRecoveryPage';
 import UserManagementPage from './dashboard/UserManagementPage';
-
-const PAGE_COMPONENTS = {
+import DailyReportsPage from './dashboard/DailyReportsPage';
+import ExecutiveReportPage from './dashboard/ExecutiveReportPage';
+import ProductivityPage from './dashboard/ProductivityPage';
+ 
+var PAGE_COMPONENTS = {
   overview: OverviewPage,
   uploads: UploadsPage,
   visits: VisitSchedulePage,
@@ -20,27 +23,17 @@ const PAGE_COMPONENTS = {
   expansion: ExpansionPage,
   'on-hold': OnHoldRecoveryPage,
   users: UserManagementPage,
+  'daily-reports': DailyReportsPage,
+  'exec-report': ExecutiveReportPage,
+  productivity: ProductivityPage,
 };
-
-function ComingSoon({ page }) {
+ 
+function ComingSoon(props) {
   return (
     <div style={{ padding: 40 }}>
-      <div style={{
-        fontSize: 12,
-        textTransform: 'uppercase',
-        letterSpacing: '0.06em',
-        color: 'var(--gray)',
-        marginBottom: 8,
-      }}>
-        Coming Soon
-      </div>
-      <div style={{
-        fontSize: 24,
-        fontWeight: 700,
-        color: 'var(--black)',
-        textTransform: 'capitalize',
-      }}>
-        {page?.replace(/-/g, ' ')}
+      <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--gray)', marginBottom: 8 }}>Coming Soon</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--black)', textTransform: 'capitalize' }}>
+        {(props.page || '').replace(/-/g, ' ')}
       </div>
       <div style={{ marginTop: 12, fontSize: 14, color: 'var(--gray)' }}>
         This page is being built and will be available shortly.
@@ -48,13 +41,14 @@ function ComingSoon({ page }) {
     </div>
   );
 }
-
+ 
 export default function Dashboard() {
-  const [activePage, setActivePage] = useState('overview');
-  const PageComponent = PAGE_COMPONENTS[activePage] || (() => <ComingSoon page={activePage} />);
+  var [activePage, setActivePage] = useState('overview');
+  var PageComponent = PAGE_COMPONENTS[activePage] || function() { return React.createElement(ComingSoon, { page: activePage }); };
   return (
-    <DashboardLayout activePage={activePage} onNavigate={setActivePage}>
-      <PageComponent />
-    </DashboardLayout>
+    React.createElement(DashboardLayout, { activePage: activePage, onNavigate: setActivePage },
+      React.createElement(PageComponent, null)
+    )
   );
 }
+ 
