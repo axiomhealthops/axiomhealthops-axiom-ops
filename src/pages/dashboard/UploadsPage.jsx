@@ -1,15 +1,16 @@
 import { useState, useRef } from 'react';
+import React from 'react';
 import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
-
+ 
 function parseXLSXFile(arrayBuffer) {
   const wb = XLSX.read(arrayBuffer, {
     type: 'array',
-    cellDates: true,      // ← changed to true so dates come out as date strings
+    cellDates: true,
     cellFormula: false,
     cellNF: false,
     sheetStubs: false,
-    raw: false,           // ← changed to false so formatted values are used
+    raw: false,
   });
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) throw new Error('No sheet found');
@@ -30,57 +31,11 @@ function parseXLSXFile(arrayBuffer) {
   }
   return XLSX.utils.sheet_to_csv(ws, { blankrows: false });
 }
-  // Strip formula cells (Pariox =right() formulas in Region col)
-  const ref = ws['!ref'];
-  if (ref) {
-    const range = XLSX.utils.decode_range(ref);
-    for (let R = range.s.r; R <= range.e.r; R++) {
-      for (let C = range.s.c; C <= range.e.c; C++) {
-        const addr = XLSX.utils.encode_cell({ r: R, c: C });
-        const cell = ws[addr];
-        if (cell && cell.f) {
-          ws[addr] = cell.v !== undefined
-            ? { v: String(cell.v), t: 's' }
-            : { v: '', t: 's' };
-        }
-      }
-    }
-  }
-  return XLSX.utils.sheet_to_csv(ws, { blankrows: false });
-}
-
+ 
 function parseVisitCSV(csv) {
   const lines = csv.split('\n').filter(l => l.trim());
-  const rows = lines.slice(1); // skip header
+  const rows = lines.slice(1);
   return rows.map(line => {
-    const cols = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
-    return {
-      patient_name: cols[0] || '',
-      address:      cols[1] || '',
-      ref_source:   cols[2] || '',
-      region: (() => {
-  const raw = (cols[3] || '').trim();
-  // Extract single letter — take last character if multi-char, or the value itself
-  const single = raw.slice(-1).toUpperCase();
-  return /^[A-Z]$/.test(single) ? single : raw.toUpperCase();
-})(),
-      discipline:   cols[4] || '',
-      staff_name:   cols[5] || '',
-      event_type:   cols[6] || '',
-      raw_date:     cols[7] || '',
-      visit_time:   cols[8] || '',
-      insurance:    cols[9] || '',
-      status:       cols[10] || '',
-      notes:        cols[11] || '',
-    };
-  }).filter(r => r.patient_name);
-}
-
-function parseCensusCSV(csv) {
-  const lines = csv.split('\n').filter(l => l.trim());
-  const rows = lines.slice(1); // skip header
-  return rows.map(line => {
-    // Handle quoted CSV fields properly
     const cols = [];
     let current = '';
     let inQuotes = false;
@@ -90,31 +45,66 @@ function parseCensusCSV(csv) {
       else { current += line[i]; }
     }
     cols.push(current.trim());
-
-    // A=Patient, B=Address, C=Disc, D=RefSource, E=Region, F=SOC, G=Insurance, H=Status
+ 
+    const region = (() => {
+      const raw = (cols[3] || '').trim();
+      const single = raw.slice(-1).toUpperCase();
+      return /^[A-Z]$/.test(single) ? single : raw.toUpperCase();
+    })();
+ 
     return {
       patient_name: cols[0] || '',
-      address:      cols[1] || '',
-      discipline:   cols[2] || '',
-      ref_source:   cols[3] || '',
-      region:       (cols[4] || '').toUpperCase().trim(),
-      insurance:    cols[6] || '',
-      status:       cols[7] || 'active',
+      address: cols[1] || '',
+      ref_source: cols[2] || '',
+      region,
+      discipline: cols[4] || '',
+      staff_name: cols[5] || '',
+      event_type: cols[6] || '',
+      raw_date: cols[7] || '',
+      visit_time: cols[8] || '',
+      insurance: cols[9] || '',
+      status: cols[10] || '',
+      notes: cols[11] || '',
+    };
+  }).filter(r => r.patient_name);
+}
+ 
+function parseCensusCSV(csv) {
+  const lines = csv.split('\n').filter(l => l.trim());
+  const rows = lines.slice(1);
+  return rows.map(line => {
+    const cols = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') { inQuotes = !inQuotes; }
+      else if (line[i] === ',' && !inQuotes) { cols.push(current.trim()); current = ''; }
+      else { current += line[i]; }
+    }
+    cols.push(current.trim());
+ 
+    return {
+      patient_name: cols[0] || '',
+      address: cols[1] || '',
+      discipline: cols[2] || '',
+      ref_source: cols[3] || '',
+      region: (cols[4] || '').toUpperCase().trim(),
+      insurance: cols[6] || '',
+      status: cols[7] || 'active',
     };
   }).filter(r => r.patient_name && r.patient_name.trim());
 }
-
+ 
 function UploadCard({ title, description, storageKey, parseType, onSuccess }) {
-  const [status, setStatus] = useState('idle'); // idle | loading | success | error
+  const [status, setStatus] = useState('idle');
   const [message, setMessage] = useState('');
   const [count, setCount] = useState(0);
   const inputRef = useRef();
-
+ 
   function handleFile(file) {
     if (!file) return;
     setStatus('loading');
     setMessage('');
-
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -136,16 +126,16 @@ function UploadCard({ title, description, storageKey, parseType, onSuccess }) {
     };
     reader.readAsArrayBuffer(file);
   }
-
+ 
   function handleDrop(e) {
     e.preventDefault();
     handleFile(e.dataTransfer.files[0]);
   }
-
+ 
   function handleChange(e) {
     handleFile(e.target.files[0]);
   }
-
+ 
   function clearData() {
     localStorage.removeItem(storageKey);
     setStatus('idle');
@@ -153,14 +143,14 @@ function UploadCard({ title, description, storageKey, parseType, onSuccess }) {
     setCount(0);
     if (inputRef.current) inputRef.current.value = '';
   }
-
+ 
   const existing = (() => {
     try {
       const d = JSON.parse(localStorage.getItem(storageKey) || '[]');
       return Array.isArray(d) ? d.length : 0;
     } catch { return 0; }
   })();
-
+ 
   return (
     <div style={cardStyles.card}>
       <div style={cardStyles.header}>
@@ -174,7 +164,7 @@ function UploadCard({ title, description, storageKey, parseType, onSuccess }) {
           </div>
         )}
       </div>
-
+ 
       <div
         style={{
           ...cardStyles.dropZone,
@@ -208,7 +198,7 @@ function UploadCard({ title, description, storageKey, parseType, onSuccess }) {
           </>
         )}
       </div>
-
+ 
       {(status === 'success' || existing > 0) && (
         <button onClick={clearData} style={cardStyles.clearBtn}>
           Clear data
@@ -217,7 +207,7 @@ function UploadCard({ title, description, storageKey, parseType, onSuccess }) {
     </div>
   );
 }
-
+ 
 export default function UploadsPage() {
   const [driveLink, setDriveLink] = useState(() => {
     try {
@@ -225,19 +215,18 @@ export default function UploadsPage() {
       return s.main || '';
     } catch { return ''; }
   });
-
+ 
   function saveDriveLink() {
     localStorage.setItem('axiom_drive_links', JSON.stringify({ main: driveLink }));
     alert('Drive link saved.');
   }
-
+ 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar
         title="Data Uploads"
         subtitle="Upload Pariox exports to populate the platform"
       />
-
       <div style={{ padding: '28px', flex: 1 }}>
         <div style={styles.grid}>
           <UploadCard
@@ -248,16 +237,17 @@ export default function UploadsPage() {
           />
           <UploadCard
             title="Patient Census"
-            description="Upload the Pariox patient census export (.xlsx). Must include patient name, region, insurance, and status columns."
+            description="Upload the Pariox patient census export (.xlsx). Columns: Patient, Address, Disc, Ref Source, Region, SOC, Insurance, Status."
             storageKey="axiom_census"
             parseType="census"
           />
         </div>
-
-        {/* Google Drive Link */}
+ 
         <div style={styles.driveCard}>
           <div style={styles.driveTitle}>Google Drive Link</div>
-          <div style={styles.driveDesc}>Paste your shared Google Drive folder link for team access to documents.</div>
+          <div style={styles.driveDesc}>
+            Paste your shared Google Drive folder link for team access to documents.
+          </div>
           <div style={styles.driveRow}>
             <input
               type="url"
@@ -269,7 +259,12 @@ export default function UploadsPage() {
             <button onClick={saveDriveLink} style={styles.driveBtn}>Save</button>
           </div>
           {driveLink && (
-            <a href={driveLink} target="_blank" rel="noopener noreferrer" style={styles.driveOpen}>
+            <a
+              href={driveLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={styles.driveOpen}
+            >
               Open Drive →
             </a>
           )}
@@ -278,7 +273,7 @@ export default function UploadsPage() {
     </div>
   );
 }
-
+ 
 const styles = {
   grid: {
     display: 'grid',
@@ -292,8 +287,17 @@ const styles = {
     borderRadius: '12px',
     padding: '24px',
   },
-  driveTitle: { fontSize: '15px', fontWeight: '600', color: 'var(--black)', marginBottom: '4px' },
-  driveDesc: { fontSize: '13px', color: 'var(--gray)', marginBottom: '16px' },
+  driveTitle: {
+    fontSize: '15px',
+    fontWeight: '600',
+    color: 'var(--black)',
+    marginBottom: '4px',
+  },
+  driveDesc: {
+    fontSize: '13px',
+    color: 'var(--gray)',
+    marginBottom: '16px',
+  },
   driveRow: { display: 'flex', gap: '10px' },
   driveInput: {
     flex: 1,
@@ -323,7 +327,7 @@ const styles = {
     textDecoration: 'none',
   },
 };
-
+ 
 const cardStyles = {
   card: {
     background: 'var(--card-bg)',
@@ -337,8 +341,18 @@ const cardStyles = {
     alignItems: 'flex-start',
     marginBottom: '16px',
   },
-  title: { fontSize: '15px', fontWeight: '600', color: 'var(--black)', marginBottom: '4px' },
-  desc: { fontSize: '12px', color: 'var(--gray)', lineHeight: 1.5, maxWidth: '320px' },
+  title: {
+    fontSize: '15px',
+    fontWeight: '600',
+    color: 'var(--black)',
+    marginBottom: '4px',
+  },
+  desc: {
+    fontSize: '12px',
+    color: 'var(--gray)',
+    lineHeight: 1.5,
+    maxWidth: '320px',
+  },
   badge: {
     background: '#ECFDF5',
     color: 'var(--green)',
@@ -359,7 +373,12 @@ const cardStyles = {
     background: 'var(--bg)',
   },
   dropIcon: { fontSize: '28px', marginBottom: '8px' },
-  dropText: { fontSize: '14px', fontWeight: '500', color: 'var(--black)', marginBottom: '4px' },
+  dropText: {
+    fontSize: '14px',
+    fontWeight: '500',
+    color: 'var(--black)',
+    marginBottom: '4px',
+  },
   dropSub: { fontSize: '12px', color: 'var(--gray)' },
   clearBtn: {
     marginTop: '12px',
@@ -372,3 +391,4 @@ const cardStyles = {
     cursor: 'pointer',
   },
 };
+ 
