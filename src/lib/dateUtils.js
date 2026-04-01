@@ -9,28 +9,28 @@ export function parseVisitDate(raw) {
   const d = new Date(clean);
   return isNaN(d.getTime()) ? null : d;
 }
-
+ 
 export function toDateStr(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return y + '-' + m + '-' + day;
 }
-
+ 
 export function formatShortDate(d) {
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
-
+ 
 export function getWeekDays(anchor) {
   const start = new Date(anchor);
   start.setDate(start.getDate() - start.getDay());
-  return Array.from({ length: 7 }, (_, i) => {
+  return Array.from({ length: 7 }, function(_, i) {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
     return d;
   });
 }
-
+ 
 export function getMonthDays(anchor) {
   const start = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
   const end = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
@@ -52,3 +52,4 @@ export function getMonthDays(anchor) {
   }
   return days;
 }
+ 
