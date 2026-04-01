@@ -37,12 +37,12 @@ function getBarColor(pct) {
   return '#DC2626';
 }
  
-function getAssignedColor(assigned, target, type) {
-  if (type === 'prn') return '#374151';
+function getAssignedBg(assigned, target, type) {
+  if (type === 'prn') return '#F9FAFB';
   var diff = assigned - target;
-  if (diff === 0) return '#065F46';
-  if (diff >= -2) return '#92400E';
-  return '#991B1B';
+  if (diff > 2) return '#EFF6FF';   // over-scheduled, light blue
+  if (diff >= -2) return '#ECFDF5'; // on target or close, green
+  return '#FEF2F2';                 // under, red
 }
  
 function getAssignedBg(assigned, target, type) {
