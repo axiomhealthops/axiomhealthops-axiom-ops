@@ -224,7 +224,7 @@ export default function ProductivityPage() {
             <option value="region">Sort: Region</option>
             <option value="pct">Sort: Lowest Productivity First</option>
             <option value="pct_desc">Sort: Highest Productivity First</option>
-            <option value="name">Sort: Name A\u2013Z</option>
+            <option value="name">Sort: Name A-Z</option>
           </select>
           <span style={{ fontSize: 12, color: visits.length === 0 ? 'var(--danger)' : 'var(--gray)', marginLeft: 'auto', fontWeight: visits.length === 0 ? 600 : 400 }}>
             {visits.length === 0 ? '\u26A0 Upload visit data to see live productivity' : visits.length + ' visits loaded \u00b7 ' + matchedCount + ' clinicians matched'}
