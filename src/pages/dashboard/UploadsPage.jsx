@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
+import { runAlertEngine } from '../../lib/alertEngine';
  
 function parseXLSXFile(arrayBuffer) {
   var wb = XLSX.read(arrayBuffer, {
@@ -163,7 +164,8 @@ function UploadCard(props) {
           </div>
         )}
       </div>
-      <div style={{ border: '2px dashed ' + borderColor, borderRadius: 10, padding: 32, textAlign: 'center', cursor: 'pointer', background: 'var(--bg)' }}
+      <div
+        style={{ border: '2px dashed ' + borderColor, borderRadius: 10, padding: 32, textAlign: 'center', cursor: 'pointer', background: 'var(--bg)' }}
         onDrop={handleDrop}
         onDragOver={function(e) { e.preventDefault(); }}
         onClick={function() { if (inputRef.current) inputRef.current.click(); }}>
@@ -199,22 +201,43 @@ export default function UploadsPage() {
       return s.main || '';
     } catch (e) { return ''; }
   });
+  var [alertStatus, setAlertStatus] = useState('');
  
   function saveDriveLink() {
     localStorage.setItem('axiom_drive_links', JSON.stringify({ main: driveLink }));
     alert('Drive link saved.');
   }
  
+  function handleVisitUpload(data) {
+    setAlertStatus('Generating alerts...');
+    runAlertEngine(data).then(function(result) {
+      if (result.error) {
+        setAlertStatus('Alerts error: ' + result.error.message);
+      } else {
+        setAlertStatus(result.created + ' alerts generated from visit data.');
+        setTimeout(function() { setAlertStatus(''); }, 4000);
+      }
+    });
+  }
+ 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Data Uploads" subtitle="Upload Pariox exports to populate the platform" />
       <div style={{ padding: 28, flex: 1 }}>
+ 
+        {alertStatus && (
+          <div style={{ background: '#EFF6FF', border: '1px solid #93C5FD', borderRadius: 8, padding: '10px 16px', marginBottom: 20, fontSize: 13, color: '#1E40AF', fontWeight: 500 }}>
+            &#128276; {alertStatus}
+          </div>
+        )}
+ 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 20, marginBottom: 24 }}>
           <UploadCard
             title="Visit Schedule"
             description="Upload the Pariox visit schedule export (.xlsx). Columns: Patient, Address, Ref Source, Region, Discipline, Staff, Event, Date, Time, Insurance, Status, Notes."
             storageKey="axiom_pariox_data"
             parseType="visits"
+            onSuccess={handleVisitUpload}
           />
           <UploadCard
             title="Patient Census"
@@ -223,6 +246,7 @@ export default function UploadsPage() {
             parseType="census"
           />
         </div>
+ 
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Google Drive Link</div>
           <div style={{ fontSize: 13, color: 'var(--gray)', marginBottom: 16 }}>Paste your shared Google Drive folder link for team access to documents.</div>
