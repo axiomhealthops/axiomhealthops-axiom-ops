@@ -1,46 +1,46 @@
 import { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-
+ 
 const NAV_ITEMS = [
   { section: 'OVERVIEW', items: [
-    { id: 'overview', label: 'Overview', icon: '⬡' },
-    { id: 'alerts', label: 'Live Alerts', icon: '⚡' },
-    { id: 'actions', label: 'Action List', icon: '✓' },
+    { id: 'overview', label: 'Overview', icon: '\u2B21' },
+    { id: 'alerts', label: 'Live Alerts', icon: '\u26A1' },
+    { id: 'actions', label: 'Action List', icon: '\u2713' },
   ]},
   { section: 'PATIENTS', items: [
-    { id: 'census', label: 'Patient Census', icon: '👥' },
-    { id: 'visits', label: 'Visit Schedule', icon: '📅' },
-    { id: 'on-hold', label: 'On-Hold Recovery', icon: '⏸' },
-    { id: 'auth', label: 'Auth Tracker', icon: '🔐' },
-    { id: 'auth-timeline', label: 'Auth Timeline', icon: '📆' },
+    { id: 'census', label: 'Patient Census', icon: '\uD83D\uDC65' },
+    { id: 'visits', label: 'Visit Schedule', icon: '\uD83D\uDCC5' },
+    { id: 'on-hold', label: 'On-Hold Recovery', icon: '\u23F8' },
+    { id: 'auth', label: 'Auth Tracker', icon: '\uD83D\uDD10' },
+    { id: 'auth-timeline', label: 'Auth Timeline', icon: '\uD83D\uDCC6' },
   ]},
   { section: 'PERFORMANCE', items: [
-    { id: 'revenue', label: 'Revenue', icon: '💰' },
-    { id: 'growth', label: 'Growth Tracker', icon: '📈' },
-    { id: 'scorecard', label: 'Scorecard', icon: '🎯' },
-    { id: 'trends', label: 'Trends', icon: '〜' },
+    { id: 'productivity', label: 'Productivity', icon: '\uD83D\uDCCA' },
+    { id: 'revenue', label: 'Revenue', icon: '\uD83D\uDCB0' },
+    { id: 'growth', label: 'Growth Tracker', icon: '\uD83D\uDCC8' },
+    { id: 'scorecard', label: 'Scorecard', icon: '\uD83C\uDFAF' },
+    { id: 'trends', label: 'Trends', icon: '\u301C' },
   ]},
   { section: 'OPERATIONS', items: [
-    { id: 'staff', label: 'Staff Directory', icon: '👤' },
-    { id: 'regions', label: 'Regions', icon: '🗺' },
-    { id: 'team', label: 'Team', icon: '🏢' },
-    { id: 'expansion', label: 'Expansion', icon: '🚀' },
-    { id: 'daily-reports', label: 'Daily Reports', icon: '📋' },
-    { id: 'exec-report', label: 'Executive Report', icon: '📊' },
+    { id: 'staff', label: 'Staff Directory', icon: '\uD83D\uDC64' },
+    { id: 'regions', label: 'Regions', icon: '\uD83D\uDDFA' },
+    { id: 'team', label: 'Team', icon: '\uD83C\uDFE2' },
+    { id: 'expansion', label: 'Expansion', icon: '\uD83D\uDE80' },
+    { id: 'daily-reports', label: 'Daily Reports', icon: '\uD83D\uDCCB' },
+    { id: 'exec-report', label: 'Executive Report', icon: '\uD83D\uDCCA' },
   ]},
   { section: 'ADMIN', items: [
-    { id: 'super-admin', label: 'Super Admin', icon: '⚙' },
-    { id: 'users', label: 'User Management', icon: '👥' },
-    { id: 'uploads', label: 'Data Uploads', icon: '⬆' },
-    { id: 'settings', label: 'Settings', icon: '🔧' },
+    { id: 'super-admin', label: 'Super Admin', icon: '\u2699' },
+    { id: 'users', label: 'User Management', icon: '\uD83D\uDC65' },
+    { id: 'uploads', label: 'Data Uploads', icon: '\u2B06' },
+    { id: 'settings', label: 'Settings', icon: '\uD83D\uDD27' },
   ]},
 ];
-
+ 
 export default function Sidebar({ activePage, onNavigate, collapsed, onToggle }) {
   const { profile, signOut } = useAuth();
   const isSuperAdmin = profile?.role === 'super_admin';
-
+ 
   const visibleItems = NAV_ITEMS.map(section => ({
     ...section,
     items: section.section === 'ADMIN'
@@ -49,14 +49,13 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
         )
       : section.items,
   }));
-
+ 
   return (
     <div style={{
       ...styles.sidebar,
       width: collapsed ? '64px' : '220px',
       transition: 'width 0.2s ease',
     }}>
-      {/* Header */}
       <div style={styles.header}>
         <div style={styles.logoMark}>A</div>
         {!collapsed && (
@@ -66,11 +65,10 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
           </div>
         )}
         <button onClick={onToggle} style={styles.collapseBtn}>
-          {collapsed ? '→' : '←'}
+          {collapsed ? '\u2192' : '\u2190'}
         </button>
       </div>
-
-      {/* Nav */}
+ 
       <nav style={styles.nav}>
         {visibleItems.map(section => (
           <div key={section.section} style={styles.section}>
@@ -94,8 +92,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
           </div>
         ))}
       </nav>
-
-      {/* Footer */}
+ 
       <div style={styles.footer}>
         {!collapsed && (
           <div style={styles.userInfo}>
@@ -104,13 +101,13 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
           </div>
         )}
         <button onClick={signOut} title="Sign out" style={styles.signOutBtn}>
-          ⎋
+          &#x238B;
         </button>
       </div>
     </div>
   );
 }
-
+ 
 const styles = {
   sidebar: {
     height: '100vh',
@@ -189,7 +186,7 @@ const styles = {
     padding: '8px 14px 4px',
   },
   navItem: {
-    width: '100%',
+    width: 'calc(100% - 8px)',
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
@@ -203,7 +200,6 @@ const styles = {
     textAlign: 'left',
     borderRadius: '6px',
     margin: '1px 4px',
-    width: 'calc(100% - 8px)',
     transition: 'all 0.1s ease',
   },
   navItemActive: {
@@ -257,3 +253,4 @@ const styles = {
     flexShrink: 0,
   },
 };
+ 
