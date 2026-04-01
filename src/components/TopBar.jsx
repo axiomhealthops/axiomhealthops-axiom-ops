@@ -1,56 +1,68 @@
-export default function TopBar({ title, subtitle, actions }) {
-  const now = new Date();
-  const dateStr = now.toLocaleDateString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+import React from 'react';
+import AlertsBell from './AlertsBell';
+ 
+export default function TopBar(props) {
+  var title = props.title || '';
+  var subtitle = props.subtitle || '';
+  var actions = props.actions || null;
+ 
+  var today = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
   });
-
+ 
   return (
-    <div style={styles.bar}>
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '20px 28px 16px',
+      borderBottom: '1px solid var(--border)',
+      background: 'var(--card-bg)',
+      flexShrink: 0,
+    }}>
       <div>
-        <h1 style={styles.title}>{title}</h1>
-        {subtitle && <p style={styles.subtitle}>{subtitle}</p>}
+        <h1 style={{
+          fontSize: 22,
+          fontWeight: 700,
+          color: 'var(--black)',
+          letterSpacing: '-0.3px',
+          margin: 0,
+          lineHeight: 1.2,
+        }}>
+          {title}
+        </h1>
+        {subtitle && (
+          <div style={{
+            fontSize: 13,
+            color: 'var(--gray)',
+            marginTop: 4,
+            fontWeight: 400,
+          }}>
+            {subtitle}
+          </div>
+        )}
       </div>
-      <div style={styles.right}>
-        <span style={styles.date}>{dateStr}</span>
-        {actions && <div style={styles.actions}>{actions}</div>}
+ 
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {actions && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {actions}
+          </div>
+        )}
+        <AlertsBell />
+        <div style={{
+          fontSize: 12,
+          color: 'var(--gray)',
+          fontFamily: 'DM Mono, monospace',
+          letterSpacing: '0.02em',
+        }}>
+          {today}
+        </div>
       </div>
     </div>
   );
 }
-
-const styles = {
-  bar: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '20px 28px',
-    borderBottom: '1px solid var(--border)',
-    background: 'var(--card-bg)',
-    flexShrink: 0,
-  },
-  title: {
-    fontSize: '20px',
-    fontWeight: '700',
-    color: 'var(--black)',
-    letterSpacing: '-0.4px',
-  },
-  subtitle: {
-    fontSize: '13px',
-    color: 'var(--gray)',
-    marginTop: '2px',
-  },
-  right: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
-  },
-  date: {
-    fontSize: '13px',
-    color: 'var(--gray)',
-    fontFamily: 'DM Mono, monospace',
-  },
-  actions: {
-    display: 'flex',
-    gap: '8px',
-  },
-};
+ 
