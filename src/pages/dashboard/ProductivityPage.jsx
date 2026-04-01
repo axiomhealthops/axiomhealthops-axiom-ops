@@ -248,7 +248,7 @@ export default function ProductivityPage() {
               <span style={{ color: '#7C3AED', fontWeight: 800 }}>Total</span>
               <span>Evals</span>
               <span>Re-Asmt</span>
-              <span style={{ color: '#DC2626' }}>Note\u26A0</span>
+             <span style={{ color: '#DC2626' }}>Note !</span>
               <span>Status</span>
             </div>
  
