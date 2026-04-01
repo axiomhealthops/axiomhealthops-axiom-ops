@@ -43,31 +43,54 @@ function parseCSVLine(line) {
   return cols;
 }
  
+// Normalize status: map all Pariox status variants to clean categories
+function normalizeStatus(raw) {
+  if (!raw) return '';
+  var s = raw.trim();
+  var lower = s.toLowerCase();
+  if (lower.includes('missed') && lower.includes('active')) return 'Missed (Active)';
+  if (lower.includes('missed')) return 'Missed';
+  if (lower.includes('completed')) return 'Completed';
+  if (lower.includes('scheduled')) return 'Scheduled';
+  if (lower.includes('cancelled')) return 'Cancelled';
+  if (lower.includes('attempted')) return 'Attempted';
+  return s;
+}
+ 
+// Extract region — col D is now a direct single letter in the new format
+function extractRegion(colD) {
+  if (!colD) return '';
+  var s = colD.toString().trim().toUpperCase();
+  // Direct single letter
+  if (/^[A-Z]$/.test(s)) return s;
+  // Last character fallback
+  var last = s.slice(-1);
+  if (/^[A-Z]$/.test(last)) return last;
+  return s;
+}
+ 
 function parseVisitCSV(csv) {
   var lines = csv.split('\n').filter(function(l) { return l.trim(); });
   var rows = lines.slice(1);
-  return rows.map(function(line) {
+  var results = rows.map(function(line) {
     var cols = parseCSVLine(line);
-    var region = (function() {
-      var raw = (cols[3] || '').trim();
-      var single = raw.slice(-1).toUpperCase();
-      return /^[A-Z]$/.test(single) ? single : raw.toUpperCase();
-    })();
+    // Col A=Patient, B=Address, C=RefSource, D=Region, E=Disc, F=Staff, G=Event, H=Date, I=Time, J=Ins, K=Status, L=Notes
     return {
-      patient_name: cols[0] || '',
-      address: cols[1] || '',
-      ref_source: cols[2] || '',
-      region: region,
-      discipline: cols[4] || '',
-      staff_name: cols[5] || '',
-      event_type: cols[6] || '',
-      raw_date: cols[7] || '',
-      visit_time: cols[8] || '',
-      insurance: cols[9] || '',
-      status: cols[10] || '',
-      notes: cols[11] || '',
+      patient_name: (cols[0] || '').trim(),
+      address: (cols[1] || '').trim(),
+      ref_source: (cols[2] || '').trim(),
+      region: extractRegion(cols[3]),
+      discipline: (cols[4] || '').trim(),
+      staff_name: (cols[5] || '').trim(),
+      event_type: (cols[6] || '').trim(),
+      raw_date: (cols[7] || '').trim(),
+      visit_time: (cols[8] || '').trim(),
+      insurance: (cols[9] || '').trim(),
+      status: normalizeStatus(cols[10]),
+      notes: (cols[11] || '').trim(),
     };
-  }).filter(function(r) { return r.patient_name; });
+  }).filter(function(r) { return r.patient_name && r.patient_name.length > 0; });
+  return results;
 }
  
 function parseCensusCSV(csv) {
@@ -76,24 +99,18 @@ function parseCensusCSV(csv) {
   return rows.map(function(line) {
     var cols = parseCSVLine(line);
     return {
-      patient_name: cols[0] || '',
-      address: cols[1] || '',
-      discipline: cols[2] || '',
-      ref_source: cols[3] || '',
+      patient_name: (cols[0] || '').trim(),
+      address: (cols[1] || '').trim(),
+      discipline: (cols[2] || '').trim(),
+      ref_source: (cols[3] || '').trim(),
       region: (cols[4] || '').toUpperCase().trim(),
-      insurance: cols[6] || '',
-      status: cols[7] || 'active',
+      insurance: (cols[6] || '').trim(),
+      status: (cols[7] || 'active').trim(),
     };
   }).filter(function(r) { return r.patient_name && r.patient_name.trim(); });
 }
  
 function UploadCard(props) {
-  var title = props.title;
-  var description = props.description;
-  var storageKey = props.storageKey;
-  var parseType = props.parseType;
-  var onSuccess = props.onSuccess;
- 
   var [status, setStatus] = useState('idle');
   var [message, setMessage] = useState('');
   var [count, setCount] = useState(0);
@@ -107,46 +124,32 @@ function UploadCard(props) {
     reader.onload = function(e) {
       try {
         var csv = parseXLSXFile(e.target.result);
-        var data = parseType === 'visits' ? parseVisitCSV(csv) : parseCensusCSV(csv);
-        localStorage.setItem(storageKey, JSON.stringify(data));
+        var data = props.parseType === 'visits' ? parseVisitCSV(csv) : parseCensusCSV(csv);
+        localStorage.setItem(props.storageKey, JSON.stringify(data));
         setCount(data.length);
         setStatus('success');
         setMessage(data.length + ' records loaded successfully');
-        if (onSuccess) onSuccess(data);
+        if (props.onSuccess) props.onSuccess(data);
       } catch (err) {
         setStatus('error');
         setMessage('Error: ' + err.message);
       }
     };
-    reader.onerror = function() {
-      setStatus('error');
-      setMessage('Failed to read file');
-    };
+    reader.onerror = function() { setStatus('error'); setMessage('Failed to read file'); };
     reader.readAsArrayBuffer(file);
   }
  
-  function handleDrop(e) {
-    e.preventDefault();
-    handleFile(e.dataTransfer.files[0]);
-  }
- 
-  function handleChange(e) {
-    handleFile(e.target.files[0]);
-  }
- 
+  function handleDrop(e) { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }
+  function handleChange(e) { handleFile(e.target.files[0]); }
   function clearData() {
-    localStorage.removeItem(storageKey);
-    setStatus('idle');
-    setMessage('');
-    setCount(0);
+    localStorage.removeItem(props.storageKey);
+    setStatus('idle'); setMessage(''); setCount(0);
     if (inputRef.current) inputRef.current.value = '';
   }
  
   var existing = (function() {
-    try {
-      var d = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      return Array.isArray(d) ? d.length : 0;
-    } catch (e) { return 0; }
+    try { var d = JSON.parse(localStorage.getItem(props.storageKey) || '[]'); return Array.isArray(d) ? d.length : 0; }
+    catch (e) { return 0; }
   })();
  
   var borderColor = status === 'loading' ? 'var(--blue)' : status === 'success' ? 'var(--green)' : status === 'error' ? 'var(--danger)' : 'var(--border)';
@@ -155,8 +158,8 @@ function UploadCard(props) {
     <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>{title}</div>
-          <div style={{ fontSize: 12, color: 'var(--gray)', lineHeight: 1.5, maxWidth: 320 }}>{description}</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>{props.title}</div>
+          <div style={{ fontSize: 12, color: 'var(--gray)', lineHeight: 1.5, maxWidth: 320 }}>{props.description}</div>
         </div>
         {(existing > 0 || status === 'success') && (
           <div style={{ background: '#ECFDF5', color: 'var(--green)', border: '1px solid #A7F3D0', borderRadius: 999, padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>
@@ -164,25 +167,18 @@ function UploadCard(props) {
           </div>
         )}
       </div>
-      <div
-        style={{ border: '2px dashed ' + borderColor, borderRadius: 10, padding: 32, textAlign: 'center', cursor: 'pointer', background: 'var(--bg)' }}
-        onDrop={handleDrop}
-        onDragOver={function(e) { e.preventDefault(); }}
+      <div style={{ border: '2px dashed ' + borderColor, borderRadius: 10, padding: 32, textAlign: 'center', cursor: 'pointer', background: 'var(--bg)' }}
+        onDrop={handleDrop} onDragOver={function(e) { e.preventDefault(); }}
         onClick={function() { if (inputRef.current) inputRef.current.click(); }}>
         <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={handleChange} style={{ display: 'none' }} />
-        {status === 'loading'
-          ? <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--black)' }}>Processing...</div>
-          : status === 'success'
-          ? <div style={{ color: 'var(--green)', fontWeight: 600 }}>&#10003; {message}</div>
-          : status === 'error'
-          ? <div style={{ color: 'var(--danger)' }}>{message}</div>
-          : (
-            <div>
+        {status === 'loading' ? <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--black)' }}>Processing...</div>
+          : status === 'success' ? <div style={{ color: 'var(--green)', fontWeight: 600 }}>&#10003; {message}</div>
+          : status === 'error' ? <div style={{ color: 'var(--danger)' }}>{message}</div>
+          : <div>
               <div style={{ fontSize: 28, marginBottom: 8 }}>&#128196;</div>
               <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--black)', marginBottom: 4 }}>Drop .xlsx file here or click to browse</div>
               <div style={{ fontSize: 12, color: 'var(--gray)' }}>Pariox export only</div>
             </div>
-          )
         }
       </div>
       {(status === 'success' || existing > 0) && (
@@ -196,10 +192,8 @@ function UploadCard(props) {
  
 export default function UploadsPage() {
   var [driveLink, setDriveLink] = useState(function() {
-    try {
-      var s = JSON.parse(localStorage.getItem('axiom_drive_links') || '{}');
-      return s.main || '';
-    } catch (e) { return ''; }
+    try { var s = JSON.parse(localStorage.getItem('axiom_drive_links') || '{}'); return s.main || ''; }
+    catch (e) { return ''; }
   });
   var [alertStatus, setAlertStatus] = useState('');
  
@@ -212,10 +206,10 @@ export default function UploadsPage() {
     setAlertStatus('Generating alerts...');
     runAlertEngine(data).then(function(result) {
       if (result.error) {
-        setAlertStatus('Alerts error: ' + result.error.message);
+        setAlertStatus('Alert error: ' + result.error.message);
       } else {
         setAlertStatus(result.created + ' alerts generated from visit data.');
-        setTimeout(function() { setAlertStatus(''); }, 4000);
+        setTimeout(function() { setAlertStatus(''); }, 5000);
       }
     });
   }
@@ -234,14 +228,14 @@ export default function UploadsPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 20, marginBottom: 24 }}>
           <UploadCard
             title="Visit Schedule"
-            description="Upload the Pariox visit schedule export (.xlsx). Columns: Patient, Address, Ref Source, Region, Discipline, Staff, Event, Date, Time, Insurance, Status, Notes."
+            description="Pariox visit schedule export (.xlsx). Columns: Patient, Address, Ref Source, Region, Discipline, Staff, Event, Date, Time, Insurance, Status, Notes."
             storageKey="axiom_pariox_data"
             parseType="visits"
             onSuccess={handleVisitUpload}
           />
           <UploadCard
             title="Patient Census"
-            description="Upload the Pariox patient census export (.xlsx). Columns: Patient, Address, Disc, Ref Source, Region, SOC, Insurance, Status."
+            description="Pariox patient census export (.xlsx). Columns: Patient, Address, Disc, Ref Source, Region, SOC, Insurance, Status."
             storageKey="axiom_census"
             parseType="census"
           />
@@ -249,7 +243,7 @@ export default function UploadsPage() {
  
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Google Drive Link</div>
-          <div style={{ fontSize: 13, color: 'var(--gray)', marginBottom: 16 }}>Paste your shared Google Drive folder link for team access to documents.</div>
+          <div style={{ fontSize: 13, color: 'var(--gray)', marginBottom: 16 }}>Shared Google Drive folder for team document access.</div>
           <div style={{ display: 'flex', gap: 10 }}>
             <input type="url" value={driveLink} onChange={function(e) { setDriveLink(e.target.value); }}
               placeholder="https://drive.google.com/drive/folders/..."
