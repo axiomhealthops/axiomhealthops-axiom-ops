@@ -24,7 +24,7 @@ var VALID = ['A','B','C','G','H','J','M','N','T','V'];
 var BTN = { padding: '6px 12px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--card-bg)', fontSize: 14, cursor: 'pointer', color: 'var(--black)' };
 var SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
  
-function getViewVisits(view, anchor, byDate, filtered, getWeekDays) {
+function getViewVisits(view, anchor, byDate, filtered) {
   if (view === 'day') {
     var ds = anchor.getFullYear() + '-' + String(anchor.getMonth()+1).padStart(2,'0') + '-' + String(anchor.getDate()).padStart(2,'0');
     return byDate[ds] || [];
@@ -42,7 +42,7 @@ function getViewVisits(view, anchor, byDate, filtered, getWeekDays) {
 }
  
 function StatsBar(props) {
-  var viewVisits = getViewVisits(props.view, props.anchor, props.byDate, props.filtered, getWeekDays);
+  var viewVisits = getViewVisits(props.view, props.anchor, props.byDate, props.filtered);
   var comp = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes('completed'); }).length;
   var sched = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes('scheduled'); }).length;
   var missed = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes('missed'); }).length;
@@ -76,13 +76,22 @@ function StatsBar(props) {
  
 function DrillDown(props) {
   var label = props.statusKey.charAt(0).toUpperCase() + props.statusKey.slice(1);
-  var viewVisits = getViewVisits(props.view, props.anchor, props.byDate, props.filtered, getWeekDays);
-  var drillVisits = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes(props.statusKey); });
+  var viewVisits = getViewVisits(props.view, props.anchor, props.byDate, props.filtered);
+  var allVisits = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes(props.statusKey); });
  
   var [search, setSearch] = useState('');
   var [sortBy, setSortBy] = useState('date');
+  var [expandedRegions, setExpandedRegions] = useState({});
  
-  var displayed = drillVisits.filter(function(v) {
+  function toggleRegion(r) {
+    setExpandedRegions(function(prev) {
+      var next = Object.assign({}, prev);
+      next[r] = !prev[r];
+      return next;
+    });
+  }
+ 
+  var filtered = allVisits.filter(function(v) {
     if (!search) return true;
     var q = search.toLowerCase();
     return (v.patient_name && v.patient_name.toLowerCase().includes(q)) ||
@@ -90,63 +99,117 @@ function DrillDown(props) {
            (v.region && v.region.toLowerCase().includes(q));
   });
  
-  displayed = displayed.slice().sort(function(a, b) {
-    if (sortBy === 'clinician') return (a.staff_name || '').localeCompare(b.staff_name || '');
-    if (sortBy === 'region') return (a.region || '').localeCompare(b.region || '');
-    if (sortBy === 'patient') return (a.patient_name || '').localeCompare(b.patient_name || '');
-    return (a.raw_date || '').localeCompare(b.raw_date || '');
+  // Group by region
+  var byRegion = {};
+  filtered.forEach(function(v) {
+    var r = v.region || '?';
+    if (!byRegion[r]) byRegion[r] = [];
+    byRegion[r].push(v);
   });
  
+  // Sort within each region
+  var regionKeys = Object.keys(byRegion).sort();
+  regionKeys.forEach(function(r) {
+    byRegion[r].sort(function(a, b) {
+      if (sortBy === 'clinician') return (a.staff_name || '').localeCompare(b.staff_name || '');
+      if (sortBy === 'patient') return (a.patient_name || '').localeCompare(b.patient_name || '');
+      return (a.raw_date || '').localeCompare(b.raw_date || '');
+    });
+  });
+ 
+  var st = getSS(props.statusKey);
+ 
   return (
-    <div style={{ borderBottom: '1px solid var(--border)', background: '#FAFAFA', flexShrink: 0 }}>
+    <div style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg)', flexShrink: 0 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 20px', borderBottom: '1px solid var(--border)', background: '#FFF5F3', flexWrap: 'wrap', gap: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--black)' }}>{label} Visits ({displayed.length} of {drillVisits.length})</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--black)' }}>
+          {label} Visits — {filtered.length} of {allVisits.length} across {regionKeys.length} regions
+        </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
-            placeholder="Search patient, clinician, region..."
+            placeholder="Search patient, clinician..."
             value={search}
             onChange={function(e) { setSearch(e.target.value); }}
-            style={{ padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', width: 220 }}
+            style={{ padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', width: 200, background: 'var(--card-bg)' }}
           />
           <select value={sortBy} onChange={function(e) { setSortBy(e.target.value); }}
             style={{ padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', background: 'var(--card-bg)' }}>
             <option value="date">Sort: Date</option>
             <option value="patient">Sort: Patient</option>
             <option value="clinician">Sort: Clinician</option>
-            <option value="region">Sort: Region</option>
           </select>
           <button onClick={props.onClose}
-            style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', fontSize: 12, color: 'var(--gray)', cursor: 'pointer' }}>
+            style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 12px', fontSize: 12, color: 'var(--gray)', cursor: 'pointer' }}>
             Close
           </button>
         </div>
       </div>
-      <div style={{ maxHeight: 260, overflow: 'auto' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))' }}>
-          {displayed.length === 0 ? (
-            <div style={{ padding: '20px', color: 'var(--gray)', fontSize: 13 }}>No results found.</div>
-          ) : displayed.map(function(v, i) {
-            var st = getSS(v.status);
-            return (
-              <div key={i} style={{ padding: '10px 20px', borderBottom: '1px solid var(--border)', borderRight: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderLeft: '3px solid ' + st.border }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{v.patient_name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>
-                    {v.staff_name} · {v.discipline} · Region {v.region}
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
-                  <div style={{ fontSize: 11, fontFamily: 'DM Mono, monospace', color: 'var(--black)', fontWeight: 600 }}>{v.raw_date}</div>
-                  <div style={{ fontSize: 11, color: 'var(--gray)' }}>{v.visit_time || ''}</div>
-                </div>
+ 
+      <div style={{ maxHeight: 320, overflow: 'auto' }}>
+        {regionKeys.length === 0 ? (
+          <div style={{ padding: '20px', color: 'var(--gray)', fontSize: 13, textAlign: 'center' }}>No results found.</div>
+        ) : regionKeys.map(function(r) {
+          var visits = byRegion[r];
+          var isExpanded = expandedRegions[r] !== false;
+          var coordinator = REGIONS[r] || 'Unassigned';
+          return (
+            <div key={r} style={{ borderBottom: '1px solid var(--border)' }}>
+              <div
+                onClick={function() { toggleRegion(r); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 20px', background: 'var(--card-bg)', cursor: 'pointer', userSelect: 'none' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, background: st.bg, color: st.color, border: '1px solid ' + st.border, borderRadius: 5, padding: '2px 8px', minWidth: 70, textAlign: 'center' }}>
+                  Region {r}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{coordinator}</span>
+                <span style={{ fontSize: 11, color: 'var(--gray)', marginLeft: 4 }}>{visits.length} {label.toLowerCase()} visit{visits.length !== 1 ? 's' : ''}</span>
+                <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--gray)' }}>{isExpanded ? '▲ collapse' : '▼ expand'}</span>
               </div>
-            );
-          })}
-        </div>
+ 
+              {isExpanded && (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: '#F8F4F3' }}>
+                      <th style={TH}>Patient</th>
+                      <th style={TH}>Clinician</th>
+                      <th style={TH}>Discipline</th>
+                      <th style={TH}>Event</th>
+                      <th style={TH}>Date</th>
+                      <th style={TH}>Time</th>
+                      <th style={TH}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visits.map(function(v, i) {
+                      var vst = getSS(v.status);
+                      return (
+                        <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#FAFAFA', borderTop: '1px solid var(--border)' }}>
+                          <td style={TD}><span style={{ fontWeight: 600, color: 'var(--black)' }}>{v.patient_name}</span></td>
+                          <td style={TD}>{v.staff_name}</td>
+                          <td style={TD}>{v.discipline}</td>
+                          <td style={TD}>{v.event_type}</td>
+                          <td style={{ ...TD, fontFamily: 'DM Mono, monospace', fontWeight: 600 }}>{v.raw_date}</td>
+                          <td style={{ ...TD, fontFamily: 'DM Mono, monospace' }}>{v.visit_time || '—'}</td>
+                          <td style={TD}>
+                            <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 600, background: vst.bg, color: vst.color, border: '1px solid ' + vst.border, whiteSpace: 'nowrap' }}>
+                              {v.status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
+ 
+var TH = { padding: '6px 16px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' };
+var TD = { padding: '8px 16px', color: 'var(--gray)', borderRight: '1px solid var(--border)', fontSize: 12, whiteSpace: 'nowrap' };
  
 export default function VisitSchedulePage() {
   var visits = useMemo(function() {
