@@ -2,28 +2,35 @@ import React, { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
  
-var INSURANCES = ['Aetna','CarePlus','Cigna','Devoted','FHCP','Health First','Humana','Medicare','Simply','United','Other'];
+var INSURANCES = ['Aetna','CarePlus','Cigna','Devoted','Fenyx','FHCP','Health First','Humana','Medicare','Simply','United','Other'];
 var STATUSES = [
-  { value: 'pending', label: 'Auth Pending', color: '#92400E', bg: '#FEF3C7' },
-  { value: 'submitted', label: 'Submitted', color: '#1E40AF', bg: '#EFF6FF' },
-  { value: 'active', label: 'Active', color: '#065F46', bg: '#ECFDF5' },
-  { value: 'renewal_needed', label: 'Renewal Needed', color: '#991B1B', bg: '#FEF2F2' },
-  { value: 'denied', label: 'Denied', color: '#991B1B', bg: '#FEF2F2' },
-  { value: 'appealing', label: 'Appealing', color: '#6D28D9', bg: '#EDE9FE' },
-  { value: 'on_hold', label: 'On Hold', color: '#374151', bg: '#F3F4F6' },
-  { value: 'discharged', label: 'Discharged', color: '#374151', bg: '#F3F4F6' },
+  { value: 'pending',        label: 'Auth Pending',    color: '#92400E', bg: '#FEF3C7' },
+  { value: 'submitted',      label: 'Submitted',       color: '#1E40AF', bg: '#EFF6FF' },
+  { value: 'active',         label: 'Active',          color: '#065F46', bg: '#ECFDF5' },
+  { value: 'renewal_needed', label: 'Renewal Needed',  color: '#991B1B', bg: '#FEF2F2' },
+  { value: 'denied',         label: 'Denied',          color: '#991B1B', bg: '#FEF2F2' },
+  { value: 'appealing',      label: 'Appealing',       color: '#6D28D9', bg: '#EDE9FE' },
+  { value: 'on_hold',        label: 'On Hold',         color: '#374151', bg: '#F3F4F6' },
+  { value: 'discharged',     label: 'Discharged',      color: '#374151', bg: '#F3F4F6' },
 ];
 var REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
-var COORD_MAP = { A:'Gypsy Renos', B:'Mary Imperio', C:'Mary Imperio', G:'Mary Imperio', H:'Audrey Sarmiento', J:'Audrey Sarmiento', M:'Audrey Sarmiento', N:'Audrey Sarmiento', T:'April Manalo', V:'April Manalo' };
+var COORD_MAP = {
+  A: 'Gypsy Renos', B: 'Mary Imperio', C: 'Mary Imperio', G: 'Mary Imperio',
+  H: 'Audrey Sarmiento', J: 'Audrey Sarmiento', M: 'Audrey Sarmiento', N: 'Audrey Sarmiento',
+  T: 'April Manalo', V: 'April Manalo',
+};
  
 function getStatus(s) { return STATUSES.find(function(x) { return x.value === s; }) || STATUSES[0]; }
  
 function daysUntil(dateStr) {
   if (!dateStr) return null;
-  var d = new Date(dateStr);
-  var now = new Date();
-  now.setHours(0,0,0,0);
-  return Math.round((d - now) / (1000 * 60 * 60 * 24));
+  var now = new Date(); now.setHours(0,0,0,0);
+  return Math.round((new Date(dateStr) - now) / (1000*60*60*24));
+}
+ 
+function fmtDate(dateStr) {
+  if (!dateStr) return null;
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
 }
  
 function visitsRemaining(rec) {
@@ -38,23 +45,24 @@ function getUrgency(rec) {
   if (remaining <= 7 && rec.auth_status === 'active') return 'critical';
   if (remaining <= 10 && rec.auth_status === 'active') return 'high';
   if (expDays !== null && expDays <= 14 && expDays >= 0) return 'high';
-  if (rec.auth_status === 'pending') return 'medium';
+  if (rec.auth_status === 'pending' || rec.auth_status === 'submitted') return 'medium';
   return 'ok';
 }
  
 function UrgencyDot(props) {
-  var u = props.urgency;
   var colors = { critical: '#DC2626', high: '#F59E0B', medium: '#3B82F6', ok: '#10B981' };
   return React.createElement('span', {
-    style: { width: 8, height: 8, borderRadius: '50%', background: colors[u] || '#9CA3AF', display: 'inline-block', marginRight: 6, flexShrink: 0 }
+    style: { width: 8, height: 8, borderRadius: '50%', background: colors[props.urgency] || '#9CA3AF', display: 'inline-block', marginRight: 6, flexShrink: 0 }
   });
 }
  
 function StatusBadge(props) {
   var s = getStatus(props.status);
-  return React.createElement('span', {
-    style: { fontSize: 11, fontWeight: 600, color: s.color, background: s.bg, padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap' }
-  }, s.label);
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, color: s.color, background: s.bg, padding: '2px 7px', borderRadius: 999, whiteSpace: 'nowrap' }}>
+      {s.label}
+    </span>
+  );
 }
  
 function VisitsBar(props) {
@@ -65,21 +73,37 @@ function VisitsBar(props) {
   var pct = auth > 0 ? Math.min((used / auth) * 100, 100) : 0;
   var color = remaining <= 7 ? '#DC2626' : remaining <= 10 ? '#F59E0B' : '#10B981';
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--gray)', marginBottom: 3 }}>
+    <div style={{ minWidth: 80 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 3 }}>
         <span style={{ fontWeight: 700, color: color }}>{remaining} left</span>
-        <span>{used}/{auth}</span>
+        <span style={{ color: 'var(--gray)' }}>{used}/{auth}</span>
       </div>
-      <div style={{ height: 6, background: 'var(--border)', borderRadius: 999, overflow: 'hidden' }}>
+      <div style={{ height: 5, background: 'var(--border)', borderRadius: 999, overflow: 'hidden' }}>
         <div style={{ height: '100%', width: pct + '%', background: color, borderRadius: 999 }} />
       </div>
     </div>
   );
 }
  
+function ExpiryCell(props) {
+  var dateStr = props.date;
+  if (!dateStr) return <span style={{ fontSize: 11, color: 'var(--gray)' }}>—</span>;
+  var days = daysUntil(dateStr);
+  var color = days === null ? 'var(--gray)' : days < 0 ? '#DC2626' : days <= 7 ? '#DC2626' : days <= 14 ? '#F59E0B' : days <= 30 ? '#F59E0B' : 'var(--black)';
+  var label = days === null ? '' : days < 0 ? Math.abs(days) + 'd ago' : days === 0 ? 'Today!' : days + 'd';
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: color }}>{fmtDate(dateStr)}</div>
+      {days !== null && (
+        <div style={{ fontSize: 10, color: color, fontWeight: days <= 14 ? 700 : 400, marginTop: 1 }}>{label}</div>
+      )}
+    </div>
+  );
+}
+ 
 function AddEditModal(props) {
   var rec = props.record;
-  var [form, setForm] = useState(rec || {
+  var [form, setForm] = useState(rec ? Object.assign({}, rec) : {
     patient_name: '', dob: '', member_id: '', phone: '', region: '',
     insurance: '', insurance_type: 'standard', auth_number: '', request_type: 'initial',
     visits_authorized: 24, visits_used: 0, evals_authorized: 2, evals_used: 0,
@@ -89,48 +113,30 @@ function AddEditModal(props) {
     therapy_type: 'LYMPHEDEMA', frequency: '', assigned_to: '', notes: '', denial_reason: '',
   });
  
-  function handleChange(field, val) {
-    var update = Object.assign({}, form, {});
-    update[field] = val;
-    // Auto-set Medicare defaults
+  function set(field, val) {
+    var u = Object.assign({}, form);
+    u[field] = val;
     if (field === 'insurance_type') {
-      if (val === 'medicare') {
-        update.visits_authorized = 20;
-        update.evals_authorized = 1;
-        update.reassessments_authorized = 0;
-      } else if (form.insurance_type === 'medicare') {
-        update.visits_authorized = 24;
-        update.evals_authorized = 2;
-        update.reassessments_authorized = 3;
-      }
+      if (val === 'medicare') { u.visits_authorized = 20; u.evals_authorized = 1; u.reassessments_authorized = 0; }
+      else if (form.insurance_type === 'medicare') { u.visits_authorized = 24; u.evals_authorized = 2; u.reassessments_authorized = 3; }
     }
-    if (field === 'region') {
-      update.coordinator_region = val;
-    }
-    setForm(update);
+    setForm(u);
   }
  
   async function handleSave() {
     var data = Object.assign({}, form);
-    // Clean empty strings to null for date fields
-    ['dob','soc_date','auth_submitted_date','auth_needed_by','auth_approved_date','auth_expiry_date'].forEach(function(f) {
-      if (!data[f]) data[f] = null;
-    });
-    ['visits_authorized','visits_used','evals_authorized','evals_used','reassessments_authorized','reassessments_used'].forEach(function(f) {
-      data[f] = parseInt(data[f]) || 0;
-    });
-    var result;
-    if (rec && rec.id) {
-      result = await supabase.from('auth_tracker').update(data).eq('id', rec.id);
-    } else {
-      result = await supabase.from('auth_tracker').insert([data]);
-    }
+    ['dob','soc_date','auth_submitted_date','auth_needed_by','auth_approved_date','auth_expiry_date'].forEach(function(f) { if (!data[f]) data[f] = null; });
+    ['visits_authorized','visits_used','evals_authorized','evals_used','reassessments_authorized','reassessments_used'].forEach(function(f) { data[f] = parseInt(data[f]) || 0; });
+    var result = rec && rec.id
+      ? await supabase.from('auth_tracker').update(data).eq('id', rec.id)
+      : await supabase.from('auth_tracker').insert([data]);
     if (result.error) { alert('Error: ' + result.error.message); return; }
     props.onSave();
   }
  
   var INP = { padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'var(--bg)', color: 'var(--black)', outline: 'none', width: '100%' };
   var LBL = { fontSize: 11, fontWeight: 600, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4, display: 'block' };
+  var SEC = { fontSize: 11, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12, marginTop: 4 };
  
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
@@ -139,23 +145,24 @@ function AddEditModal(props) {
           <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--black)' }}>{rec ? 'Edit Auth Record' : 'New Auth Record'}</div>
           <button onClick={props.onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: 'var(--gray)', cursor: 'pointer' }}>&#10005;</button>
         </div>
- 
         <div style={{ padding: 24 }}>
-          {/* Patient Info */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Patient Information</div>
+ 
+          <div style={SEC}>Patient Information</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-            <div><label style={LBL}>Patient Name *</label><input style={INP} value={form.patient_name || ''} onChange={function(e){handleChange('patient_name',e.target.value)}} placeholder="Last, First" /></div>
-            <div><label style={LBL}>Date of Birth</label><input type="date" style={INP} value={form.dob || ''} onChange={function(e){handleChange('dob',e.target.value)}} /></div>
-            <div><label style={LBL}>Member ID</label><input style={INP} value={form.member_id || ''} onChange={function(e){handleChange('member_id',e.target.value)}} /></div>
-            <div><label style={LBL}>Phone</label><input style={INP} value={form.phone || ''} onChange={function(e){handleChange('phone',e.target.value)}} /></div>
-            <div><label style={LBL}>Region</label>
-              <select style={INP} value={form.region || ''} onChange={function(e){handleChange('region',e.target.value)}}>
+            <div><label style={LBL}>Patient Name *</label><input style={INP} value={form.patient_name || ''} onChange={function(e){set('patient_name',e.target.value)}} placeholder="Last, First" /></div>
+            <div><label style={LBL}>Date of Birth</label><input type="date" style={INP} value={form.dob || ''} onChange={function(e){set('dob',e.target.value)}} /></div>
+            <div><label style={LBL}>Member ID</label><input style={INP} value={form.member_id || ''} onChange={function(e){set('member_id',e.target.value)}} /></div>
+            <div><label style={LBL}>Phone</label><input style={INP} value={form.phone || ''} onChange={function(e){set('phone',e.target.value)}} /></div>
+            <div>
+              <label style={LBL}>Region</label>
+              <select style={INP} value={form.region || ''} onChange={function(e){set('region',e.target.value)}}>
                 <option value="">Select...</option>
-                {REGIONS.map(function(r){ return React.createElement('option',{key:r,value:r},'Region '+r+' — '+(COORD_MAP[r]||'')); })}
+                {REGIONS.map(function(r){ return <option key={r} value={r}>Region {r} &mdash; {COORD_MAP[r]||''}</option>; })}
               </select>
             </div>
-            <div><label style={LBL}>Therapy Type</label>
-              <select style={INP} value={form.therapy_type || 'LYMPHEDEMA'} onChange={function(e){handleChange('therapy_type',e.target.value)}}>
+            <div>
+              <label style={LBL}>Therapy Type</label>
+              <select style={INP} value={form.therapy_type || 'LYMPHEDEMA'} onChange={function(e){set('therapy_type',e.target.value)}}>
                 <option value="LYMPHEDEMA">Lymphedema</option>
                 <option value="OT">Occupational Therapy</option>
                 <option value="PT">Physical Therapy</option>
@@ -163,96 +170,82 @@ function AddEditModal(props) {
             </div>
           </div>
  
-          {/* Insurance */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Insurance & Authorization</div>
+          <div style={SEC}>Insurance &amp; Authorization</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-            <div><label style={LBL}>Insurance *</label>
-              <select style={INP} value={form.insurance || ''} onChange={function(e){handleChange('insurance',e.target.value)}}>
+            <div>
+              <label style={LBL}>Insurance *</label>
+              <select style={INP} value={form.insurance || ''} onChange={function(e){set('insurance',e.target.value)}}>
                 <option value="">Select...</option>
-                {INSURANCES.map(function(ins){ return React.createElement('option',{key:ins,value:ins},ins); })}
+                {INSURANCES.map(function(ins){ return <option key={ins} value={ins}>{ins}</option>; })}
               </select>
             </div>
-            <div><label style={LBL}>Insurance Type</label>
-              <select style={INP} value={form.insurance_type || 'standard'} onChange={function(e){handleChange('insurance_type',e.target.value)}}>
+            <div>
+              <label style={LBL}>Insurance Type</label>
+              <select style={INP} value={form.insurance_type || 'standard'} onChange={function(e){set('insurance_type',e.target.value)}}>
                 <option value="standard">Standard (24 visits)</option>
                 <option value="medicare">Medicare (20 visits)</option>
               </select>
             </div>
-            <div><label style={LBL}>Auth Number</label><input style={INP} value={form.auth_number || ''} onChange={function(e){handleChange('auth_number',e.target.value)}} /></div>
-            <div><label style={LBL}>Status</label>
-              <select style={INP} value={form.auth_status || 'pending'} onChange={function(e){handleChange('auth_status',e.target.value)}}>
-                {STATUSES.map(function(s){ return React.createElement('option',{key:s.value,value:s.value},s.label); })}
+            <div><label style={LBL}>Auth Number</label><input style={INP} value={form.auth_number || ''} onChange={function(e){set('auth_number',e.target.value)}} /></div>
+            <div>
+              <label style={LBL}>Status</label>
+              <select style={INP} value={form.auth_status || 'pending'} onChange={function(e){set('auth_status',e.target.value)}}>
+                {STATUSES.map(function(s){ return <option key={s.value} value={s.value}>{s.label}</option>; })}
               </select>
             </div>
-            <div><label style={LBL}>Request Type</label>
-              <select style={INP} value={form.request_type || 'initial'} onChange={function(e){handleChange('request_type',e.target.value)}}>
+            <div>
+              <label style={LBL}>Request Type</label>
+              <select style={INP} value={form.request_type || 'initial'} onChange={function(e){set('request_type',e.target.value)}}>
                 <option value="initial">Initial</option>
                 <option value="renewal">Renewal</option>
               </select>
             </div>
-            <div><label style={LBL}>Frequency</label><input style={INP} value={form.frequency || ''} onChange={function(e){handleChange('frequency',e.target.value)}} placeholder="e.g. 2x/week" /></div>
+            <div><label style={LBL}>Frequency</label><input style={INP} value={form.frequency || ''} onChange={function(e){set('frequency',e.target.value)}} placeholder="e.g. 2x/week" /></div>
           </div>
  
-          {/* Visit Counts */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Visit Tracking</div>
+          <div style={SEC}>Visit Tracking</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-            {[
-              ['visits_authorized','Visits Authorized'],
-              ['visits_used','Visits Used'],
-              ['evals_authorized','Evals Authorized'],
-              ['evals_used','Evals Used'],
-              ['reassessments_authorized','Reassessments Auth.'],
-              ['reassessments_used','Reassessments Used'],
-            ].map(function(item){
+            {[['visits_authorized','Visits Authorized'],['visits_used','Visits Used'],['evals_authorized','Evals Authorized'],['evals_used','Evals Used'],['reassessments_authorized','Reassessments Auth.'],['reassessments_used','Reassessments Used']].map(function(item){
               return (
                 <div key={item[0]}>
                   <label style={LBL}>{item[1]}</label>
                   <input type="number" min="0" style={Object.assign({},INP,{fontFamily:'DM Mono, monospace',fontWeight:700,textAlign:'center'})}
                     value={form[item[0]] !== undefined ? form[item[0]] : 0}
-                    onChange={function(e){handleChange(item[0], parseInt(e.target.value)||0)}} />
+                    onChange={function(e){set(item[0], parseInt(e.target.value)||0)}} />
                 </div>
               );
             })}
           </div>
  
-          {/* Dates */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Key Dates</div>
+          <div style={SEC}>Key Dates</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-            {[
-              ['soc_date','Start of Care (SOC)'],
-              ['auth_submitted_date','Auth Submitted'],
-              ['auth_needed_by','Needed By'],
-              ['auth_approved_date','Auth Approved'],
-              ['auth_expiry_date','Auth Expires'],
-            ].map(function(item){
+            {[['soc_date','Start of Care (SOC)'],['auth_submitted_date','Auth Submitted'],['auth_needed_by','Needed By'],['auth_approved_date','Auth Approved'],['auth_expiry_date','Auth Expires']].map(function(item){
               return (
                 <div key={item[0]}>
                   <label style={LBL}>{item[1]}</label>
-                  <input type="date" style={INP} value={form[item[0]] || ''} onChange={function(e){handleChange(item[0],e.target.value)}} />
+                  <input type="date" style={INP} value={form[item[0]] || ''} onChange={function(e){set(item[0],e.target.value)}} />
                 </div>
               );
             })}
           </div>
  
-          {/* PCP */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>PCP / Provider</div>
+          <div style={SEC}>PCP / Provider</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 20 }}>
-            <div><label style={LBL}>PCP Name</label><input style={INP} value={form.pcp_name || ''} onChange={function(e){handleChange('pcp_name',e.target.value)}} /></div>
-            <div><label style={LBL}>PCP Facility</label><input style={INP} value={form.pcp_facility || ''} onChange={function(e){handleChange('pcp_facility',e.target.value)}} /></div>
-            <div><label style={LBL}>PCP Phone</label><input style={INP} value={form.pcp_phone || ''} onChange={function(e){handleChange('pcp_phone',e.target.value)}} /></div>
-            <div><label style={LBL}>PCP Fax</label><input style={INP} value={form.pcp_fax || ''} onChange={function(e){handleChange('pcp_fax',e.target.value)}} /></div>
+            <div><label style={LBL}>PCP Name</label><input style={INP} value={form.pcp_name || ''} onChange={function(e){set('pcp_name',e.target.value)}} /></div>
+            <div><label style={LBL}>PCP Facility</label><input style={INP} value={form.pcp_facility || ''} onChange={function(e){set('pcp_facility',e.target.value)}} /></div>
+            <div><label style={LBL}>PCP Phone</label><input style={INP} value={form.pcp_phone || ''} onChange={function(e){set('pcp_phone',e.target.value)}} /></div>
+            <div><label style={LBL}>PCP Fax</label><input style={INP} value={form.pcp_fax || ''} onChange={function(e){set('pcp_fax',e.target.value)}} /></div>
           </div>
  
-          {/* Notes */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Notes</div>
+          <div style={SEC}>Notes</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
             <div>
               <label style={LBL}>Notes</label>
-              <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.notes || ''} onChange={function(e){handleChange('notes',e.target.value)}} />
+              <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.notes || ''} onChange={function(e){set('notes',e.target.value)}} />
             </div>
             <div>
               <label style={LBL}>Denial Reason (if denied)</label>
-              <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.denial_reason || ''} onChange={function(e){handleChange('denial_reason',e.target.value)}} />
+              <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.denial_reason || ''} onChange={function(e){set('denial_reason',e.target.value)}} />
             </div>
           </div>
  
@@ -273,7 +266,6 @@ export default function AuthTrackerPage() {
   var [statusFilter, setStatusFilter] = useState('ALL');
   var [regionFilter, setRegionFilter] = useState('ALL');
   var [insuranceFilter, setInsuranceFilter] = useState('ALL');
-  var [urgencyFilter, setUrgencyFilter] = useState('ALL');
   var [sortBy, setSortBy] = useState('urgency');
   var [showModal, setShowModal] = useState(false);
   var [editRecord, setEditRecord] = useState(null);
@@ -282,7 +274,7 @@ export default function AuthTrackerPage() {
  
   function fetch() {
     setLoading(true);
-    supabase.from('auth_tracker').select('*').order('created_at', { ascending: false }).limit(500)
+    supabase.from('auth_tracker').select('*').order('created_at', { ascending: false }).limit(600)
       .then(function(res) { setRecords(res.data || []); setLoading(false); });
   }
  
@@ -298,13 +290,11 @@ export default function AuthTrackerPage() {
     var urgencyOrder = { critical: 0, high: 1, medium: 2, ok: 3 };
     var list = records.map(function(r) { return Object.assign({}, r, { _urgency: getUrgency(r) }); });
  
-    // Tab filters
     if (activeTab === 'critical') list = list.filter(function(r) { return r._urgency === 'critical'; });
     if (activeTab === 'pending') list = list.filter(function(r) { return r.auth_status === 'pending' || r.auth_status === 'submitted'; });
     if (activeTab === 'expiring') list = list.filter(function(r) { var d = daysUntil(r.auth_expiry_date); return d !== null && d <= 30 && d >= 0; });
     if (activeTab === 'denied') list = list.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; });
  
-    // Search
     if (search) {
       var q = search.toLowerCase();
       list = list.filter(function(r) {
@@ -317,7 +307,6 @@ export default function AuthTrackerPage() {
     if (statusFilter !== 'ALL') list = list.filter(function(r) { return r.auth_status === statusFilter; });
     if (regionFilter !== 'ALL') list = list.filter(function(r) { return r.region === regionFilter; });
     if (insuranceFilter !== 'ALL') list = list.filter(function(r) { return r.insurance === insuranceFilter; });
-    if (urgencyFilter !== 'ALL') list = list.filter(function(r) { return r._urgency === urgencyFilter; });
  
     list.sort(function(a, b) {
       if (sortBy === 'urgency') return urgencyOrder[a._urgency] - urgencyOrder[b._urgency];
@@ -327,30 +316,36 @@ export default function AuthTrackerPage() {
         var db = b.auth_expiry_date ? new Date(b.auth_expiry_date) : new Date('2099-01-01');
         return da - db;
       }
+      if (sortBy === 'soc') {
+        var sa = a.soc_date ? new Date(a.soc_date) : new Date('2099-01-01');
+        var sb = b.soc_date ? new Date(b.soc_date) : new Date('2099-01-01');
+        return sa - sb;
+      }
       if (sortBy === 'name') return (a.patient_name || '').localeCompare(b.patient_name || '');
       if (sortBy === 'region') return (a.region || '').localeCompare(b.region || '');
       return 0;
     });
- 
     return list;
-  }, [records, search, statusFilter, regionFilter, insuranceFilter, urgencyFilter, sortBy, activeTab]);
+  }, [records, search, statusFilter, regionFilter, insuranceFilter, sortBy, activeTab]);
  
-  // Summary counts
-  var critical = records.filter(function(r) { return getUrgency(r) === 'critical'; }).length;
-  var pending = records.filter(function(r) { return r.auth_status === 'pending' || r.auth_status === 'submitted'; }).length;
+  var critical   = records.filter(function(r) { return getUrgency(r) === 'critical'; }).length;
+  var pending    = records.filter(function(r) { return r.auth_status === 'pending' || r.auth_status === 'submitted'; }).length;
   var expiring30 = records.filter(function(r) { var d = daysUntil(r.auth_expiry_date); return d !== null && d <= 30 && d >= 0; }).length;
-  var denied = records.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; }).length;
-  var active = records.filter(function(r) { return r.auth_status === 'active'; }).length;
+  var denied     = records.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; }).length;
+  var active     = records.filter(function(r) { return r.auth_status === 'active'; }).length;
  
   var SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
  
   var tabs = [
-    { key: 'all', label: 'All', count: records.length },
-    { key: 'critical', label: 'Critical', count: critical, color: '#DC2626' },
-    { key: 'pending', label: 'Pending / Submitted', count: pending, color: '#92400E' },
+    { key: 'all',      label: 'All',                count: records.length },
+    { key: 'critical', label: 'Critical',           count: critical,   color: '#DC2626' },
+    { key: 'pending',  label: 'Pending / Submitted',count: pending,    color: '#92400E' },
     { key: 'expiring', label: 'Expiring (30 days)', count: expiring30, color: '#F59E0B' },
-    { key: 'denied', label: 'Denied / Appeal', count: denied, color: '#6D28D9' },
+    { key: 'denied',   label: 'Denied / Appeal',    count: denied,     color: '#6D28D9' },
   ];
+ 
+  // Column layout: Name | Rgn | Insurance | SOC | Expires | Visits | Status | Actions
+  var GRID = '2fr 0.5fr 0.8fr 0.9fr 1.1fr 1fr 0.85fr 0.7fr';
  
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -370,11 +365,11 @@ export default function AuthTrackerPage() {
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
             { label: 'Total Patients', val: records.length, color: 'var(--black)', sub: 'in tracker' },
-            { label: 'Active Auths', val: active, color: 'var(--green)', sub: 'currently authorized' },
-            { label: 'Critical', val: critical, color: '#DC2626', sub: '\u22647 visits or denied', alert: critical > 0 },
-            { label: 'Auth Pending', val: pending, color: '#92400E', sub: 'awaiting approval', alert: pending > 0 },
-            { label: 'Expiring \u226430d', val: expiring30, color: '#F59E0B', sub: 'need renewal soon', alert: expiring30 > 0 },
-            { label: 'Denied / Appeal', val: denied, color: '#6D28D9', sub: 'needs action', alert: denied > 0 },
+            { label: 'Active Auths',   val: active,         color: 'var(--green)', sub: 'currently authorized' },
+            { label: 'Critical',       val: critical,       color: '#DC2626',      sub: '\u22647 visits or denied',   alert: critical > 0 },
+            { label: 'Auth Pending',   val: pending,        color: '#92400E',      sub: 'awaiting approval',          alert: pending > 0 },
+            { label: 'Expiring \u226430d', val: expiring30, color: '#F59E0B',      sub: 'need renewal soon',          alert: expiring30 > 0 },
+            { label: 'Denied / Appeal',val: denied,         color: '#6D28D9',      sub: 'needs action',               alert: denied > 0 },
           ].map(function(tile) {
             return (
               <div key={tile.label} style={{ flex: 1, padding: '10px 16px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFFBF5' : 'transparent' }}>
@@ -408,158 +403,165 @@ export default function AuthTrackerPage() {
             style={{ padding: '6px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', background: 'var(--card-bg)', minWidth: 240 }} />
           <select value={regionFilter} onChange={function(e) { setRegionFilter(e.target.value); }} style={SEL}>
             <option value="ALL">All Regions</option>
-            {REGIONS.map(function(r) { return React.createElement('option', {key:r,value:r}, 'Region ' + r + ' \u2014 ' + (COORD_MAP[r]||'')); })}
+            {REGIONS.map(function(r) { return <option key={r} value={r}>Region {r} &mdash; {COORD_MAP[r]||''}</option>; })}
           </select>
           <select value={insuranceFilter} onChange={function(e) { setInsuranceFilter(e.target.value); }} style={SEL}>
             <option value="ALL">All Insurances</option>
-            {INSURANCES.map(function(ins) { return React.createElement('option', {key:ins,value:ins}, ins); })}
+            {INSURANCES.map(function(ins) { return <option key={ins} value={ins}>{ins}</option>; })}
           </select>
           <select value={statusFilter} onChange={function(e) { setStatusFilter(e.target.value); }} style={SEL}>
             <option value="ALL">All Statuses</option>
-            {STATUSES.map(function(s) { return React.createElement('option', {key:s.value,value:s.value}, s.label); })}
+            {STATUSES.map(function(s) { return <option key={s.value} value={s.value}>{s.label}</option>; })}
           </select>
           <select value={sortBy} onChange={function(e) { setSortBy(e.target.value); }} style={SEL}>
             <option value="urgency">Sort: Most Urgent First</option>
             <option value="visits">Sort: Fewest Visits Remaining</option>
             <option value="expiry">Sort: Expiring Soonest</option>
+            <option value="soc">Sort: SOC Date</option>
             <option value="name">Sort: Patient Name</option>
             <option value="region">Sort: Region</option>
           </select>
           <span style={{ fontSize: 12, color: 'var(--gray)', marginLeft: 'auto' }}>{filtered.length} records</span>
         </div>
  
-        {/* Records */}
+        {/* Table */}
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
  
           {records.length === 0 && !loading && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60 }}>
               <div style={{ fontSize: 36, marginBottom: 12 }}>&#128274;</div>
               <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--black)', marginBottom: 8 }}>No auth records yet</div>
-              <div style={{ color: 'var(--gray)', fontSize: 13, marginBottom: 20 }}>Click "+ New Auth Record" to add your first patient</div>
               <button onClick={function() { setEditRecord(null); setShowModal(true); }}
-                style={{ padding: '10px 20px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                style={{ padding: '10px 20px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginTop: 8 }}>
                 + New Auth Record
               </button>
             </div>
           )}
  
-          {loading && (
-            <div style={{ textAlign: 'center', padding: 40, color: 'var(--gray)' }}>Loading...</div>
-          )}
+          {loading && <div style={{ textAlign: 'center', padding: 40, color: 'var(--gray)' }}>Loading...</div>}
  
           {!loading && filtered.length === 0 && records.length > 0 && (
             <div style={{ textAlign: 'center', padding: 40, color: 'var(--gray)', fontSize: 13 }}>No records match your filters.</div>
           )}
  
-          <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-            {filtered.length > 0 && (
-              <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 0.6fr 0.8fr 1fr 1fr 1.2fr 0.8fr 1fr', padding: '8px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {!loading && filtered.length > 0 && (
+            <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+ 
+              {/* Column Headers */}
+              <div style={{ display: 'grid', gridTemplateColumns: GRID, padding: '8px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 <span>Patient</span>
                 <span>Rgn</span>
                 <span>Insurance</span>
-                <span>Auth Status</span>
-                <span>Visits Remaining</span>
+                <span>SOC Date</span>
                 <span>Auth Expiry</span>
-                <span>Type</span>
+                <span>Visits Remaining</span>
+                <span>Status</span>
                 <span>Actions</span>
               </div>
-            )}
  
-            {filtered.map(function(r, i) {
-              var urgency = r._urgency;
-              var remaining = visitsRemaining(r);
-              var expDays = daysUntil(r.auth_expiry_date);
-              var isExpanded = expandedId === r.id;
-              var rowBg = urgency === 'critical' ? '#FFF5F5' : urgency === 'high' ? '#FFFBF0' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
+              {filtered.map(function(r, i) {
+                var urgency = r._urgency;
+                var isExpanded = expandedId === r.id;
+                var rowBg = urgency === 'critical' ? '#FFF5F5' : urgency === 'high' ? '#FFFBF0' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
+                var expDays = daysUntil(r.auth_expiry_date);
  
-              return (
-                <div key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 0.6fr 0.8fr 1fr 1fr 1.2fr 0.8fr 1fr', padding: '12px 20px', alignItems: 'center', background: rowBg, cursor: 'pointer' }}
-                    onClick={function() { setExpandedId(isExpanded ? null : r.id); }}>
+                return (
+                  <div key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: GRID, padding: '11px 20px', alignItems: 'center', background: rowBg, cursor: 'pointer' }}
+                      onClick={function() { setExpandedId(isExpanded ? null : r.id); }}>
  
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <UrgencyDot urgency={urgency} />
+                      {/* Patient */}
+                      <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <UrgencyDot urgency={urgency} />
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name}</div>
+                          {r.member_id && <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>{r.member_id}</div>}
+                          {r.auth_number && <div style={{ fontSize: 10, color: '#1565C0', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>Auth #{r.auth_number}</div>}
+                        </div>
+                      </div>
+ 
+                      {/* Region */}
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name}</div>
-                        {r.member_id && <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>{r.member_id}</div>}
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>Rgn {r.region || '?'}</div>
+                        {r.region && COORD_MAP[r.region] && (
+                          <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{COORD_MAP[r.region].split(' ')[0]}</div>
+                        )}
+                      </div>
+ 
+                      {/* Insurance */}
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.insurance}</div>
+                        <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{r.insurance_type === 'medicare' ? 'Medicare' : 'Standard'}</div>
+                      </div>
+ 
+                      {/* SOC Date */}
+                      <div>
+                        {r.soc_date ? (
+                          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--black)' }}>{fmtDate(r.soc_date)}</div>
+                        ) : (
+                          <span style={{ fontSize: 11, color: 'var(--gray)' }}>Not set</span>
+                        )}
+                      </div>
+ 
+                      {/* Auth Expiry */}
+                      <ExpiryCell date={r.auth_expiry_date} />
+ 
+                      {/* Visits Remaining */}
+                      <VisitsBar rec={r} />
+ 
+                      {/* Status */}
+                      <StatusBadge status={r.auth_status} />
+ 
+                      {/* Actions */}
+                      <div style={{ display: 'flex', gap: 6 }} onClick={function(e) { e.stopPropagation(); }}>
+                        <button onClick={function() { setEditRecord(r); setShowModal(true); }}
+                          style={{ padding: '4px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--black)', cursor: 'pointer' }}>Edit</button>
+                        <button onClick={function() { deleteRecord(r.id); }}
+                          style={{ padding: '4px 8px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--danger)', cursor: 'pointer' }}>Del</button>
                       </div>
                     </div>
  
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>Rgn {r.region || '?'}</span>
- 
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.insurance}</div>
-                      <div style={{ fontSize: 10, color: 'var(--gray)' }}>{r.insurance_type === 'medicare' ? 'Medicare' : 'Standard'}</div>
-                    </div>
- 
-                    <StatusBadge status={r.auth_status} />
- 
-                    <VisitsBar rec={r} />
- 
-                    <div>
-                      {r.auth_expiry_date ? (
-                        <>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: expDays !== null && expDays <= 14 ? '#DC2626' : expDays !== null && expDays <= 30 ? '#F59E0B' : 'var(--black)' }}>
-                            {new Date(r.auth_expiry_date).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'})}
+                    {/* Expanded Detail */}
+                    {isExpanded && (
+                      <div style={{ padding: '12px 20px 16px 34px', background: '#FAFAFA', borderTop: '1px solid var(--border)' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Visit Details</div>
+                            <div style={{ fontSize: 12, color: 'var(--black)' }}>Visits: <strong>{r.visits_used}/{r.visits_authorized}</strong> ({visitsRemaining(r)} remaining)</div>
+                            <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Evals: <strong>{r.evals_used}/{r.evals_authorized}</strong></div>
+                            <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Reassessments: <strong>{r.reassessments_used}/{r.reassessments_authorized}</strong></div>
+                            {r.frequency && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 3 }}>Frequency: {r.frequency}</div>}
+                            {r.request_type && <div style={{ fontSize: 12, color: r.request_type === 'renewal' ? '#7C3AED' : 'var(--gray)', marginTop: 3, fontWeight: r.request_type === 'renewal' ? 600 : 400 }}>{r.request_type === 'renewal' ? 'Renewal Auth' : 'Initial Auth'}</div>}
                           </div>
-                          {expDays !== null && (
-                            <div style={{ fontSize: 10, color: expDays <= 0 ? '#DC2626' : expDays <= 14 ? '#DC2626' : expDays <= 30 ? '#F59E0B' : 'var(--gray)', fontWeight: expDays <= 14 ? 700 : 400 }}>
-                              {expDays < 0 ? Math.abs(expDays) + 'd expired' : expDays === 0 ? 'Expires today!' : expDays + 'd remaining'}
-                            </div>
-                          )}
-                        </>
-                      ) : <span style={{ fontSize: 11, color: 'var(--gray)' }}>\u2014</span>}
-                    </div>
- 
-                    <span style={{ fontSize: 11, color: r.request_type === 'renewal' ? '#7C3AED' : 'var(--gray)', fontWeight: r.request_type === 'renewal' ? 600 : 400 }}>
-                      {r.request_type === 'renewal' ? 'Renewal' : 'Initial'}
-                    </span>
- 
-                    <div style={{ display: 'flex', gap: 6 }} onClick={function(e) { e.stopPropagation(); }}>
-                      <button onClick={function() { setEditRecord(r); setShowModal(true); }}
-                        style={{ padding: '4px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--black)', cursor: 'pointer' }}>Edit</button>
-                      <button onClick={function() { deleteRecord(r.id); }}
-                        style={{ padding: '4px 10px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--danger)', cursor: 'pointer' }}>Del</button>
-                    </div>
-                  </div>
- 
-                  {isExpanded && (
-                    <div style={{ padding: '12px 20px 16px 34px', background: '#FAFAFA', borderTop: '1px solid var(--border)' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Visit Details</div>
-                          <div style={{ fontSize: 12, color: 'var(--black)' }}>Visits: <strong>{r.visits_used}/{r.visits_authorized}</strong> ({remaining} remaining)</div>
-                          <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Evals: <strong>{r.evals_used}/{r.evals_authorized}</strong></div>
-                          <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Reassessments: <strong>{r.reassessments_used}/{r.reassessments_authorized}</strong></div>
-                          {r.frequency && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 3 }}>Frequency: {r.frequency}</div>}
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Key Dates</div>
-                          {r.soc_date && <div style={{ fontSize: 12, color: 'var(--black)' }}>SOC: {new Date(r.soc_date).toLocaleDateString()}</div>}
-                          {r.auth_submitted_date && <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Submitted: {new Date(r.auth_submitted_date).toLocaleDateString()}</div>}
-                          {r.auth_needed_by && <div style={{ fontSize: 12, color: '#DC2626', fontWeight: 600, marginTop: 3 }}>Needed by: {new Date(r.auth_needed_by).toLocaleDateString()}</div>}
-                          {r.auth_approved_date && <div style={{ fontSize: 12, color: 'var(--green)', marginTop: 3 }}>Approved: {new Date(r.auth_approved_date).toLocaleDateString()}</div>}
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>PCP / Provider</div>
-                          {r.pcp_name && <div style={{ fontSize: 12, color: 'var(--black)' }}>{r.pcp_name}</div>}
-                          {r.pcp_facility && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>{r.pcp_facility}</div>}
-                          {r.pcp_phone && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>Ph: {r.pcp_phone}</div>}
-                          {r.pcp_fax && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>Fax: {r.pcp_fax}</div>}
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Notes</div>
-                          {r.notes && <div style={{ fontSize: 12, color: 'var(--black)', lineHeight: 1.5 }}>{r.notes}</div>}
-                          {r.denial_reason && <div style={{ fontSize: 12, color: '#DC2626', marginTop: 6, fontWeight: 600 }}>Denial: {r.denial_reason}</div>}
-                          {r.auth_number && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 6, fontFamily: 'DM Mono, monospace' }}>Auth #: {r.auth_number}</div>}
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Key Dates</div>
+                            {r.soc_date && <div style={{ fontSize: 12, color: 'var(--black)' }}>SOC: <strong>{fmtDate(r.soc_date)}</strong></div>}
+                            {r.auth_submitted_date && <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Submitted: {fmtDate(r.auth_submitted_date)}</div>}
+                            {r.auth_needed_by && <div style={{ fontSize: 12, color: '#DC2626', fontWeight: 600, marginTop: 3 }}>Needed by: {fmtDate(r.auth_needed_by)}</div>}
+                            {r.auth_approved_date && <div style={{ fontSize: 12, color: 'var(--green)', marginTop: 3 }}>Approved: {fmtDate(r.auth_approved_date)}</div>}
+                            {r.auth_expiry_date && <div style={{ fontSize: 12, color: expDays !== null && expDays <= 14 ? '#DC2626' : 'var(--black)', marginTop: 3, fontWeight: expDays !== null && expDays <= 14 ? 700 : 400 }}>Expires: {fmtDate(r.auth_expiry_date)}</div>}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>PCP / Provider</div>
+                            {r.pcp_name && <div style={{ fontSize: 12, color: 'var(--black)' }}>{r.pcp_name}</div>}
+                            {r.pcp_facility && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>{r.pcp_facility}</div>}
+                            {r.pcp_phone && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>Ph: {r.pcp_phone}</div>}
+                            {r.pcp_fax && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>Fax: {r.pcp_fax}</div>}
+                            {r.dob && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 6 }}>DOB: {fmtDate(r.dob)}</div>}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Notes</div>
+                            {r.notes && <div style={{ fontSize: 12, color: 'var(--black)', lineHeight: 1.5 }}>{r.notes}</div>}
+                            {r.denial_reason && <div style={{ fontSize: 12, color: '#DC2626', marginTop: 6, fontWeight: 600 }}>Denial: {r.denial_reason}</div>}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
  
