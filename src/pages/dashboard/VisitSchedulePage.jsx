@@ -23,20 +23,27 @@ function parseDate(raw) {
   const clean = raw.replace(/"/g, '').trim();
   if (!clean) return null;
 
-  // Try MM/DD/YYYY or M/D/YYYY (most common Pariox format)
-  const mdyMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdyMatch) {
-    const [, m, d, y] = mdyMatch;
-    return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+  // MM/DD/YYYY (Pariox format)
+  const mdy = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) {
+    return new Date(parseInt(mdy[3]), parseInt(mdy[1]) - 1, parseInt(mdy[2]));
   }
 
-  // Try YYYY-MM-DD
-  const isoMatch = clean.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (isoMatch) {
-    const [, y, m, d] = isoMatch;
-    return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+  // YYYY-MM-DD
+  const iso = clean.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    return new Date(parseInt(iso[1]), parseInt(iso[2]) - 1, parseInt(iso[3]));
   }
 
+  // M/D/YYYY with time (e.g. 4/4/2026 12:00 AM)
+  const mdyTime = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (mdyTime) {
+    return new Date(parseInt(mdyTime[3]), parseInt(mdyTime[1]) - 1, parseInt(mdyTime[2]));
+  }
+
+  const d = new Date(clean);
+  return isNaN(d.getTime()) ? null : d;
+}
   // Fallback
   const d = new Date(clean);
   return isNaN(d.getTime()) ? null : d;
