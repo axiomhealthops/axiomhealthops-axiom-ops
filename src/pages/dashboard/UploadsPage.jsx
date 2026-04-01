@@ -5,15 +5,31 @@ import TopBar from '../../components/TopBar';
 function parseXLSXFile(arrayBuffer) {
   const wb = XLSX.read(arrayBuffer, {
     type: 'array',
-    cellDates: false,
+    cellDates: true,      // ← changed to true so dates come out as date strings
     cellFormula: false,
     cellNF: false,
     sheetStubs: false,
-    raw: true,
+    raw: false,           // ← changed to false so formatted values are used
   });
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) throw new Error('No sheet found');
-
+  const ref = ws['!ref'];
+  if (ref) {
+    const range = XLSX.utils.decode_range(ref);
+    for (let R = range.s.r; R <= range.e.r; R++) {
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        const addr = XLSX.utils.encode_cell({ r: R, c: C });
+        const cell = ws[addr];
+        if (cell && cell.f) {
+          ws[addr] = cell.v !== undefined
+            ? { v: String(cell.v), t: 's' }
+            : { v: '', t: 's' };
+        }
+      }
+    }
+  }
+  return XLSX.utils.sheet_to_csv(ws, { blankrows: false });
+}
   // Strip formula cells (Pariox =right() formulas in Region col)
   const ref = ws['!ref'];
   if (ref) {
