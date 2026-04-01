@@ -46,9 +46,9 @@ export default function Dashboard() {
   var [activePage, setActivePage] = useState('overview');
   var PageComponent = PAGE_COMPONENTS[activePage] || function() { return React.createElement(ComingSoon, { page: activePage }); };
   return (
-    React.createElement(DashboardLayout, { activePage: activePage, onNavigate: setActivePage },
-      React.createElement(PageComponent, null)
-    )
+    <DashboardLayout activePage={activePage} onNavigate={setActivePage}>
+      <PageComponent />
+    </DashboardLayout>
   );
 }
  
