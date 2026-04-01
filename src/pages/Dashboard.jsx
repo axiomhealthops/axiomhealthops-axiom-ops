@@ -12,6 +12,7 @@ import UserManagementPage from './dashboard/UserManagementPage';
 import DailyReportsPage from './dashboard/DailyReportsPage';
 import ExecutiveReportPage from './dashboard/ExecutiveReportPage';
 import ProductivityPage from './dashboard/ProductivityPage';
+import CoordinatorRouter from './CoordinatorRouter';
  
 var PAGE_COMPONENTS = {
   overview: OverviewPage,
@@ -26,6 +27,7 @@ var PAGE_COMPONENTS = {
   'daily-reports': DailyReportsPage,
   'exec-report': ExecutiveReportPage,
   productivity: ProductivityPage,
+  'coordinator-portal': CoordinatorRouter,
 };
  
 function ComingSoon(props) {
@@ -35,9 +37,7 @@ function ComingSoon(props) {
       <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--black)', textTransform: 'capitalize' }}>
         {(props.page || '').replace(/-/g, ' ')}
       </div>
-      <div style={{ marginTop: 12, fontSize: 14, color: 'var(--gray)' }}>
-        This page is being built and will be available shortly.
-      </div>
+      <div style={{ marginTop: 12, fontSize: 14, color: 'var(--gray)' }}>This page is being built.</div>
     </div>
   );
 }
