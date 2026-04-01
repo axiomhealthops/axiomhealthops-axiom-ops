@@ -23,7 +23,48 @@ function getSS(status) {
 const VALID = ['A','B','C','G','H','J','M','N','T','V'];
 const BTN = { padding: '6px 12px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--card-bg)', fontSize: 14, cursor: 'pointer', color: 'var(--black)' };
 const SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
- 
+
+function StatsBar({ visits, view, anchor, byDate, todayStr, getWeekDays }) {
+  var viewVisits = visits;
+  if (view === 'day') {
+    var ds = todayStr;
+    try { ds = anchor.getFullYear() + '-' + String(anchor.getMonth()+1).padStart(2,'0') + '-' + String(anchor.getDate()).padStart(2,'0'); } catch(e) {}
+    viewVisits = byDate[ds] || [];
+  } else if (view === 'week') {
+    var days = getWeekDays(anchor);
+    var weekKeys = days.map(function(d) {
+      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    });
+    viewVisits = [];
+    weekKeys.forEach(function(k) { if (byDate[k]) viewVisits = viewVisits.concat(byDate[k]); });
+  }
+  var comp = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes('completed'); }).length;
+  var sched = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes('scheduled'); }).length;
+  var missed = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes('missed'); }).length;
+  var cancel = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes('cancelled'); }).length;
+  var total = viewVisits.length;
+  var compPct = total > 0 ? Math.round((comp / total) * 100) : 0;
+  var items = [
+    { label: 'Total', val: total, color: 'var(--black)' },
+    { label: 'Completed', val: comp, color: 'var(--green)' },
+    { label: 'Scheduled', val: sched, color: 'var(--blue)' },
+    { label: 'Missed', val: missed, color: 'var(--yellow)' },
+    { label: 'Cancelled', val: cancel, color: 'var(--danger)' },
+    { label: 'Completion Rate', val: compPct + '%', color: compPct >= 80 ? 'var(--green)' : compPct >= 60 ? 'var(--yellow)' : 'var(--danger)' },
+  ];
+  return (
+    <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
+      {items.map(function(item) {
+        return (
+          <div key={item.label} style={{ flex: 1, padding: '10px 16px', borderRight: '1px solid var(--border)', textAlign: 'center' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: item.color }}>{item.val}</div>
+            <div style={{ fontSize: 10, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{item.label}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 export default function VisitSchedulePage() {
   const visits = useMemo(function() {
     try { return JSON.parse(localStorage.getItem('axiom_pariox_data') || '[]'); }
@@ -98,7 +139,8 @@ export default function VisitSchedulePage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Visit Schedule" subtitle={filtered.length + ' visits \u00b7 ' + completedCount + ' completed \u00b7 ' + scheduledCount + ' scheduled'} />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+<StatsBar visits={filtered} view={view} anchor={anchor} byDate={byDate} todayStr={todayStr} getWeekDays={getWeekDays} />
+     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0, flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button onClick={function() { nav(-1); }} style={BTN}>&#8592;</button>
