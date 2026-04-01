@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
  
@@ -19,6 +19,13 @@ var COORD_MAP = {
   H: 'Audrey Sarmiento', J: 'Audrey Sarmiento', M: 'Audrey Sarmiento', N: 'Audrey Sarmiento',
   T: 'April Manalo', V: 'April Manalo',
 };
+var DOC_TYPES = [
+  { value: 'auth',     label: 'Authorization Letter' },
+  { value: 'denial',   label: 'Denial Letter' },
+  { value: 'appeal',   label: 'Appeal Document' },
+  { value: 'clinical', label: 'Clinical Notes' },
+  { value: 'other',    label: 'Other' },
+];
  
 function getStatus(s) { return STATUSES.find(function(x) { return x.value === s; }) || STATUSES[0]; }
  
@@ -31,6 +38,13 @@ function daysUntil(dateStr) {
 function fmtDate(dateStr) {
   if (!dateStr) return null;
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+}
+ 
+function fmtFileSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return Math.round(bytes / 1024) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
 }
  
 function visitsRemaining(rec) {
@@ -87,20 +101,149 @@ function VisitsBar(props) {
  
 function ExpiryCell(props) {
   var dateStr = props.date;
-  if (!dateStr) return <span style={{ fontSize: 11, color: 'var(--gray)' }}>—</span>;
+  if (!dateStr) return <span style={{ fontSize: 11, color: 'var(--gray)' }}>&mdash;</span>;
   var days = daysUntil(dateStr);
   var color = days === null ? 'var(--gray)' : days < 0 ? '#DC2626' : days <= 7 ? '#DC2626' : days <= 14 ? '#F59E0B' : days <= 30 ? '#F59E0B' : 'var(--black)';
   var label = days === null ? '' : days < 0 ? Math.abs(days) + 'd ago' : days === 0 ? 'Today!' : days + 'd';
   return (
     <div>
       <div style={{ fontSize: 12, fontWeight: 600, color: color }}>{fmtDate(dateStr)}</div>
-      {days !== null && (
-        <div style={{ fontSize: 10, color: color, fontWeight: days <= 14 ? 700 : 400, marginTop: 1 }}>{label}</div>
+      {days !== null && <div style={{ fontSize: 10, color: color, fontWeight: days <= 14 ? 700 : 400, marginTop: 1 }}>{label}</div>}
+    </div>
+  );
+}
+ 
+// ── Document Panel ────────────────────────────────────────────────────
+function DocumentPanel(props) {
+  var authId = props.authId;
+  var patientName = props.patientName;
+  var [docs, setDocs] = useState([]);
+  var [uploading, setUploading] = useState(false);
+  var [docType, setDocType] = useState('auth');
+  var [docNotes, setDocNotes] = useState('');
+  var fileRef = useRef();
+ 
+  function loadDocs() {
+    supabase.from('auth_documents').select('*').eq('auth_tracker_id', authId)
+      .order('created_at', { ascending: false })
+      .then(function(res) { setDocs(res.data || []); });
+  }
+ 
+  useEffect(function() { if (authId) loadDocs(); }, [authId]);
+ 
+  async function handleUpload(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    // Path: auth-documents/{auth_id}/{timestamp}_{filename}
+    var safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    var filePath = authId + '/' + Date.now() + '_' + safeName;
+ 
+    var uploadResult = await supabase.storage.from('auth-documents').upload(filePath, file, {
+      contentType: file.type || 'application/pdf',
+    });
+ 
+    if (uploadResult.error) {
+      alert('Upload failed: ' + uploadResult.error.message);
+      setUploading(false);
+      return;
+    }
+ 
+    await supabase.from('auth_documents').insert([{
+      auth_tracker_id: authId,
+      file_name: file.name,
+      file_path: filePath,
+      file_size: file.size,
+      doc_type: docType,
+      notes: docNotes || null,
+    }]);
+ 
+    setDocNotes('');
+    if (fileRef.current) fileRef.current.value = '';
+    setUploading(false);
+    loadDocs();
+  }
+ 
+  async function handleDelete(doc) {
+    if (!window.confirm('Delete "' + doc.file_name + '"?')) return;
+    await supabase.storage.from('auth-documents').remove([doc.file_path]);
+    await supabase.from('auth_documents').delete().eq('id', doc.id);
+    loadDocs();
+  }
+ 
+  async function handleDownload(doc) {
+    var result = await supabase.storage.from('auth-documents').createSignedUrl(doc.file_path, 60);
+    if (result.data && result.data.signedUrl) {
+      window.open(result.data.signedUrl, '_blank');
+    } else {
+      alert('Could not generate download link.');
+    }
+  }
+ 
+  var DOC_ICONS = { auth: '📄', denial: '❌', appeal: '⚖️', clinical: '🩺', other: '📎' };
+ 
+  return (
+    <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px dashed var(--border)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Documents ({docs.length})
+        </div>
+      </div>
+ 
+      {/* Upload area */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+        <select value={docType} onChange={function(e) { setDocType(e.target.value); }}
+          style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--bg)', color: 'var(--black)', outline: 'none' }}>
+          {DOC_TYPES.map(function(t) { return <option key={t.value} value={t.value}>{t.label}</option>; })}
+        </select>
+        <input placeholder="Notes (optional)" value={docNotes} onChange={function(e) { setDocNotes(e.target.value); }}
+          style={{ padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--bg)', color: 'var(--black)', outline: 'none', flex: 1, minWidth: 140 }} />
+        <label style={{ padding: '5px 14px', background: uploading ? '#9CA3AF' : 'var(--red)', color: '#fff', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: uploading ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+          {uploading ? 'Uploading...' : '+ Upload PDF'}
+          <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={handleUpload} disabled={uploading}
+            style={{ display: 'none' }} />
+        </label>
+      </div>
+ 
+      {/* Document list */}
+      {docs.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--gray)', fontStyle: 'italic', padding: '8px 0' }}>
+          No documents uploaded yet. Upload auth letters, denial letters, or clinical notes.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {docs.map(function(doc) {
+            var dtLabel = DOC_TYPES.find(function(t) { return t.value === doc.doc_type; });
+            return (
+              <div key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                <span style={{ fontSize: 16, flexShrink: 0 }}>{DOC_ICONS[doc.doc_type] || '📎'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.file_name}</div>
+                  <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 2 }}>
+                    {dtLabel ? dtLabel.label : doc.doc_type}
+                    {doc.file_size ? ' &middot; ' + fmtFileSize(doc.file_size) : ''}
+                    {' &middot; ' + fmtDate(doc.created_at)}
+                    {doc.notes ? ' &middot; ' + doc.notes : ''}
+                  </div>
+                </div>
+                <button onClick={function() { handleDownload(doc); }}
+                  style={{ padding: '4px 10px', background: '#EFF6FF', color: '#1E40AF', border: '1px solid #BFDBFE', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  View
+                </button>
+                <button onClick={function() { handleDelete(doc); }}
+                  style={{ padding: '4px 8px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--danger)', cursor: 'pointer' }}>
+                  Del
+                </button>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
 }
  
+// ── Add/Edit Modal ────────────────────────────────────────────────────
 function AddEditModal(props) {
   var rec = props.record;
   var [form, setForm] = useState(rec ? Object.assign({}, rec) : {
@@ -146,22 +289,19 @@ function AddEditModal(props) {
           <button onClick={props.onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: 'var(--gray)', cursor: 'pointer' }}>&#10005;</button>
         </div>
         <div style={{ padding: 24 }}>
- 
           <div style={SEC}>Patient Information</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
             <div><label style={LBL}>Patient Name *</label><input style={INP} value={form.patient_name || ''} onChange={function(e){set('patient_name',e.target.value)}} placeholder="Last, First" /></div>
             <div><label style={LBL}>Date of Birth</label><input type="date" style={INP} value={form.dob || ''} onChange={function(e){set('dob',e.target.value)}} /></div>
             <div><label style={LBL}>Member ID</label><input style={INP} value={form.member_id || ''} onChange={function(e){set('member_id',e.target.value)}} /></div>
             <div><label style={LBL}>Phone</label><input style={INP} value={form.phone || ''} onChange={function(e){set('phone',e.target.value)}} /></div>
-            <div>
-              <label style={LBL}>Region</label>
+            <div><label style={LBL}>Region</label>
               <select style={INP} value={form.region || ''} onChange={function(e){set('region',e.target.value)}}>
                 <option value="">Select...</option>
                 {REGIONS.map(function(r){ return <option key={r} value={r}>Region {r} &mdash; {COORD_MAP[r]||''}</option>; })}
               </select>
             </div>
-            <div>
-              <label style={LBL}>Therapy Type</label>
+            <div><label style={LBL}>Therapy Type</label>
               <select style={INP} value={form.therapy_type || 'LYMPHEDEMA'} onChange={function(e){set('therapy_type',e.target.value)}}>
                 <option value="LYMPHEDEMA">Lymphedema</option>
                 <option value="OT">Occupational Therapy</option>
@@ -172,29 +312,25 @@ function AddEditModal(props) {
  
           <div style={SEC}>Insurance &amp; Authorization</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-            <div>
-              <label style={LBL}>Insurance *</label>
+            <div><label style={LBL}>Insurance *</label>
               <select style={INP} value={form.insurance || ''} onChange={function(e){set('insurance',e.target.value)}}>
                 <option value="">Select...</option>
                 {INSURANCES.map(function(ins){ return <option key={ins} value={ins}>{ins}</option>; })}
               </select>
             </div>
-            <div>
-              <label style={LBL}>Insurance Type</label>
+            <div><label style={LBL}>Insurance Type</label>
               <select style={INP} value={form.insurance_type || 'standard'} onChange={function(e){set('insurance_type',e.target.value)}}>
                 <option value="standard">Standard (24 visits)</option>
                 <option value="medicare">Medicare (20 visits)</option>
               </select>
             </div>
             <div><label style={LBL}>Auth Number</label><input style={INP} value={form.auth_number || ''} onChange={function(e){set('auth_number',e.target.value)}} /></div>
-            <div>
-              <label style={LBL}>Status</label>
+            <div><label style={LBL}>Status</label>
               <select style={INP} value={form.auth_status || 'pending'} onChange={function(e){set('auth_status',e.target.value)}}>
                 {STATUSES.map(function(s){ return <option key={s.value} value={s.value}>{s.label}</option>; })}
               </select>
             </div>
-            <div>
-              <label style={LBL}>Request Type</label>
+            <div><label style={LBL}>Request Type</label>
               <select style={INP} value={form.request_type || 'initial'} onChange={function(e){set('request_type',e.target.value)}}>
                 <option value="initial">Initial</option>
                 <option value="renewal">Renewal</option>
@@ -239,14 +375,10 @@ function AddEditModal(props) {
  
           <div style={SEC}>Notes</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
-            <div>
-              <label style={LBL}>Notes</label>
-              <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.notes || ''} onChange={function(e){set('notes',e.target.value)}} />
-            </div>
-            <div>
-              <label style={LBL}>Denial Reason (if denied)</label>
-              <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.denial_reason || ''} onChange={function(e){set('denial_reason',e.target.value)}} />
-            </div>
+            <div><label style={LBL}>Notes</label>
+              <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.notes || ''} onChange={function(e){set('notes',e.target.value)}} /></div>
+            <div><label style={LBL}>Denial Reason (if denied)</label>
+              <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.denial_reason || ''} onChange={function(e){set('denial_reason',e.target.value)}} /></div>
           </div>
  
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
@@ -259,6 +391,7 @@ function AddEditModal(props) {
   );
 }
  
+// ── Main Page ─────────────────────────────────────────────────────────
 export default function AuthTrackerPage() {
   var [records, setRecords] = useState([]);
   var [loading, setLoading] = useState(true);
@@ -272,29 +405,27 @@ export default function AuthTrackerPage() {
   var [expandedId, setExpandedId] = useState(null);
   var [activeTab, setActiveTab] = useState('all');
  
-  function fetch() {
+  function fetchRecords() {
     setLoading(true);
     supabase.from('auth_tracker').select('*').order('created_at', { ascending: false }).limit(600)
       .then(function(res) { setRecords(res.data || []); setLoading(false); });
   }
  
-  useEffect(function() { fetch(); }, []);
+  useEffect(function() { fetchRecords(); }, []);
  
   async function deleteRecord(id) {
     if (!window.confirm('Delete this auth record?')) return;
     await supabase.from('auth_tracker').delete().eq('id', id);
-    fetch();
+    fetchRecords();
   }
  
   var filtered = useMemo(function() {
     var urgencyOrder = { critical: 0, high: 1, medium: 2, ok: 3 };
     var list = records.map(function(r) { return Object.assign({}, r, { _urgency: getUrgency(r) }); });
- 
     if (activeTab === 'critical') list = list.filter(function(r) { return r._urgency === 'critical'; });
     if (activeTab === 'pending') list = list.filter(function(r) { return r.auth_status === 'pending' || r.auth_status === 'submitted'; });
     if (activeTab === 'expiring') list = list.filter(function(r) { var d = daysUntil(r.auth_expiry_date); return d !== null && d <= 30 && d >= 0; });
     if (activeTab === 'denied') list = list.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; });
- 
     if (search) {
       var q = search.toLowerCase();
       list = list.filter(function(r) {
@@ -307,7 +438,6 @@ export default function AuthTrackerPage() {
     if (statusFilter !== 'ALL') list = list.filter(function(r) { return r.auth_status === statusFilter; });
     if (regionFilter !== 'ALL') list = list.filter(function(r) { return r.region === regionFilter; });
     if (insuranceFilter !== 'ALL') list = list.filter(function(r) { return r.insurance === insuranceFilter; });
- 
     list.sort(function(a, b) {
       if (sortBy === 'urgency') return urgencyOrder[a._urgency] - urgencyOrder[b._urgency];
       if (sortBy === 'visits') return visitsRemaining(a) - visitsRemaining(b);
@@ -335,7 +465,6 @@ export default function AuthTrackerPage() {
   var active     = records.filter(function(r) { return r.auth_status === 'active'; }).length;
  
   var SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
- 
   var tabs = [
     { key: 'all',      label: 'All',                count: records.length },
     { key: 'critical', label: 'Critical',           count: critical,   color: '#DC2626' },
@@ -343,9 +472,7 @@ export default function AuthTrackerPage() {
     { key: 'expiring', label: 'Expiring (30 days)', count: expiring30, color: '#F59E0B' },
     { key: 'denied',   label: 'Denied / Appeal',    count: denied,     color: '#6D28D9' },
   ];
- 
-  // Column layout: Name | Rgn | Insurance | SOC | Expires | Visits | Status | Actions
-  var GRID = '2fr 0.5fr 0.8fr 0.9fr 1.1fr 1fr 0.85fr 0.7fr';
+  var GRID = '2fr 0.5fr 0.8fr 0.85fr 1.05fr 1fr 0.85fr 0.7fr';
  
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -361,15 +488,15 @@ export default function AuthTrackerPage() {
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
  
-        {/* Summary Strip */}
+        {/* Summary */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
-            { label: 'Total Patients', val: records.length, color: 'var(--black)', sub: 'in tracker' },
-            { label: 'Active Auths',   val: active,         color: 'var(--green)', sub: 'currently authorized' },
-            { label: 'Critical',       val: critical,       color: '#DC2626',      sub: '\u22647 visits or denied',   alert: critical > 0 },
-            { label: 'Auth Pending',   val: pending,        color: '#92400E',      sub: 'awaiting approval',          alert: pending > 0 },
-            { label: 'Expiring \u226430d', val: expiring30, color: '#F59E0B',      sub: 'need renewal soon',          alert: expiring30 > 0 },
-            { label: 'Denied / Appeal',val: denied,         color: '#6D28D9',      sub: 'needs action',               alert: denied > 0 },
+            { label: 'Total Patients',     val: records.length, color: 'var(--black)', sub: 'in tracker' },
+            { label: 'Active Auths',       val: active,         color: 'var(--green)', sub: 'currently authorized' },
+            { label: 'Critical',           val: critical,       color: '#DC2626',      sub: '\u22647 visits or denied',   alert: critical > 0 },
+            { label: 'Auth Pending',       val: pending,        color: '#92400E',      sub: 'awaiting approval',          alert: pending > 0 },
+            { label: 'Expiring \u226430d', val: expiring30,     color: '#F59E0B',      sub: 'need renewal soon',          alert: expiring30 > 0 },
+            { label: 'Denied / Appeal',    val: denied,         color: '#6D28D9',      sub: 'needs action',               alert: denied > 0 },
           ].map(function(tile) {
             return (
               <div key={tile.label} style={{ flex: 1, padding: '10px 16px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFFBF5' : 'transparent' }}>
@@ -389,9 +516,7 @@ export default function AuthTrackerPage() {
               <button key={tab.key} onClick={function() { setActiveTab(tab.key); }}
                 style={{ padding: '7px 14px', border: 'none', borderRadius: '6px 6px 0 0', fontSize: 12, fontWeight: isActive ? 700 : 500, cursor: 'pointer', background: isActive ? 'var(--card-bg)' : 'transparent', color: isActive ? (tab.color || 'var(--black)') : 'var(--gray)', borderBottom: isActive ? '2px solid ' + (tab.color || 'var(--red)') : '2px solid transparent', display: 'flex', alignItems: 'center', gap: 6 }}>
                 {tab.label}
-                {tab.count > 0 && (
-                  <span style={{ fontSize: 10, fontWeight: 700, background: isActive ? (tab.color || 'var(--red)') : 'var(--border)', color: isActive ? '#fff' : 'var(--gray)', padding: '1px 6px', borderRadius: 999 }}>{tab.count}</span>
-                )}
+                {tab.count > 0 && <span style={{ fontSize: 10, fontWeight: 700, background: isActive ? (tab.color || 'var(--red)') : 'var(--border)', color: isActive ? '#fff' : 'var(--gray)', padding: '1px 6px', borderRadius: 999 }}>{tab.count}</span>}
               </button>
             );
           })}
@@ -426,9 +551,8 @@ export default function AuthTrackerPage() {
  
         {/* Table */}
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
- 
           {records.length === 0 && !loading && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 60 }}>
               <div style={{ fontSize: 36, marginBottom: 12 }}>&#128274;</div>
               <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--black)', marginBottom: 8 }}>No auth records yet</div>
               <button onClick={function() { setEditRecord(null); setShowModal(true); }}
@@ -439,38 +563,29 @@ export default function AuthTrackerPage() {
           )}
  
           {loading && <div style={{ textAlign: 'center', padding: 40, color: 'var(--gray)' }}>Loading...</div>}
- 
           {!loading && filtered.length === 0 && records.length > 0 && (
             <div style={{ textAlign: 'center', padding: 40, color: 'var(--gray)', fontSize: 13 }}>No records match your filters.</div>
           )}
  
           {!loading && filtered.length > 0 && (
             <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
- 
-              {/* Column Headers */}
               <div style={{ display: 'grid', gridTemplateColumns: GRID, padding: '8px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                <span>Patient</span>
-                <span>Rgn</span>
-                <span>Insurance</span>
-                <span>SOC Date</span>
-                <span>Auth Expiry</span>
-                <span>Visits Remaining</span>
-                <span>Status</span>
-                <span>Actions</span>
+                <span>Patient</span><span>Rgn</span><span>Insurance</span>
+                <span>SOC Date</span><span>Auth Expiry</span>
+                <span>Visits Remaining</span><span>Status</span><span>Actions</span>
               </div>
  
               {filtered.map(function(r, i) {
                 var urgency = r._urgency;
                 var isExpanded = expandedId === r.id;
-                var rowBg = urgency === 'critical' ? '#FFF5F5' : urgency === 'high' ? '#FFFBF0' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
                 var expDays = daysUntil(r.auth_expiry_date);
+                var rowBg = urgency === 'critical' ? '#FFF5F5' : urgency === 'high' ? '#FFFBF0' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
  
                 return (
                   <div key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: GRID, padding: '11px 20px', alignItems: 'center', background: rowBg, cursor: 'pointer' }}
                       onClick={function() { setExpandedId(isExpanded ? null : r.id); }}>
  
-                      {/* Patient */}
                       <div style={{ display: 'flex', alignItems: 'center' }}>
                         <UrgencyDot urgency={urgency} />
                         <div>
@@ -480,39 +595,26 @@ export default function AuthTrackerPage() {
                         </div>
                       </div>
  
-                      {/* Region */}
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>Rgn {r.region || '?'}</div>
-                        {r.region && COORD_MAP[r.region] && (
-                          <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{COORD_MAP[r.region].split(' ')[0]}</div>
-                        )}
+                        {r.region && COORD_MAP[r.region] && <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{COORD_MAP[r.region].split(' ')[0]}</div>}
                       </div>
  
-                      {/* Insurance */}
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.insurance}</div>
                         <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{r.insurance_type === 'medicare' ? 'Medicare' : 'Standard'}</div>
                       </div>
  
-                      {/* SOC Date */}
                       <div>
-                        {r.soc_date ? (
-                          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--black)' }}>{fmtDate(r.soc_date)}</div>
-                        ) : (
-                          <span style={{ fontSize: 11, color: 'var(--gray)' }}>Not set</span>
-                        )}
+                        {r.soc_date
+                          ? <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--black)' }}>{fmtDate(r.soc_date)}</div>
+                          : <span style={{ fontSize: 11, color: 'var(--gray)' }}>&mdash;</span>}
                       </div>
  
-                      {/* Auth Expiry */}
                       <ExpiryCell date={r.auth_expiry_date} />
- 
-                      {/* Visits Remaining */}
                       <VisitsBar rec={r} />
- 
-                      {/* Status */}
                       <StatusBadge status={r.auth_status} />
  
-                      {/* Actions */}
                       <div style={{ display: 'flex', gap: 6 }} onClick={function(e) { e.stopPropagation(); }}>
                         <button onClick={function() { setEditRecord(r); setShowModal(true); }}
                           style={{ padding: '4px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--black)', cursor: 'pointer' }}>Edit</button>
@@ -521,29 +623,28 @@ export default function AuthTrackerPage() {
                       </div>
                     </div>
  
-                    {/* Expanded Detail */}
+                    {/* Expanded detail + documents */}
                     {isExpanded && (
-                      <div style={{ padding: '12px 20px 16px 34px', background: '#FAFAFA', borderTop: '1px solid var(--border)' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+                      <div style={{ padding: '16px 20px 20px 34px', background: '#FAFAFA', borderTop: '1px solid var(--border)' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 4 }}>
                           <div>
                             <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Visit Details</div>
-                            <div style={{ fontSize: 12, color: 'var(--black)' }}>Visits: <strong>{r.visits_used}/{r.visits_authorized}</strong> ({visitsRemaining(r)} remaining)</div>
+                            <div style={{ fontSize: 12, color: 'var(--black)' }}>Visits: <strong>{r.visits_used}/{r.visits_authorized}</strong> ({visitsRemaining(r)} left)</div>
                             <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Evals: <strong>{r.evals_used}/{r.evals_authorized}</strong></div>
                             <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Reassessments: <strong>{r.reassessments_used}/{r.reassessments_authorized}</strong></div>
                             {r.frequency && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 3 }}>Frequency: {r.frequency}</div>}
-                            {r.request_type && <div style={{ fontSize: 12, color: r.request_type === 'renewal' ? '#7C3AED' : 'var(--gray)', marginTop: 3, fontWeight: r.request_type === 'renewal' ? 600 : 400 }}>{r.request_type === 'renewal' ? 'Renewal Auth' : 'Initial Auth'}</div>}
                           </div>
                           <div>
                             <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Key Dates</div>
                             {r.soc_date && <div style={{ fontSize: 12, color: 'var(--black)' }}>SOC: <strong>{fmtDate(r.soc_date)}</strong></div>}
-                            {r.auth_submitted_date && <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Submitted: {fmtDate(r.auth_submitted_date)}</div>}
+                            {r.auth_submitted_date && <div style={{ fontSize: 12, marginTop: 3 }}>Submitted: {fmtDate(r.auth_submitted_date)}</div>}
                             {r.auth_needed_by && <div style={{ fontSize: 12, color: '#DC2626', fontWeight: 600, marginTop: 3 }}>Needed by: {fmtDate(r.auth_needed_by)}</div>}
                             {r.auth_approved_date && <div style={{ fontSize: 12, color: 'var(--green)', marginTop: 3 }}>Approved: {fmtDate(r.auth_approved_date)}</div>}
-                            {r.auth_expiry_date && <div style={{ fontSize: 12, color: expDays !== null && expDays <= 14 ? '#DC2626' : 'var(--black)', marginTop: 3, fontWeight: expDays !== null && expDays <= 14 ? 700 : 400 }}>Expires: {fmtDate(r.auth_expiry_date)}</div>}
+                            {r.auth_expiry_date && <div style={{ fontSize: 12, color: expDays !== null && expDays <= 14 ? '#DC2626' : 'var(--black)', fontWeight: expDays !== null && expDays <= 14 ? 700 : 400, marginTop: 3 }}>Expires: {fmtDate(r.auth_expiry_date)}</div>}
                           </div>
                           <div>
                             <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>PCP / Provider</div>
-                            {r.pcp_name && <div style={{ fontSize: 12, color: 'var(--black)' }}>{r.pcp_name}</div>}
+                            {r.pcp_name && <div style={{ fontSize: 12 }}>{r.pcp_name}</div>}
                             {r.pcp_facility && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>{r.pcp_facility}</div>}
                             {r.pcp_phone && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>Ph: {r.pcp_phone}</div>}
                             {r.pcp_fax && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>Fax: {r.pcp_fax}</div>}
@@ -555,6 +656,9 @@ export default function AuthTrackerPage() {
                             {r.denial_reason && <div style={{ fontSize: 12, color: '#DC2626', marginTop: 6, fontWeight: 600 }}>Denial: {r.denial_reason}</div>}
                           </div>
                         </div>
+ 
+                        {/* Document upload panel */}
+                        <DocumentPanel authId={r.id} patientName={r.patient_name} />
                       </div>
                     )}
                   </div>
@@ -569,7 +673,7 @@ export default function AuthTrackerPage() {
         <AddEditModal
           record={editRecord}
           onClose={function() { setShowModal(false); setEditRecord(null); }}
-          onSave={function() { setShowModal(false); setEditRecord(null); fetch(); }}
+          onSave={function() { setShowModal(false); setEditRecord(null); fetchRecords(); }}
         />
       )}
     </div>
