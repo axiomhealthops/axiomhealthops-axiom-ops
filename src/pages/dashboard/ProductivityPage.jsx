@@ -7,6 +7,20 @@ var TARGETS = { ft: 25, pt: 15, prn: 10 };
 var TYPE_LABELS = { ft: 'Full Time', pt: 'Part Time', prn: 'PRN / 1099' };
 var VALID_REGIONS = ['A','B','C','G','H','J','M','N','T','V','All'];
  
+// Convert "Last, First" -> "First Last" to match DB format
+function normalizeName(raw) {
+  if (!raw) return '';
+  var s = raw.trim();
+  // If contains comma: "Last, First Middle" -> "First Middle Last"
+  if (s.includes(',')) {
+    var parts = s.split(',');
+    var last = parts[0].trim();
+    var first = parts[1] ? parts[1].trim() : '';
+    return (first + ' ' + last).trim();
+  }
+  return s;
+}
+ 
 function getBarColor(pct, type) {
   if (type === 'prn') return pct >= 100 ? '#DC2626' : '#3B82F6';
   if (pct >= 90) return '#10B981';
@@ -53,10 +67,12 @@ export default function ProductivityPage() {
       });
   }, []);
  
+  // Build visit map — normalize "Last, First" to "First Last"
   var visitsByClinician = useMemo(function() {
     var map = {};
     visits.forEach(function(v) {
-      var name = (v.staff_name || '').trim();
+      var rawName = (v.staff_name || '').trim();
+      var name = normalizeName(rawName);
       if (!name) return;
       if (!map[name]) map[name] = { completed: 0, scheduled: 0, missed: 0, cancelled: 0, evals: 0, reassessments: 0 };
       var s = (v.status || '').toLowerCase();
@@ -105,8 +121,8 @@ export default function ProductivityPage() {
     var prn = enriched.filter(function(c) { return c.employment_type === 'prn'; });
     var avg = function(arr) { return arr.length > 0 ? Math.round(arr.reduce(function(a, c) { return a + c.pct; }, 0) / arr.length) : 0; };
     return {
-      ft: { count: ft.length, avg: avg(ft), atRisk: ft.filter(function(c) { return c.pct < 70; }).length },
-      pt: { count: pt.length, avg: avg(pt), atRisk: pt.filter(function(c) { return c.pct < 70; }).length },
+      ft: { count: ft.length, avg: avg(ft), atRisk: ft.filter(function(c) { return c.pct < 70 && c.done > 0; }).length, noData: ft.filter(function(c) { return c.done === 0; }).length },
+      pt: { count: pt.length, avg: avg(pt), atRisk: pt.filter(function(c) { return c.pct < 70 && c.done > 0; }).length },
       prn: { count: prn.length, alerted: prn.filter(function(c) { return c.pct >= 100; }).length },
     };
   }, [enriched]);
@@ -130,24 +146,26 @@ export default function ProductivityPage() {
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
  
+        {/* Summary Strip */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           <div style={{ flex: 1, padding: '12px 20px', borderRight: '1px solid var(--border)', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Full Time ({summary.ft.count}) — Target: 25</div>
+            <div style={{ fontSize: 11, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Full Time ({summary.ft.count}) \u2014 Target: 25</div>
             <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: summary.ft.avg >= 80 ? 'var(--green)' : summary.ft.avg >= 60 ? 'var(--yellow)' : 'var(--danger)', marginTop: 3 }}>{summary.ft.avg}% avg</div>
             {summary.ft.atRisk > 0 && <div style={{ fontSize: 11, color: 'var(--danger)', fontWeight: 600, marginTop: 2 }}>{summary.ft.atRisk} below 70%</div>}
           </div>
           <div style={{ flex: 1, padding: '12px 20px', borderRight: '1px solid var(--border)', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Part Time ({summary.pt.count}) — Target: 15</div>
+            <div style={{ fontSize: 11, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Part Time ({summary.pt.count}) \u2014 Target: 15</div>
             <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: summary.pt.avg >= 80 ? 'var(--green)' : summary.pt.avg >= 60 ? 'var(--yellow)' : 'var(--danger)', marginTop: 3 }}>{summary.pt.avg}% avg</div>
             {summary.pt.atRisk > 0 && <div style={{ fontSize: 11, color: 'var(--danger)', fontWeight: 600, marginTop: 2 }}>{summary.pt.atRisk} below 70%</div>}
           </div>
           <div style={{ flex: 1, padding: '12px 20px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>PRN / 1099 ({summary.prn.count}) — Alert: 10</div>
+            <div style={{ fontSize: 11, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>PRN / 1099 ({summary.prn.count}) \u2014 Alert: 10</div>
             <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: summary.prn.alerted > 0 ? 'var(--danger)' : 'var(--blue)', marginTop: 3 }}>{summary.prn.alerted} alerted</div>
             <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>at or above 10-visit threshold</div>
           </div>
         </div>
  
+        {/* Filters */}
         <div style={{ display: 'flex', gap: 10, padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg)', flexShrink: 0, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
             placeholder="Search clinician or discipline..."
@@ -172,14 +190,15 @@ export default function ProductivityPage() {
           <select value={sortBy} onChange={function(e) { setSortBy(e.target.value); }} style={SEL}>
             <option value="pct">Sort: Lowest Productivity First</option>
             <option value="pct_desc">Sort: Highest Productivity First</option>
-            <option value="name">Sort: Name A–Z</option>
+            <option value="name">Sort: Name A\u2013Z</option>
             <option value="region">Sort: Region</option>
           </select>
           <span style={{ fontSize: 12, color: visits.length === 0 ? 'var(--danger)' : 'var(--gray)', marginLeft: 'auto', fontWeight: visits.length === 0 ? 600 : 400 }}>
-            {visits.length === 0 ? '\u26A0 Upload visit data to see live productivity' : visits.length + ' visits loaded this week'}
+            {visits.length === 0 ? '\u26A0 Upload visit data to see live productivity' : visits.length + ' visits loaded'}
           </span>
         </div>
  
+        {/* Table */}
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
  
           {visits.length === 0 && (
@@ -189,7 +208,7 @@ export default function ProductivityPage() {
           )}
  
           <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 0.6fr 0.7fr 0.9fr 1.4fr 0.7fr 0.7fr 0.7fr 0.7fr 0.9fr', padding: '8px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 0.6fr 0.7fr 0.9fr 1.6fr 0.7fr 0.7fr 0.7fr 0.8fr 1fr', padding: '8px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               <span>Clinician</span>
               <span>Region</span>
               <span>Disc.</span>
@@ -211,8 +230,9 @@ export default function ProductivityPage() {
               var barColor = getBarColor(c.pct, c.employment_type);
               var label = getStatusLabel(c.pct, c.employment_type);
               var isAlert = c.employment_type === 'prn' && c.pct >= 100;
+              var hasData = c.done > 0;
               return (
-                <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '2.2fr 0.6fr 0.7fr 0.9fr 1.4fr 0.7fr 0.7fr 0.7fr 0.7fr 0.9fr', padding: '10px 20px', alignItems: 'center', borderBottom: '1px solid var(--border)', background: isAlert ? '#FFF5F5' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)' }}>
+                <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '2.2fr 0.6fr 0.7fr 0.9fr 1.6fr 0.7fr 0.7fr 0.7fr 0.8fr 1fr', padding: '10px 20px', alignItems: 'center', borderBottom: '1px solid var(--border)', background: isAlert ? '#FFF5F5' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)' }}>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{c.full_name}</div>
                     {c.notes && <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{c.notes}</div>}
@@ -231,19 +251,19 @@ export default function ProductivityPage() {
                   </span>
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--gray)', marginBottom: 4 }}>
-                      <span>{c.done} visits</span>
-                      <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: sc.color }}>{c.pct}%</span>
+                      <span>{hasData ? c.done + ' visits' : 'No data'}</span>
+                      <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: hasData ? sc.color : 'var(--gray)' }}>{c.pct}%</span>
                     </div>
                     <div style={{ height: 7, background: 'var(--border)', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: Math.min(c.pct, 100) + '%', background: barColor, borderRadius: 999, transition: 'width 0.4s ease' }} />
+                      <div style={{ height: '100%', width: Math.min(c.pct, 100) + '%', background: hasData ? barColor : 'var(--border)', borderRadius: 999, transition: 'width 0.4s ease' }} />
                     </div>
                   </div>
-                  <span style={{ fontSize: 15, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: 'var(--black)' }}>{c.done}</span>
+                  <span style={{ fontSize: 15, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: hasData ? 'var(--black)' : 'var(--gray)' }}>{c.done}</span>
                   <span style={{ fontSize: 12, color: 'var(--gray)', fontFamily: 'DM Mono, monospace' }}>{c.target}</span>
                   <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'DM Mono, monospace', color: c.stats.evals > 0 ? '#1565C0' : 'var(--gray)' }}>{c.stats.evals}</span>
                   <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'DM Mono, monospace', color: c.stats.reassessments > 0 ? '#7C3AED' : 'var(--gray)' }}>{c.stats.reassessments}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: sc.color, background: sc.bg, padding: '3px 10px', borderRadius: 999 }}>
-                    {isAlert ? '\uD83D\uDD34 Alert' : label}
+                  <span style={{ fontSize: 11, fontWeight: 700, color: hasData ? sc.color : 'var(--gray)', background: hasData ? sc.bg : 'var(--bg)', padding: '3px 10px', borderRadius: 999 }}>
+                    {!hasData ? 'No Data' : isAlert ? '\uD83D\uDD34 Alert' : label}
                   </span>
                 </div>
               );
