@@ -66,6 +66,7 @@ export function AuthProvider({ children }) {
           if (overrideMap[p.page_key] === true) return true;
           if (overrideMap[p.page_key] === false) return false;
           if (role === 'super_admin') return p.super_admin;
+          if (role === 'ceo') return p.super_admin; // CEO gets same access as super_admin
           if (role === 'admin') return p.admin;
           if (role === 'pod_leader') return p.pod_leader;
           if (role === 'team_member') return p.team_member;
@@ -82,7 +83,7 @@ export function AuthProvider({ children }) {
 
   function canAccess(pageKey) {
     if (!profile) return false;
-    if (profile.role === 'super_admin') return true;
+    if (profile.role === 'super_admin' || profile.role === 'ceo') return true;
     return permissions.includes(pageKey);
   }
 

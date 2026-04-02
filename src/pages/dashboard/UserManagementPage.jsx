@@ -3,10 +3,10 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
-const ROLES = ['super_admin','admin','pod_leader','team_member'];
-const ROLE_LABELS = { super_admin:'Super Admin', admin:'Admin', pod_leader:'Pod Leader', team_member:'Team Member' };
-const ROLE_COLORS = { super_admin:'#DC2626', admin:'#7C3AED', pod_leader:'#1565C0', team_member:'#065F46' };
-const ROLE_BGS   = { super_admin:'#FEF2F2', admin:'#F5F3FF', pod_leader:'#EFF6FF', team_member:'#ECFDF5' };
+const ROLES = ['super_admin','ceo','admin','pod_leader','team_member'];
+const ROLE_LABELS = { super_admin:'Super Admin', ceo:'CEO', admin:'Admin', pod_leader:'Pod Leader', team_member:'Team Member' };
+const ROLE_COLORS = { super_admin:'#DC2626', ceo:'#7C2D12', admin:'#7C3AED', pod_leader:'#1565C0', team_member:'#065F46' };
+const ROLE_BGS   = { super_admin:'#FEF2F2', ceo:'#FFF7ED', admin:'#F5F3FF', pod_leader:'#EFF6FF', team_member:'#ECFDF5' };
 const ALL_REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
 
 function genPassword() {
@@ -265,7 +265,7 @@ export default function UserManagementPage() {
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
-  const [newUser, setNewUser] = useState({ full_name:'', email:'', role:'team_member', regions:[], team:'' });
+  const [newUser, setNewUser] = useState({ full_name:'', email:'', role:'team_member', regions:[], team:'', password:'' });
 
   const isSuperAdmin = profile?.role === 'super_admin';
   const isAdmin = profile?.role === 'admin' || isSuperAdmin;
@@ -293,18 +293,33 @@ export default function UserManagementPage() {
   async function addUser() {
     if (!newUser.full_name || !newUser.email) { setMsg('Name and email required'); return; }
     setSaving(true); setMsg('');
-    // 1. Create auth user via admin invite
-    const { data: inviteData, error: inviteErr } = await supabase.auth.admin?.inviteUserByEmail?.(newUser.email) || {};
-    // 2. Insert coordinator profile
-    const { error } = await supabase.from('coordinators').insert({
-      full_name: newUser.full_name, email: newUser.email,
-      role: newUser.role, regions: newUser.regions, team: newUser.team || null,
-      user_id: inviteData?.user?.id || null,
+
+    // Use the server-side RPC to create auth user + coordinator in one transaction
+    const { data, error } = await supabase.rpc('admin_create_user', {
+      p_email: newUser.email,
+      p_full_name: newUser.full_name,
+      p_role: newUser.role,
+      p_password: newUser.password || null,
+      p_regions: newUser.regions,
+      p_team: newUser.team || null,
     });
-    if (error) { setMsg('Error: ' + error.message); setSaving(false); return; }
-    setMsg('✓ User created. A setup email will be sent if the invite API is available.');
-    setNewUser({ full_name:'', email:'', role:'team_member', regions:[], team:'' });
-    setShowAdd(false); setSaving(false);
+
+    if (error) {
+      setMsg('Error: ' + error.message);
+      setSaving(false);
+      return;
+    }
+    if (!data?.success) {
+      setMsg('Error: ' + (data?.error || 'Unknown error'));
+      setSaving(false);
+      return;
+    }
+
+    const pwdNote = newUser.password ? ' Password set as specified.' : ' Use Manage → Password to set their password.';
+    setMsg('✓ Account created successfully.' + pwdNote);
+    setNewUser({ full_name:'', email:'', role:'team_member', regions:[], team:'', password:'' });
+    setShowAdd(false);
+    setSaving(false);
     await loadData();
   }
 
@@ -363,7 +378,7 @@ export default function UserManagementPage() {
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:20 }}>
             <div style={{ fontSize:14, fontWeight:600, color:'var(--black)', marginBottom:16 }}>Create New User Account</div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
-              {[['Full Name','full_name','text'],['Email Address','email','email'],['Team / Department','team','text']].map(([label,key,type]) => (
+              {[['Full Name','full_name','text'],['Email Address','email','email'],['Team / Department','team','text'],['Initial Password (optional)','password','text']].map(([label,key,type]) => (
                 <div key={key}>
                   <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>{label}</div>
                   <input type={type} value={newUser[key]} onChange={e => setNewUser(p=>({...p,[key]:e.target.value}))}
@@ -394,7 +409,7 @@ export default function UserManagementPage() {
                 style={{ padding:'8px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
                 {saving ? 'Creating…' : 'Create User'}
               </button>
-              <span style={{ fontSize:11, color:'var(--gray)' }}>User will receive an invite email. Use the Manage panel to set a manual password if needed.</span>
+              <span style={{ fontSize:11, color:'var(--gray)' }}>Account is created immediately. Set an initial password above or use Manage → Password after creation.</span>
             </div>
           </div>
         )}
