@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
- 
+
 function monthKey(d) { return d ? String(d).slice(0,7) : null; }
 function fmtMonth(k) {
   if (!k) return '';
@@ -12,13 +12,13 @@ function growthPct(current, previous) {
   if (!previous) return null;
   return Math.round(((current - previous) / previous) * 100);
 }
- 
+
 export default function GrowthTrackerPage() {
   const [intake, setIntake] = useState([]);
   const [visits, setVisits] = useState([]);
   const [auth, setAuth] = useState([]);
   const [loading, setLoading] = useState(true);
- 
+
   useEffect(() => {
     Promise.all([
       supabase.from('intake_referrals').select('referral_status,date_received,region,insurance').not('date_received','is',null),
@@ -31,7 +31,7 @@ export default function GrowthTrackerPage() {
       setLoading(false);
     });
   }, []);
- 
+
   const stats = useMemo(() => {
     // Monthly intake trend
     const intakeByMonth = {};
@@ -44,7 +44,7 @@ export default function GrowthTrackerPage() {
       else intakeByMonth[k].denied++;
     });
     const intakeMonths = Object.keys(intakeByMonth).sort().slice(-14).map(k => ({ k, label: fmtMonth(k), ...intakeByMonth[k] }));
- 
+
     // Monthly visit completions
     const visitsByMonth = {};
     visits.forEach(v => {
@@ -57,25 +57,25 @@ export default function GrowthTrackerPage() {
       else visitsByMonth[k].scheduled++;
     });
     const visitMonths = Object.keys(visitsByMonth).sort().slice(-14).map(k => ({ k, label: fmtMonth(k), ...visitsByMonth[k] }));
- 
+
     // Month over month growth for referrals
     const lastIntake = intakeMonths.slice(-2);
     const refGrowth = lastIntake.length === 2 ? growthPct(lastIntake[1].total, lastIntake[0].total) : null;
     const acceptGrowth = lastIntake.length === 2 ? growthPct(lastIntake[1].accepted, lastIntake[0].accepted) : null;
- 
+
     // Visit growth
     const lastVisits = visitMonths.slice(-2);
     const visitGrowth = lastVisits.length === 2 ? growthPct(lastVisits[1].completed, lastVisits[0].completed) : null;
- 
+
     // Acceptance rate trend
     const maxIntake = Math.max(...intakeMonths.map(m=>m.total),1);
     const maxVisit = Math.max(...visitMonths.map(m=>m.completed),1);
- 
+
     // By region growth (current vs prior 30 days)
     const now = new Date().toISOString().slice(0,10);
     const d30 = new Date(); d30.setDate(d30.getDate()-30); const d30s = d30.toISOString().slice(0,10);
     const d60 = new Date(); d60.setDate(d60.getDate()-60); const d60s = d60.toISOString().slice(0,10);
- 
+
     const regionCurrent = {};
     const regionPrior = {};
     intake.forEach(r => {
@@ -90,28 +90,28 @@ export default function GrowthTrackerPage() {
       prior: regionPrior[r]||0,
       growth: growthPct(regionCurrent[r]||0, regionPrior[r]||0),
     })).sort((a,b)=>b.current-a.current);
- 
+
     return { intakeMonths, visitMonths, refGrowth, acceptGrowth, visitGrowth, maxIntake, maxVisit, byRegion };
   }, [intake, visits, auth]);
- 
+
   function GrowthBadge({ pct }) {
     if (pct === null) return <span style={{ fontSize: 11, color: 'var(--gray)' }}>—</span>;
     const up = pct >= 0;
     return <span style={{ fontSize: 11, fontWeight: 700, color: up?'#065F46':'#DC2626', background: up?'#ECFDF5':'#FEF2F2', padding: '2px 7px', borderRadius: 999 }}>{up?'+':''}{pct}%</span>;
   }
- 
+
   if (loading) return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Growth Tracker" subtitle="Loading…" />
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gray)' }}>Loading…</div>
     </div>
   );
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Growth Tracker" subtitle="Month-over-month trends across referrals, visits, and regions" />
       <div style={{ flex: 1, overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
- 
+
         {/* MoM KPIs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16 }}>
           {[
@@ -128,7 +128,7 @@ export default function GrowthTrackerPage() {
             </div>
           ))}
         </div>
- 
+
         {/* Referral intake trend */}
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Monthly Referral Intake (14 Months)</div>
@@ -159,7 +159,7 @@ export default function GrowthTrackerPage() {
             ))}
           </div>
         </div>
- 
+
         <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20 }}>
           {/* Visit completions */}
           <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
@@ -178,7 +178,7 @@ export default function GrowthTrackerPage() {
               })}
             </div>
           </div>
- 
+
           {/* By region */}
           <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Region Growth (30d vs Prior 30d)</div>
@@ -198,4 +198,3 @@ export default function GrowthTrackerPage() {
     </div>
   );
 }
- 
