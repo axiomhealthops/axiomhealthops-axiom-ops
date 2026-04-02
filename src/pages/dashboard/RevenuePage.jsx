@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
- 
+
 const RATE = 230; // $ per billable visit
- 
+
 function isEval(event_type) {
   return /eval/i.test(event_type || '');
 }
@@ -16,7 +16,7 @@ function isCancelled(event_type, status) {
 function isMissed(status) {
   return /missed/i.test(status || '');
 }
- 
+
 function weekStart(date) {
   const d = new Date(date);
   const day = d.getDay();
@@ -24,16 +24,16 @@ function weekStart(date) {
   d.setDate(diff);
   return d.toISOString().slice(0, 10);
 }
- 
+
 function fmtDollar(n) {
   return '$' + Math.round(n).toLocaleString();
 }
- 
+
 export default function RevenuePage() {
   const [visits, setVisits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('weekly'); // weekly | daily
- 
+
   useEffect(() => {
     supabase.from('visit_schedule_data')
       .select('patient_name,visit_date,discipline,event_type,status,staff_name,region,insurance')
@@ -42,18 +42,18 @@ export default function RevenuePage() {
       .limit(10000)
       .then(({ data }) => { setVisits(data || []); setLoading(false); });
   }, []);
- 
+
   const stats = useMemo(() => {
     // Deduplicate evals: PT + PTA same patient + same date = 1 billable visit
     const evalSeen = new Set();
     const billable = [];
     const all = [];
- 
+
     visits.forEach(v => {
       all.push(v);
       if (!isCompleted(v.status)) return;
       if (isCancelled(v.event_type, v.status)) return;
- 
+
       if (isEval(v.event_type)) {
         const key = `${v.patient_name}||${v.visit_date}`;
         if (evalSeen.has(key)) return; // skip duplicate PT/PTA eval
@@ -61,21 +61,21 @@ export default function RevenuePage() {
       }
       billable.push(v);
     });
- 
+
     const totalCompleted = billable.length;
     const totalRevenue = totalCompleted * RATE;
- 
+
     // Scheduled (future potential)
     const scheduled = visits.filter(v =>
       /scheduled/i.test(v.status || '') && !isCancelled(v.event_type, v.status)
     ).length;
     const projectedRevenue = scheduled * RATE;
- 
+
     // Cancelled and missed
     const cancelled = visits.filter(v => isCancelled(v.event_type, v.status)).length;
     const missed = visits.filter(v => isMissed(v.status) && !isCancelled(v.event_type, v.status)).length;
     const lostRevenue = (cancelled + missed) * RATE;
- 
+
     // By week
     const weekMap = {};
     billable.forEach(v => {
@@ -101,12 +101,12 @@ export default function RevenuePage() {
       if (!weekMap[wk]) weekMap[wk] = { completed: 0, revenue: 0, evals: 0, cancelled: 0, missed: 0, scheduled: 0 };
       weekMap[wk].scheduled++;
     });
- 
+
     const weeks = Object.entries(weekMap)
       .sort((a, b) => b[0].localeCompare(a[0]))
       .slice(0, 12)
       .map(([wk, data]) => ({ week: wk, ...data }));
- 
+
     // By clinician
     const clinicianMap = {};
     billable.forEach(v => {
@@ -119,7 +119,7 @@ export default function RevenuePage() {
       .map(([name, d]) => ({ name, ...d }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 15);
- 
+
     // By insurance
     const insMap = {};
     billable.forEach(v => {
@@ -132,26 +132,26 @@ export default function RevenuePage() {
       .map(([ins, d]) => ({ ins, ...d }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
- 
+
     const maxWeekRev = weeks.length > 0 ? Math.max(...weeks.map(w => w.revenue), 1) : 1;
- 
+
     return { totalCompleted, totalRevenue, scheduled, projectedRevenue, cancelled, missed, lostRevenue, weeks, byClinician, byInsurance, maxWeekRev };
   }, [visits]);
- 
+
   const TILE = { flex: 1, padding: '14px 18px', borderRight: '1px solid var(--border)', textAlign: 'center' };
   const SEL = { padding: '6px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none', cursor: 'pointer', fontWeight: 500 };
- 
+
   if (loading) return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Revenue" subtitle="Loading visit data…" />
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gray)' }}>Loading…</div>
     </div>
   );
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Revenue" subtitle={`Based on ${stats.totalCompleted.toLocaleString()} completed visits · $${RATE}/visit`} />
- 
+
       <div style={{ flex: 1, overflow: 'auto' }}>
         {/* KPI Strip */}
         <div style={{ display: 'flex', background: 'var(--card-bg)', borderBottom: '1px solid var(--border)' }}>
@@ -169,7 +169,7 @@ export default function RevenuePage() {
             </div>
           ))}
         </div>
- 
+
         <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* Weekly Revenue Chart */}
           <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
@@ -206,7 +206,7 @@ export default function RevenuePage() {
               ))}
             </div>
           </div>
- 
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
             {/* Top Clinicians */}
             <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
@@ -224,7 +224,7 @@ export default function RevenuePage() {
                 </div>
               ))}
             </div>
- 
+
             {/* By Insurance */}
             <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Revenue by Insurance (Top 10)</div>
@@ -240,7 +240,7 @@ export default function RevenuePage() {
                   </div>
                 </div>
               ))}
- 
+
               {/* Lost revenue breakdown */}
               <div style={{ marginTop: 20, padding: 14, background: '#FEF2F2', borderRadius: 10, border: '1px solid #FCA5A5' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#DC2626', marginBottom: 8 }}>Lost Revenue Breakdown</div>
@@ -260,7 +260,7 @@ export default function RevenuePage() {
               </div>
             </div>
           </div>
- 
+
           {/* Weekly detail table */}
           <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1fr 1fr', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -283,4 +283,3 @@ export default function RevenuePage() {
     </div>
   );
 }
- 
