@@ -1,13 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
- 
+
 const RATE = 230;
 function isEval(e) { return /eval/i.test(e||''); }
 function isCompleted(s) { return /completed/i.test(s||''); }
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
 function isMissed(s) { return /missed/i.test(s||''); }
- 
+
 function ScoreBar({ label, score, max=100, color='#10B981', detail }) {
   const pct = Math.min((score/max)*100, 100);
   const grade = pct >= 90 ? 'A' : pct >= 80 ? 'B' : pct >= 70 ? 'C' : pct >= 60 ? 'D' : 'F';
@@ -30,19 +30,19 @@ function ScoreBar({ label, score, max=100, color='#10B981', detail }) {
     </div>
   );
 }
- 
+
 export default function ScorecardPage() {
   const [visits, setVisits] = useState([]);
   const [intake, setIntake] = useState([]);
   const [auth, setAuth] = useState([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('30'); // days
- 
+
   useEffect(() => {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 90);
     const cutStr = cutoff.toISOString().slice(0,10);
- 
+
     Promise.all([
       supabase.from('visit_schedule_data').select('patient_name,visit_date,discipline,event_type,status,staff_name,region').not('visit_date','is',null),
       supabase.from('intake_referrals').select('referral_status,date_received,referral_type').not('date_received','is',null),
@@ -54,16 +54,16 @@ export default function ScorecardPage() {
       setLoading(false);
     });
   }, []);
- 
+
   const scores = useMemo(() => {
     const days = parseInt(period);
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
     const cutStr = cutoff.toISOString().slice(0,10);
- 
+
     const recentVisits = visits.filter(v => v.visit_date >= cutStr);
     const recentIntake = intake.filter(i => i.date_received >= cutStr);
- 
+
     // 1. Visit Completion Rate
     const evalSeen = new Set();
     let completedBillable = 0;
@@ -78,22 +78,22 @@ export default function ScorecardPage() {
     });
     const totalScheduled = recentVisits.filter(v => !isCancelled(v.event_type,v.status)).length;
     const completionRate = totalScheduled > 0 ? (completedBillable / totalScheduled) * 100 : 0;
- 
+
     // 2. Cancellation Rate
     const cancelled = recentVisits.filter(v => isCancelled(v.event_type,v.status)).length;
     const cancellationRate = recentVisits.length > 0 ? (cancelled / recentVisits.length) * 100 : 0;
     const cancellationScore = Math.max(0, 100 - (cancellationRate * 3)); // penalise
- 
+
     // 3. Intake Conversion Rate
     const totalIntake = recentIntake.length;
     const acceptedIntake = recentIntake.filter(i => i.referral_status === 'Accepted').length;
     const intakeConversion = totalIntake > 0 ? (acceptedIntake / totalIntake) * 100 : 0;
- 
+
     // 4. Auth Approval Rate
     const totalAuth = auth.length;
     const approvedAuth = auth.filter(a => /approved|active/i.test(a.auth_status||'')).length;
     const authApproval = totalAuth > 0 ? (approvedAuth / totalAuth) * 100 : 0;
- 
+
     // 5. Clinician Productivity (visits/clinician vs 25 target for FT)
     const clinicianVisits = {};
     recentVisits.filter(v => isCompleted(v.status)).forEach(v => {
@@ -103,12 +103,12 @@ export default function ScorecardPage() {
     const avgVisits = clinicians.length > 0 ? clinicians.reduce((a,b)=>a+b,0)/clinicians.length : 0;
     const TARGET_VISITS = days === 7 ? 25 : days === 30 ? 100 : 300;
     const productivityScore = Math.min((avgVisits / (TARGET_VISITS / clinicians.length || 1)) * 100, 100);
- 
+
     // 6. Revenue Efficiency
     const revenueEarned = completedBillable * RATE;
     const revenuePotential = totalScheduled * RATE;
     const revenueEfficiency = revenuePotential > 0 ? (revenueEarned / revenuePotential) * 100 : 0;
- 
+
     // Overall score (weighted)
     const overall = (
       completionRate * 0.30 +
@@ -117,7 +117,7 @@ export default function ScorecardPage() {
       authApproval * 0.15 +
       productivityScore * 0.15
     );
- 
+
     return {
       completionRate, cancellationRate, cancellationScore,
       intakeConversion, authApproval, productivityScore,
@@ -127,17 +127,17 @@ export default function ScorecardPage() {
       revenueEarned, avgVisits,
     };
   }, [visits, intake, auth, period]);
- 
+
   const overallGrade = scores.overall >= 90 ? 'A' : scores.overall >= 80 ? 'B' : scores.overall >= 70 ? 'C' : scores.overall >= 60 ? 'D' : 'F';
   const gradeColor = scores.overall >= 90 ? '#065F46' : scores.overall >= 80 ? '#1565C0' : scores.overall >= 70 ? '#D97706' : '#DC2626';
- 
+
   if (loading) return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Scorecard" subtitle="Loading…" />
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gray)' }}>Loading…</div>
     </div>
   );
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Company Scorecard" subtitle="Operational performance across all metrics"
@@ -175,7 +175,7 @@ export default function ScorecardPage() {
               ))}
             </div>
           </div>
- 
+
           {/* Individual Scores */}
           <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--black)', marginBottom: 20 }}>Performance Metrics</div>
@@ -193,7 +193,7 @@ export default function ScorecardPage() {
               detail={`$${Math.round(scores.revenueEarned).toLocaleString()} earned vs potential`} color="#065F46" />
           </div>
         </div>
- 
+
         {/* Benchmark table */}
         <div style={{ marginTop: 20, background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
           <div style={{ padding: '12px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>Metric Benchmarks</div>
@@ -222,4 +222,3 @@ export default function ScorecardPage() {
     </div>
   );
 }
- 
