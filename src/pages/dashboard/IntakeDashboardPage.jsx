@@ -326,11 +326,13 @@ export default function IntakeDashboardPage() {
   const maxMonthTotal = stats.months.length > 0 ? Math.max(...stats.months.map(m => m.total)) : 1;
  
   const TABS = [
-    { key: 'overview', label: 'Overview' },
-    { key: 'regions',  label: 'By Region' },
+    { key: 'overview',  label: 'Overview' },
+    { key: 'regions',   label: 'By Region' },
     { key: 'diagnoses', label: 'Diagnoses' },
-    { key: 'denials',  label: 'Denial Analysis' },
-    { key: 'patients', label: 'Patient Table' },
+    { key: 'denials',   label: 'Denial Analysis' },
+    { key: 'audit',     label: '🔍 Denial Audit' },
+    { key: 'payor',     label: '⚡ Payor Opportunity' },
+    { key: 'patients',  label: 'Patient Table' },
   ];
  
   if (loading) return (
@@ -361,20 +363,24 @@ export default function IntakeDashboardPage() {
           </div>
         )}
  
-        {/* KPI strip */}
+        {/* KPI strip — each tile is clickable and filters the patient table */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
-            { label: 'Total Referrals',    val: stats.total.toLocaleString(),    color: 'var(--black)',  sub: 'all time' },
-            { label: 'Accepted',           val: stats.accepted.toLocaleString(), color: 'var(--green)',  sub: stats.acceptRate + '% accept rate' },
-            { label: 'Denied',             val: stats.denied.toLocaleString(),   color: '#DC2626',       sub: (100 - stats.acceptRate) + '% deny rate', alert: true },
-            { label: 'This Month',         val: stats.thisMonthRecs.length,      color: '#1565C0',       sub: stats.thisMonthRecs.filter(r => r.referral_status === 'Accepted').length + ' accepted' },
-            { label: 'Lymphedema Dx',      val: records.filter(r => r.diagnosis === 'I89.0 Lymphedema').length, color: '#7C3AED', sub: 'primary diagnosis' },
-            { label: 'Non-Lymphedema Denied', val: records.filter(r => r.denial_reason === 'In network but Non-lymphedema').length, color: '#92400E', sub: 'top denial reason', alert: true },
+            { label: 'Total Referrals',       val: stats.total.toLocaleString(),    color: 'var(--black)',  sub: 'all time',               action: () => { setStatusFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
+            { label: 'Accepted',              val: stats.accepted.toLocaleString(), color: 'var(--green)',  sub: stats.acceptRate + '% accept rate', action: () => { setStatusFilter('Accepted'); setSearch(''); setActiveTab('patients'); } },
+            { label: 'Denied',                val: stats.denied.toLocaleString(),   color: '#DC2626',       sub: (100 - stats.acceptRate) + '% deny rate', alert: true, action: () => { setStatusFilter('Denied'); setSearch(''); setActiveTab('patients'); } },
+            { label: 'This Month',            val: stats.thisMonthRecs.length,      color: '#1565C0',       sub: stats.thisMonthRecs.filter(r => r.referral_status === 'Accepted').length + ' accepted', action: () => { setMonthFilter(new Date().toISOString().slice(0,7)); setStatusFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
+            { label: 'Lymphedema Dx',         val: records.filter(r => r.diagnosis === 'I89.0 Lymphedema').length, color: '#7C3AED', sub: 'primary diagnosis', action: () => { setSearch('I89.0 Lymphedema'); setStatusFilter('ALL'); setActiveTab('patients'); } },
+            { label: 'Non-Lymphedema Denied', val: records.filter(r => r.denial_reason === 'In network but Non-lymphedema').length, color: '#92400E', sub: 'top denial reason', alert: true, action: () => { setStatusFilter('Denied'); setSearch('Non-lymphedema'); setActiveTab('patients'); } },
           ].map(tile => (
-            <div key={tile.label} style={{ flex: 1, padding: '10px 14px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFFBF5' : 'transparent' }}>
+            <div key={tile.label} onClick={tile.action}
+              style={{ flex: 1, padding: '10px 14px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFFBF5' : 'transparent', cursor: 'pointer', transition: 'background 0.15s' }}
+              onMouseEnter={e => e.currentTarget.style.background = tile.alert ? '#FEF3E2' : '#F8F9FA'}
+              onMouseLeave={e => e.currentTarget.style.background = tile.alert ? '#FFFBF5' : 'transparent'}>
               <div style={{ fontSize: 9, color: 'var(--gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{tile.label}</div>
               <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 2 }}>{tile.val}</div>
               <div style={{ fontSize: 10, color: tile.alert ? tile.color : 'var(--gray)', marginTop: 1, fontWeight: tile.alert ? 600 : 400 }}>{tile.sub}</div>
+              <div style={{ fontSize: 9, color: tile.color, marginTop: 3, opacity: 0.6 }}>click to filter ↓</div>
             </div>
           ))}
         </div>
@@ -562,6 +568,369 @@ export default function IntakeDashboardPage() {
             </div>
           )}
  
+          {/* DENIAL AUDIT TAB */}
+          {activeTab === 'audit' && (() => {
+            const [auditRunning, setAuditRunning] = React.useState(false);
+            const [auditResults, setAuditResults] = React.useState(null);
+            const [auditSearch, setAuditSearch] = React.useState('');
+            const [auditFilter, setAuditFilter] = React.useState('ALL'); // ALL | HIGH | MEDIUM | LOW
+ 
+            // Pre-compute suspicious patterns from data alone (instant, no AI needed)
+            const suspiciousPatterns = React.useMemo(() => {
+              const denied = records.filter(r => r.referral_status === 'Denied');
+              const flags = [];
+ 
+              denied.forEach(r => {
+                const dx = (r.diagnosis || '').toLowerCase();
+                const reason = (r.denial_reason || '').toLowerCase();
+                const issues = [];
+                let risk = 'LOW';
+ 
+                // Flag 1: Lymphedema diagnosis but denied as "non-lymphedema"
+                if ((dx.includes('lymphedema') || dx.includes('i89')) && reason.includes('non-lymphedema')) {
+                  issues.push({ type: 'Diagnosis Mismatch', detail: 'Lymphedema diagnosis but denied as Non-lymphedema — possible coding error or denial override', risk: 'HIGH' });
+                  risk = 'HIGH';
+                }
+ 
+                // Flag 2: OON denial but insurance is one we DO accept (Humana, Careplus, etc.)
+                const inNetworkCarriers = ['humana', 'careplus', 'health first', 'devoted', 'fhcp', 'medicare', 'cigna', 'aetna'];
+                const insLower = (r.insurance || '').toLowerCase();
+                if (reason.includes("don't accept patient insurance") && inNetworkCarriers.some(c => insLower.includes(c))) {
+                  issues.push({ type: 'In-Network Carrier Flagged OON', detail: `${r.insurance} appears to be an in-network carrier but was denied as out-of-network`, risk: 'HIGH' });
+                  risk = 'HIGH';
+                }
+ 
+                // Flag 3: Accepted elsewhere with same denial reason (possible inconsistency)
+                const sameReasonAccepted = records.filter(rr =>
+                  rr.referral_status === 'Accepted' &&
+                  rr.insurance === r.insurance &&
+                  rr.diagnosis === r.diagnosis
+                );
+                if (sameReasonAccepted.length > 0 && issues.length === 0) {
+                  issues.push({ type: 'Inconsistent Decision', detail: `${sameReasonAccepted.length} other patient(s) with same insurance and diagnosis were Accepted`, risk: 'MEDIUM' });
+                  if (risk === 'LOW') risk = 'MEDIUM';
+                }
+ 
+                // Flag 4: Blank or vague denial reason
+                if (!r.denial_reason || r.denial_reason.trim().length < 5) {
+                  issues.push({ type: 'Missing Denial Reason', detail: 'No denial reason recorded — may indicate incomplete intake processing', risk: 'MEDIUM' });
+                  if (risk === 'LOW') risk = 'MEDIUM';
+                }
+ 
+                // Flag 5: "Non-lymphedema" denial but diagnosis contains lymphedema-related terms
+                const lymphTerms = ['lymph', 'edema', 'i89', 'swelling', 'venous stasis'];
+                if (reason.includes('non-lymphedema') && lymphTerms.some(t => dx.includes(t)) && !issues.find(i => i.type === 'Diagnosis Mismatch')) {
+                  issues.push({ type: 'Possible Lymphedema Missed', detail: `Diagnosis "${r.diagnosis}" may have lymphedema component — review if denial was appropriate`, risk: 'MEDIUM' });
+                  if (risk === 'LOW') risk = 'MEDIUM';
+                }
+ 
+                if (issues.length > 0) {
+                  flags.push({ ...r, issues, risk });
+                }
+              });
+ 
+              // Sort: HIGH first, then MEDIUM
+              return flags.sort((a, b) => {
+                const order = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+                return order[a.risk] - order[b.risk];
+              });
+            }, [records]);
+ 
+            const highRisk = suspiciousPatterns.filter(f => f.risk === 'HIGH');
+            const medRisk = suspiciousPatterns.filter(f => f.risk === 'MEDIUM');
+ 
+            const filtered = suspiciousPatterns.filter(f => {
+              if (auditFilter !== 'ALL' && f.risk !== auditFilter) return false;
+              if (auditSearch) {
+                const q = auditSearch.toLowerCase();
+                return (f.patient_name||'').toLowerCase().includes(q) ||
+                       (f.diagnosis||'').toLowerCase().includes(q) ||
+                       (f.insurance||'').toLowerCase().includes(q) ||
+                       f.issues.some(i => i.detail.toLowerCase().includes(q));
+              }
+              return true;
+            });
+ 
+            const riskColor = { HIGH: '#DC2626', MEDIUM: '#D97706', LOW: '#6B7280' };
+            const riskBg = { HIGH: '#FEF2F2', MEDIUM: '#FFFBEB', LOW: '#F9FAFB' };
+ 
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                {/* Header */}
+                <div style={{ background: 'linear-gradient(135deg, #7C2D12 0%, #DC2626 100%)', borderRadius: 12, padding: 24, color: '#fff' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7, marginBottom: 6 }}>Denial Audit — Quality Control</div>
+                  <div style={{ fontSize: 26, fontWeight: 700, fontFamily: 'DM Mono, monospace', marginBottom: 8 }}>{suspiciousPatterns.length} Referrals Flagged for Review</div>
+                  <div style={{ fontSize: 13, opacity: 0.85, maxWidth: 700, lineHeight: 1.6 }}>
+                    Automated pattern analysis of all denied referrals. Flags cases where the denial reason may be inconsistent with the diagnosis, insurance, or prior decisions — ensuring no patient was turned away by mistake.
+                  </div>
+                  <div style={{ display: 'flex', gap: 20, marginTop: 16 }}>
+                    {[
+                      { label: 'High Risk Flags', val: highRisk.length, note: 'require immediate review', bg: 'rgba(220,38,38,0.25)' },
+                      { label: 'Medium Risk Flags', val: medRisk.length, note: 'review recommended', bg: 'rgba(217,119,6,0.25)' },
+                      { label: 'Total Denied', val: records.filter(r => r.referral_status === 'Denied').length, note: 'across all time', bg: 'rgba(255,255,255,0.12)' },
+                    ].map(t => (
+                      <div key={t.label} style={{ background: t.bg, borderRadius: 10, padding: '12px 16px', minWidth: 140 }}>
+                        <div style={{ fontSize: 9, opacity: 0.7, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.label}</div>
+                        <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'DM Mono, monospace', marginTop: 4 }}>{t.val}</div>
+                        <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>{t.note}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+ 
+                {/* Flag type breakdown */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                  {[
+                    { label: 'Diagnosis Mismatch', desc: 'Lymphedema dx denied as non-lymphedema', color: '#DC2626', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Diagnosis Mismatch')).length },
+                    { label: 'In-Network Carrier OON', desc: 'Known in-network carrier flagged as OON', color: '#DC2626', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'In-Network Carrier Flagged OON')).length },
+                    { label: 'Inconsistent Decision', desc: 'Same dx + insurance accepted elsewhere', color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Inconsistent Decision')).length },
+                    { label: 'Possible Lymphedema Missed', desc: 'Lymphedema-related dx denied as non-lymphedema', color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Possible Lymphedema Missed')).length },
+                    { label: 'Missing Denial Reason', desc: 'Denial recorded with no reason', color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Missing Denial Reason')).length },
+                  ].map(cat => (
+                    <div key={cat.label} onClick={() => { setAuditSearch(cat.label); }}
+                      style={{ background: 'var(--card-bg)', border: `1px solid var(--border)`, borderRadius: 10, padding: 16, cursor: 'pointer' }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = cat.color}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}>
+                      <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: cat.color }}>{cat.count}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)', marginTop: 4 }}>{cat.label}</div>
+                      <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>{cat.desc}</div>
+                    </div>
+                  ))}
+                </div>
+ 
+                {/* Flagged patient list */}
+                <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                  <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)' }}>Flagged Referrals</div>
+                      <div style={{ fontSize: 11, color: 'var(--gray)' }}>Review each case — click patient row to see all flags</div>
+                    </div>
+                    <input placeholder="Search…" value={auditSearch} onChange={e => setAuditSearch(e.target.value)}
+                      style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', width: 200 }} />
+                    {['ALL','HIGH','MEDIUM'].map(f => (
+                      <button key={f} onClick={() => setAuditFilter(f)}
+                        style={{ padding: '5px 12px', border: `1px solid ${auditFilter === f ? riskColor[f] || '#1565C0' : 'var(--border)'}`, borderRadius: 6, fontSize: 11, fontWeight: auditFilter === f ? 700 : 400, background: auditFilter === f ? (riskBg[f] || '#EFF6FF') : 'transparent', color: auditFilter === f ? (riskColor[f] || '#1565C0') : 'var(--gray)', cursor: 'pointer' }}>
+                        {f === 'ALL' ? 'All' : f}
+                      </button>
+                    ))}
+                    <span style={{ fontSize: 12, color: 'var(--gray)' }}>{filtered.length} flagged</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '0.6fr 1.8fr 0.5fr 1fr 1.4fr 1.8fr', padding: '8px 20px', background: 'var(--bg)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <span>Risk</span><span>Patient</span><span>Rgn</span><span>Insurance</span><span>Diagnosis</span><span>Flags</span>
+                  </div>
+                  {filtered.slice(0, 250).map((r, i) => (
+                    <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '0.6fr 1.8fr 0.5fr 1fr 1.4fr 1.8fr', padding: '10px 20px', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)', alignItems: 'start' }}>
+                      <div>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: riskColor[r.risk], background: riskBg[r.risk], padding: '2px 7px', borderRadius: 999 }}>{r.risk}</span>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name || '—'}</div>
+                        <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>{r.date_received ? r.date_received.slice(0,10) : '—'}</div>
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
+                      <span style={{ fontSize: 11, color: 'var(--black)' }}>{r.insurance || '—'}</span>
+                      <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 35)}</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {r.issues.map((issue, j) => (
+                          <div key={j} style={{ background: riskBg[issue.risk], border: `1px solid ${riskColor[issue.risk]}30`, borderRadius: 6, padding: '4px 8px' }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: riskColor[issue.risk] }}>{issue.type}</div>
+                            <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{issue.detail}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {filtered.length === 0 && (
+                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--gray)', fontSize: 13 }}>No flagged referrals match your filters.</div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+ 
+          {/* PAYOR OPPORTUNITY TAB */}
+          {activeTab === 'payor' && (() => {
+            // Lymphedema OON = confirmed lymphedema diagnosis, denied only due to OON insurance
+            const oonLymphedema = records.filter(r =>
+              r.referral_status === 'Denied' &&
+              r.denial_reason && /lymphedema but we don.t accept/i.test(r.denial_reason)
+            );
+            // Non-lymphedema OON = wrong condition AND wrong insurance (harder conversion)
+            const oonNonLymph = records.filter(r =>
+              r.referral_status === 'Denied' &&
+              r.denial_reason && /non-lymphedema and we don.t accept/i.test(r.denial_reason)
+            );
+            // By insurance for OON lymphedema
+            const insMap = {};
+            oonLymphedema.forEach(r => {
+              const k = r.insurance || 'Unknown';
+              if (!insMap[k]) insMap[k] = { count: 0, patients: [] };
+              insMap[k].count++;
+              insMap[k].patients.push(r.patient_name);
+            });
+            const byIns = Object.entries(insMap).sort((a,b) => b[1].count - a[1].count);
+            // By diagnosis
+            const dxMap = {};
+            oonLymphedema.forEach(r => {
+              const k = r.diagnosis || 'Not specified';
+              dxMap[k] = (dxMap[k] || 0) + 1;
+            });
+            const byDx = Object.entries(dxMap).sort((a,b) => b[1]-a[1]).slice(0,10);
+            // By region
+            const regMap = {};
+            oonLymphedema.forEach(r => {
+              if (!r.region) return;
+              regMap[r.region] = (regMap[r.region] || 0) + 1;
+            });
+            const byReg = Object.entries(regMap).sort((a,b) => b[1]-a[1]);
+            // By year/month trend
+            const trendMap = {};
+            oonLymphedema.forEach(r => {
+              const k = r.date_received ? r.date_received.slice(0,7) : null;
+              if (k) trendMap[k] = (trendMap[k] || 0) + 1;
+            });
+            const trend = Object.entries(trendMap).sort((a,b) => a[0].localeCompare(b[0])).slice(-12);
+            const maxTrend = Math.max(...trend.map(t => t[1]), 1);
+            // Search state for patient list
+            const [payorSearch, setPayorSearch] = React.useState('');
+            const [payorIns, setPayorIns] = React.useState('ALL');
+            const [payorDx, setPayorDx] = React.useState('ALL');
+            const filteredOon = oonLymphedema.filter(r => {
+              if (payorIns !== 'ALL' && r.insurance !== payorIns) return false;
+              if (payorDx !== 'ALL' && r.diagnosis !== payorDx) return false;
+              if (payorSearch) {
+                const q = payorSearch.toLowerCase();
+                return (r.patient_name||'').toLowerCase().includes(q) ||
+                       (r.insurance||'').toLowerCase().includes(q) ||
+                       (r.diagnosis||'').toLowerCase().includes(q) ||
+                       (r.region||'').toLowerCase().includes(q);
+              }
+              return true;
+            });
+            const uniquePayorIns = [...new Set(oonLymphedema.map(r => r.insurance).filter(Boolean))].sort();
+            const uniquePayorDx = [...new Set(oonLymphedema.map(r => r.diagnosis).filter(Boolean))].sort();
+ 
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                {/* Header callout */}
+                <div style={{ background: 'linear-gradient(135deg, #1E3A5F 0%, #1565C0 100%)', borderRadius: 12, padding: 24, color: '#fff' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7, marginBottom: 6 }}>Payor Relations Opportunity Report</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'DM Mono, monospace', marginBottom: 8 }}>{oonLymphedema.length} Confirmed Lymphedema Patients Lost to OON Insurance</div>
+                  <div style={{ fontSize: 13, opacity: 0.85, maxWidth: 700, lineHeight: 1.6 }}>
+                    These patients were referred with a confirmed lymphedema diagnosis but denied solely because their insurance is out-of-network. Each represents a potential patient that could be converted if the Payor Relations team negotiates in-network contracts with these carriers.
+                  </div>
+                  <div style={{ display: 'flex', gap: 24, marginTop: 16 }}>
+                    {[
+                      { label: 'Confirmed Lymphedema OON', val: oonLymphedema.length, note: 'primary opportunity' },
+                      { label: 'Top OON Carrier', val: byIns[0]?.[0] || '—', note: `${byIns[0]?.[1]?.count || 0} patients` },
+                      { label: 'Est. Revenue Opportunity', val: '$' + (oonLymphedema.length * 4200).toLocaleString(), note: 'at avg $4,200/patient' },
+                    ].map(tile => (
+                      <div key={tile.label} style={{ background: 'rgba(255,255,255,0.12)', borderRadius: 10, padding: '12px 16px', minWidth: 160 }}>
+                        <div style={{ fontSize: 9, opacity: 0.7, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{tile.label}</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'DM Mono, monospace', marginTop: 4 }}>{tile.val}</div>
+                        <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>{tile.note}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+ 
+                {/* Top grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                  {/* By insurance */}
+                  <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>OON Patients by Insurance Carrier</div>
+                    <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Prioritize contract negotiations with highest-volume carriers first</div>
+                    {byIns.map(([ins, data]) => {
+                      const pct = Math.round((data.count / oonLymphedema.length) * 100);
+                      return (
+                        <div key={ins} style={{ marginBottom: 10 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                            <span style={{ fontWeight: 600, color: 'var(--black)' }}>{ins}</span>
+                            <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: '#1565C0' }}>{data.count} <span style={{ fontWeight: 400, color: 'var(--gray)', fontSize: 10 }}>({pct}%)</span></span>
+                          </div>
+                          <div style={{ height: 8, background: 'var(--border)', borderRadius: 999 }}>
+                            <div style={{ height: '100%', width: (data.count / byIns[0][1].count * 100) + '%', background: '#1565C0', borderRadius: 999 }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+ 
+                  {/* Trend + region */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 16 }}>Monthly OON Lymphedema Trend</div>
+                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 80 }}>
+                        {trend.map(([k, v]) => (
+                          <div key={k} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                            <div style={{ width: '80%', height: (v / maxTrend * 70), background: '#1565C0', borderRadius: '3px 3px 0 0', minHeight: 3 }} title={`${fmtMonth(k)}: ${v}`} />
+                            <div style={{ fontSize: 8, color: 'var(--gray)', textAlign: 'center' }}>{fmtMonth(k)}</div>
+                            <div style={{ fontSize: 9, fontWeight: 700 }}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 12 }}>OON Patients by Region</div>
+                      {byReg.map(([reg, cnt]) => (
+                        <div key={reg} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>Region {reg}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div style={{ width: 80, height: 6, background: 'var(--border)', borderRadius: 999 }}>
+                              <div style={{ height: '100%', width: (cnt / byReg[0][1] * 100) + '%', background: '#1565C0', borderRadius: 999 }} />
+                            </div>
+                            <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, fontSize: 13, color: '#1565C0', minWidth: 24, textAlign: 'right' }}>{cnt}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+ 
+                {/* Patient list */}
+                <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                  <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)' }}>OON Lymphedema Patient List</div>
+                      <div style={{ fontSize: 11, color: 'var(--gray)' }}>Share with Payor Relations — each patient can be re-engaged if insurance converts to in-network</div>
+                    </div>
+                    <input placeholder="Search patient, insurance, region…" value={payorSearch}
+                      onChange={e => setPayorSearch(e.target.value)}
+                      style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', width: 220 }} />
+                    <select value={payorIns} onChange={e => setPayorIns(e.target.value)}
+                      style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', outline: 'none' }}>
+                      <option value="ALL">All Carriers</option>
+                      {uniquePayorIns.map(i => <option key={i} value={i}>{i}</option>)}
+                    </select>
+                    <select value={payorDx} onChange={e => setPayorDx(e.target.value)}
+                      style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', outline: 'none' }}>
+                      <option value="ALL">All Diagnoses</option>
+                      {uniquePayorDx.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    <span style={{ fontSize: 12, color: 'var(--gray)', whiteSpace: 'nowrap' }}>{filteredOon.length} patients</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.5fr 1.2fr 1.4fr 0.6fr', padding: '8px 20px', background: 'var(--bg)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <span>Patient</span><span>Region</span><span>Insurance (OON)</span><span>Diagnosis</span><span>Date</span>
+                  </div>
+                  {filteredOon.slice(0, 200).map((r, i) => (
+                    <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '1fr 0.5fr 1.2fr 1.4fr 0.6fr', padding: '9px 20px', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)', alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name || '—'}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
+                      <span style={{ fontSize: 11, color: '#1565C0', fontWeight: 600 }}>{r.insurance || '—'}</span>
+                      <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 40)}</span>
+                      <span style={{ fontSize: 11, color: 'var(--gray)', fontFamily: 'DM Mono, monospace' }}>{r.date_received ? r.date_received.slice(0,10) : '—'}</span>
+                    </div>
+                  ))}
+                  {filteredOon.length > 200 && (
+                    <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: 'var(--gray)', background: 'var(--bg)' }}>
+                      Showing 200 of {filteredOon.length} patients. Use filters to narrow.
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+ 
           {/* PATIENT TABLE TAB */}
           {activeTab === 'patients' && (
             <div>
@@ -637,3 +1006,4 @@ export default function IntakeDashboardPage() {
     </div>
   );
 }
+ 
