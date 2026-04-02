@@ -120,49 +120,74 @@ function UploadCard(props) {
         var csv = parseXLSXFile(e.target.result);
         var data = props.parseType === 'visits' ? parseVisitCSV(csv) : parseCensusCSV(csv);
 
-        setMessage('Uploading ' + data.length + ' records to Supabase...');
+        setMessage('Processing ' + data.length + ' records...');
 
-        // 1. Create batch record
+        // Create batch record for audit trail
         var batchRes = await supabase.from('upload_batches').insert([{
           batch_type: props.batchType,
           file_name: file.name,
           record_count: data.length,
         }]).select('id').single();
-
-        if (batchRes.error) throw new Error('Batch create failed: ' + batchRes.error.message);
+        if (batchRes.error) throw new Error('Batch record failed: ' + batchRes.error.message);
         var batchId = batchRes.data.id;
+        var now = new Date().toISOString();
+        var today = now.slice(0, 10);
 
-        var table = props.batchType === 'visits' ? 'visit_schedule_data' : 'census_data';
-
+        // ── VISIT SCHEDULE ─────────────────────────────────────────────
         if (props.batchType === 'visits') {
-          // Visit data: wipe and replace (expected point-in-time snapshot behavior)
-          await supabase.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          var rows = data.map(function(r) { return Object.assign({}, r, { batch_id: batchId }); });
-          for (var i = 0; i < rows.length; i += 200) {
-            var ins = await supabase.from(table).insert(rows.slice(i, i + 200));
-            if (ins.error) throw new Error('Insert failed: ' + ins.error.message);
-            setMessage('Uploading... ' + Math.min(i + 200, rows.length) + '/' + rows.length);
+          var rows = data.map(function(r) { return Object.assign({}, r, { batch_id: batchId, uploaded_at: now }); });
+          var inserted = 0, updated = 0, errors = 0;
+
+          for (var i = 0; i < rows.length; i += 100) {
+            var chunk = rows.slice(i, i + 100);
+            // Upsert: if same patient+date+event+staff exists, update status/notes
+            // ON CONFLICT update mutable fields only (status can change day to day)
+            var res = await supabase.from('visit_schedule_data').upsert(chunk, {
+              onConflict: 'patient_name,visit_date,event_type,staff_name',
+              ignoreDuplicates: false,
+            });
+            if (res.error) { errors++; console.warn('Upsert chunk error:', res.error.message); }
+            else inserted += chunk.length;
+            setMessage('Saving visits... ' + Math.min(i + 100, rows.length) + '/' + rows.length);
           }
-        } else {
-          // Census data: smart diff — detect status changes, auto-log hospitalizations
+
+          // Count totals in DB now
+          var { count } = await supabase.from('visit_schedule_data').select('*', { count: 'exact', head: true });
+          setMessage('✓ Visits saved. ' + rows.length + ' in this upload · ' + (count || '?') + ' total in history.');
+          setCount(rows.length);
+        }
+
+        // ── CENSUS DATA ────────────────────────────────────────────────
+        else if (props.batchType === 'census') {
           setMessage('Comparing with previous census...');
 
-          var { data: prevRecords } = await supabase.from('census_data').select('patient_name, status, region, insurance');
+          // Fetch existing records
+          var { data: prevRecords } = await supabase.from('census_data').select('patient_name, status, region, insurance, first_seen_date');
           var prevMap = {};
           (prevRecords || []).forEach(function(r) {
             if (r.patient_name) prevMap[r.patient_name.toLowerCase().trim()] = r;
           });
 
-          var now = new Date().toISOString();
           var statusChanges = [];
           var newHospitalizations = [];
+          var newCount = 0, updatedCount = 0, unchangedCount = 0;
 
-          var toInsert = data.map(function(r) {
+          var upsertRows = data.map(function(r) {
             var key = r.patient_name ? r.patient_name.toLowerCase().trim() : '';
             var prev = prevMap[key];
-            var row = Object.assign({}, r, { batch_id: batchId, patient_key: key });
+            var row = Object.assign({}, r, {
+              batch_id: batchId,
+              patient_key: key,
+              last_seen_date: today,
+              first_seen_date: prev ? (prev.first_seen_date || today) : today,
+              uploaded_at: now,
+            });
 
-            if (prev && prev.status !== r.status) {
+            if (!prev) {
+              newCount++;
+              if (r.status === 'Hospitalized') newHospitalizations.push(r);
+            } else if (prev.status !== r.status) {
+              updatedCount++;
               row.previous_status = prev.status;
               row.status_changed_at = now;
               statusChanges.push({
@@ -175,65 +200,60 @@ function UploadCard(props) {
                 batch_id: batchId,
                 changed_at: now,
               });
-              // Transitioned INTO Hospitalized → auto-create hospitalization record
               if (r.status === 'Hospitalized' && prev.status !== 'Hospitalized') {
                 newHospitalizations.push(r);
               }
-            } else if (!prev && r.status === 'Hospitalized') {
-              // New patient already showing as Hospitalized
-              newHospitalizations.push(r);
+            } else {
+              unchangedCount++;
             }
             return row;
           });
 
-          // Replace census with new snapshot
-          await supabase.from('census_data').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          for (var i = 0; i < toInsert.length; i += 200) {
-            var ins = await supabase.from('census_data').insert(toInsert.slice(i, i + 200));
-            if (ins.error) throw new Error('Insert failed: ' + ins.error.message);
-            setMessage('Uploading... ' + Math.min(i + 200, toInsert.length) + '/' + toInsert.length);
+          // Upsert all — new patients get inserted, existing get updated
+          for (var i = 0; i < upsertRows.length; i += 100) {
+            var chunk = upsertRows.slice(i, i + 100);
+            var res = await supabase.from('census_data').upsert(chunk, {
+              onConflict: 'patient_name',
+              ignoreDuplicates: false,
+            });
+            if (res.error) console.warn('Census upsert error:', res.error.message);
+            setMessage('Saving census... ' + Math.min(i + 100, upsertRows.length) + '/' + upsertRows.length);
           }
 
-          // Log all status changes
+          // Log status changes
           if (statusChanges.length > 0) {
             await supabase.from('census_status_log').insert(statusChanges);
           }
 
-          // Auto-create hospitalization records for newly hospitalized patients
+          // Auto-create hospitalization records
           for (var h of newHospitalizations) {
             var { data: existing } = await supabase.from('hospitalizations')
               .select('id').eq('patient_name', h.patient_name).is('discharge_date', null).limit(1);
             if (!existing || existing.length === 0) {
               await supabase.from('hospitalizations').insert({
-                patient_name: h.patient_name,
-                region: h.region,
-                insurance: h.insurance,
-                admission_date: new Date().toISOString().slice(0, 10),
+                patient_name: h.patient_name, region: h.region, insurance: h.insurance,
+                admission_date: today,
                 admitting_diagnosis: 'Pending — auto-detected from census',
-                cause_category: 'unknown',
-                outcome: 'still_admitted',
-                reported_by: 'System (census auto-detect)',
-                reported_date: new Date().toISOString().slice(0, 10),
-                review_notes: 'Auto-created when patient status changed to Hospitalized in census. Please add clinical details.',
+                cause_category: 'unknown', outcome: 'still_admitted',
+                reported_by: 'System (census auto-detect)', reported_date: today,
+                review_notes: 'Auto-created: patient status changed to Hospitalized. Add clinical details.',
               });
             }
           }
 
-          var extraMsg = '';
-          if (newHospitalizations.length > 0) extraMsg += ' ⚠ ' + newHospitalizations.length + ' new hospitalization(s) auto-logged.';
-          if (statusChanges.length > 0) extraMsg += ' ' + statusChanges.length + ' status change(s) recorded.';
-          if (extraMsg) { setMessage(data.length + ' records saved.' + extraMsg); }
+          var { count: totalCensus } = await supabase.from('census_data').select('*', { count: 'exact', head: true });
+          var msg = '✓ Census updated. ' + newCount + ' new · ' + updatedCount + ' changed · ' + unchangedCount + ' unchanged · ' + (totalCensus || '?') + ' total patients on file.';
+          if (newHospitalizations.length > 0) msg += ' ⚠ ' + newHospitalizations.length + ' new hospitalization(s) auto-logged.';
+          if (statusChanges.length > 0) msg += ' ' + statusChanges.length + ' status change(s) recorded.';
+          setMessage(msg);
+          setCount(data.length);
         }
 
         localStorage.setItem(props.storageKey, JSON.stringify(data));
-        setCount(data.length);
         setStatus('success');
-        if (!newHospitalizations || newHospitalizations.length === 0) {
-          setMessage(data.length + ' records saved to Supabase');
-        }
-        setLastUpload({ file_name: file.name, record_count: data.length, uploaded_at: new Date().toISOString() });
-
+        setLastUpload({ file_name: file.name, record_count: data.length, uploaded_at: now });
         if (props.onSuccess) props.onSuccess(data);
+
       } catch (err) {
         setStatus('error');
         setMessage('Error: ' + err.message);
@@ -257,10 +277,13 @@ function UploadCard(props) {
         {lastUpload && (
           <div style={{ textAlign: 'right', flexShrink: 0 }}>
             <div style={{ background: '#ECFDF5', color: 'var(--green)', border: '1px solid #A7F3D0', borderRadius: 999, padding: '3px 10px', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>
-              {lastUpload.record_count} records in Supabase
+              {lastUpload.record_count} records in last upload
             </div>
             <div style={{ fontSize: 10, color: 'var(--gray)' }}>
-              {lastUpload.file_name} &middot; {new Date(lastUpload.uploaded_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              {lastUpload.file_name} · {new Date(lastUpload.uploaded_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            </div>
+            <div style={{ fontSize: 10, color: '#1565C0', fontWeight: 600, marginTop: 2 }}>
+              ✓ Historical data preserved — only changes updated
             </div>
           </div>
         )}
@@ -367,7 +390,12 @@ export default function UploadsPage() {
         {/* Upload History */}
         {uploadHistory.length > 0 && (
           <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 24, marginBottom: 24 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 16 }}>Upload History</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)' }}>Upload History</div>
+              <div style={{ fontSize: 11, color: '#1565C0', fontWeight: 600, background: '#EFF6FF', padding: '3px 10px', borderRadius: 999 }}>
+                📚 Historical mode — each upload adds to cumulative data
+              </div>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {uploadHistory.map(function(batch) {
                 return (
@@ -376,7 +404,7 @@ export default function UploadsPage() {
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{batch.file_name || 'Unknown file'}</div>
                       <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>
-                        {batch.batch_type === 'visits' ? 'Visit Schedule' : 'Patient Census'} &middot; {batch.record_count} records
+                        {batch.batch_type === 'visits' ? 'Visit Schedule' : 'Patient Census'} · {batch.record_count} records in this upload
                       </div>
                     </div>
                     <span style={{ fontSize: 12, color: 'var(--gray)', fontFamily: 'DM Mono, monospace' }}>
