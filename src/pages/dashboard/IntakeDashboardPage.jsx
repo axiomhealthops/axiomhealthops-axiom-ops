@@ -112,7 +112,15 @@ function ImportPanel({ onImportDone }) {
       try {
         const rows = parseIntakeXLSX(e.target.result);
         setMsg(`Parsed ${rows.length} rows. Clearing old data…`);
-        await supabase.from('intake_referrals').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        // Delete in batches to ensure full clear regardless of RLS
+        let keepDeleting = true;
+        while (keepDeleting) {
+          const { data: toDelete } = await supabase.from('intake_referrals').select('id').limit(500);
+          if (!toDelete || toDelete.length === 0) { keepDeleting = false; break; }
+          const ids = toDelete.map(r => r.id);
+          await supabase.from('intake_referrals').delete().in('id', ids);
+          if (toDelete.length < 500) keepDeleting = false;
+        }
         let inserted = 0;
         const CHUNK = 200;
         for (let i = 0; i < rows.length; i += CHUNK) {
@@ -170,7 +178,7 @@ export default function IntakeDashboardPage() {
     const { data } = await supabase.from('intake_referrals')
       .select('id,date_received,referral_status,referral_type,region,patient_name,insurance,denial_reason,diagnosis,chart_status')
       .order('date_received', { ascending: false })
-      .limit(5000);
+      .limit(6000);
     setRecords(data || []);
     setLoading(false);
   }
@@ -619,4 +627,3 @@ export default function IntakeDashboardPage() {
     </div>
   );
 }
- 
