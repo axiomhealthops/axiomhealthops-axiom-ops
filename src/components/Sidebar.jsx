@@ -3,40 +3,39 @@ import { useAuth } from '../hooks/useAuth';
  
 const NAV_ITEMS = [
   { section: 'OVERVIEW', items: [
-    { id: 'overview',    label: 'Overview',     icon: '\u2B21' },
-    { id: 'alerts',      label: 'Live Alerts',  icon: '\u26A1' },
-    { id: 'actions',     label: 'Action List',  icon: '\u2713' },
+    { id: 'overview',    label: 'Overview',        icon: '\u2B21' },
+    { id: 'alerts',      label: 'Live Alerts',     icon: '\u26A1' },
+    { id: 'actions',     label: 'Action List',     icon: '\u2713' },
+  ]},
+  { section: 'INTAKE', items: [
+    { id: 'intake',      label: 'Intake Dashboard',icon: '\uD83D\uDCE5' },
   ]},
   { section: 'PATIENTS', items: [
-    { id: 'census',       label: 'Patient Census',    icon: '\uD83D\uDC65' },
-    { id: 'visits',       label: 'Visit Schedule',    icon: '\uD83D\uDCC5' },
-    { id: 'on-hold',      label: 'On-Hold Recovery',  icon: '\u23F8' },
-    { id: 'auth',         label: 'Auth Tracker',      icon: '\uD83D\uDD10' },
-    { id: 'auth-timeline',label: 'Auth Timeline',     icon: '\uD83D\uDCC6' },
+    { id: 'census',      label: 'Patient Census',  icon: '\uD83D\uDC65' },
+    { id: 'visits',      label: 'Visit Schedule',  icon: '\uD83D\uDCC5' },
+    { id: 'on-hold',     label: 'On-Hold Recovery',icon: '\u23F8' },
+    { id: 'auth',        label: 'Auth Tracker',    icon: '\uD83D\uDD10' },
   ]},
   { section: 'PERFORMANCE', items: [
-    { id: 'productivity', label: 'Productivity',      icon: '\uD83D\uDCCA' },
-    { id: 'revenue',      label: 'Revenue',           icon: '\uD83D\uDCB0' },
-    { id: 'growth',       label: 'Growth Tracker',    icon: '\uD83D\uDCC8' },
-    { id: 'scorecard',    label: 'Scorecard',         icon: '\uD83C\uDFAF' },
-    { id: 'trends',       label: 'Trends',            icon: '\u301C' },
+    { id: 'productivity',label: 'Productivity',    icon: '\uD83D\uDCCA' },
+    { id: 'revenue',     label: 'Revenue',         icon: '\uD83D\uDCB0' },
+    { id: 'growth',      label: 'Growth Tracker',  icon: '\uD83D\uDCC8' },
+    { id: 'scorecard',   label: 'Scorecard',       icon: '\uD83C\uDFAF' },
   ]},
   { section: 'OPERATIONS', items: [
-    { id: 'staff',       label: 'Staff Directory',    icon: '\uD83D\uDC64' },
-    { id: 'regions',     label: 'Regions',            icon: '\uD83D\uDDFA' },
-    { id: 'team',        label: 'Team',               icon: '\uD83C\uDFE2' },
-    { id: 'expansion',   label: 'Expansion',          icon: '\uD83D\uDE80' },
-    { id: 'daily-reports',label: 'Daily Reports',     icon: '\uD83D\uDCCB' },
-    { id: 'exec-report', label: 'Executive Report',   icon: '\uD83D\uDCCA' },
+    { id: 'staff',       label: 'Staff Directory', icon: '\uD83D\uDC64' },
+    { id: 'regions',     label: 'Regions',         icon: '\uD83D\uDDFA' },
+    { id: 'expansion',   label: 'Expansion',       icon: '\uD83D\uDE80' },
+    { id: 'daily-reports',label:'Daily Reports',   icon: '\uD83D\uDCCB' },
+    { id: 'exec-report', label: 'Executive Report',icon: '\uD83D\uDCCA' },
   ]},
   { section: 'COORDINATOR', items: [
     { id: 'coordinator-portal', label: 'Coordinator Portal', icon: '\uD83D\uDC69\u200D\uD83D\uDCBC' },
   ]},
   { section: 'ADMIN', items: [
-    { id: 'super-admin', label: 'Super Admin',        icon: '\u2699' },
-    { id: 'users',       label: 'User Management',    icon: '\uD83D\uDC65' },
-    { id: 'uploads',     label: 'Data Uploads',       icon: '\u2B06' },
-    { id: 'settings',    label: 'Settings',           icon: '\uD83D\uDD27' },
+    { id: 'users',       label: 'User Management', icon: '\uD83D\uDC65' },
+    { id: 'uploads',     label: 'Data Uploads',    icon: '\u2B06' },
+    { id: 'settings',    label: 'Settings',        icon: '\uD83D\uDD27' },
   ]},
 ];
  
@@ -44,19 +43,8 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
   const { profile, signOut } = useAuth();
   const isSuperAdmin = profile?.role === 'super_admin';
  
-  const visibleItems = NAV_ITEMS.map(section => ({
-    ...section,
-    items: section.section === 'ADMIN'
-      ? section.items.filter(item => isSuperAdmin || !['super-admin', 'users'].includes(item.id))
-      : section.items,
-  }));
- 
   return (
-    <div style={{
-      ...styles.sidebar,
-      width: collapsed ? '64px' : '220px',
-      transition: 'width 0.2s ease',
-    }}>
+    <div style={{ ...styles.sidebar, width: collapsed ? '64px' : '220px', transition: 'width 0.2s ease' }}>
       <div style={styles.header}>
         <div style={styles.logoMark}>A</div>
         {!collapsed && (
@@ -65,25 +53,28 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
             <div style={styles.logoSub}>Operations</div>
           </div>
         )}
-        <button onClick={onToggle} style={styles.collapseBtn}>
-          {collapsed ? '\u2192' : '\u2190'}
-        </button>
+        <button onClick={onToggle} style={styles.collapseBtn}>{collapsed ? '\u2192' : '\u2190'}</button>
       </div>
  
       <nav style={styles.nav}>
-        {visibleItems.map(section => (
-          <div key={section.section} style={styles.section}>
-            {!collapsed && <div style={styles.sectionLabel}>{section.section}</div>}
-            {section.items.map(item => (
-              <button key={item.id} onClick={() => onNavigate(item.id)}
-                title={collapsed ? item.label : undefined}
-                style={{ ...styles.navItem, ...(activePage === item.id ? styles.navItemActive : {}) }}>
-                <span style={styles.navIcon}>{item.icon}</span>
-                {!collapsed && <span style={styles.navLabel}>{item.label}</span>}
-              </button>
-            ))}
-          </div>
-        ))}
+        {NAV_ITEMS.map(section => {
+          const items = section.section === 'ADMIN'
+            ? section.items.filter(item => isSuperAdmin || !['users'].includes(item.id))
+            : section.items;
+          return (
+            <div key={section.section} style={styles.section}>
+              {!collapsed && <div style={styles.sectionLabel}>{section.section}</div>}
+              {items.map(item => (
+                <button key={item.id} onClick={() => onNavigate(item.id)}
+                  title={collapsed ? item.label : undefined}
+                  style={{ ...styles.navItem, ...(activePage === item.id ? styles.navItemActive : {}) }}>
+                  <span style={styles.navIcon}>{item.icon}</span>
+                  {!collapsed && <span style={styles.navLabel}>{item.label}</span>}
+                </button>
+              ))}
+            </div>
+          );
+        })}
       </nav>
  
       <div style={styles.footer}>
@@ -110,7 +101,7 @@ const styles = {
   nav: { flex: 1, overflowY: 'auto', padding: '8px 0' },
   section: { marginBottom: '4px' },
   sectionLabel: { fontSize: '9px', fontWeight: '600', color: '#374151', letterSpacing: '0.08em', padding: '8px 14px 4px' },
-  navItem: { width: 'calc(100% - 8px)', display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 12px', background: 'none', border: 'none', color: '#6B7280', fontSize: '13px', fontWeight: '400', cursor: 'pointer', textAlign: 'left', borderRadius: '6px', margin: '1px 4px', transition: 'all 0.1s ease' },
+  navItem: { width: 'calc(100% - 8px)', display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 12px', background: 'none', border: 'none', color: '#6B7280', fontSize: '13px', fontWeight: '400', cursor: 'pointer', textAlign: 'left', borderRadius: '6px', margin: '1px 4px' },
   navItemActive: { background: '#161B26', color: '#fff', fontWeight: '500' },
   navIcon: { fontSize: '14px', flexShrink: 0, width: '18px', textAlign: 'center' },
   navLabel: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
