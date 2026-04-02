@@ -2,25 +2,25 @@ import { useState, useEffect } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
- 
+
 const ROLES = ['super_admin','admin','pod_leader','team_member'];
 const ROLE_LABELS = { super_admin:'Super Admin', admin:'Admin', pod_leader:'Pod Leader', team_member:'Team Member' };
- 
+
 export default function SettingsPage() {
   const { profile, refreshPermissions } = useAuth();
   const [pages, setPages] = useState([]);
   const [saving, setSaving] = useState({});
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
- 
+
   useEffect(() => { loadPages(); }, []);
- 
+
   async function loadPages() {
     const { data } = await supabase.from('page_permissions').select('*').order('sort_order');
     setPages(data || []);
     setLoading(false);
   }
- 
+
   async function toggle(pageKey, role) {
     const page = pages.find(p => p.page_key === pageKey);
     if (!page) return;
@@ -37,9 +37,9 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 2000);
     await refreshPermissions();
   }
- 
+
   const sections = [...new Set(pages.map(p => p.page_section))];
- 
+
   if (profile?.role !== 'super_admin') return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Settings" subtitle="Access restricted" />
@@ -48,14 +48,14 @@ export default function SettingsPage() {
       </div>
     </div>
   );
- 
+
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Settings" subtitle="Loading…" />
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading…</div>
     </div>
   );
- 
+
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Settings" subtitle="Manage page access permissions by role"
@@ -65,7 +65,7 @@ export default function SettingsPage() {
         <div style={{ background:'#FEF3C7', border:'1px solid #F59E0B', borderRadius:10, padding:'12px 16px', marginBottom:20, fontSize:12, color:'#92400E' }}>
           <strong>Role Access Control</strong> — Toggle which pages each role can access. Super Admin always has full access. Changes take effect immediately for users on their next page load.
         </div>
- 
+
         {sections.map(section => {
           const sectionPages = pages.filter(p => p.page_section === section);
           return (
@@ -112,7 +112,7 @@ export default function SettingsPage() {
             </div>
           );
         })}
- 
+
         {/* Role descriptions */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12, marginTop:8 }}>
           {ROLES.map(r => (
@@ -134,4 +134,3 @@ export default function SettingsPage() {
     </div>
   );
 }
- 
