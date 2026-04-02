@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import AIDocExtractor from './AIDocExtractor';
  
 var INSURANCES = ['Aetna','CarePlus','Cigna','Devoted','Fenyx','FHCP','Health First','Humana','Medicare','Simply','United','Other'];
 var STATUSES = [
@@ -404,6 +405,7 @@ export default function AuthTrackerPage() {
   var [editRecord, setEditRecord] = useState(null);
   var [expandedId, setExpandedId] = useState(null);
   var [activeTab, setActiveTab] = useState('all');
+  var [showAIExtractor, setShowAIExtractor] = useState(false);
  
   function fetchRecords() {
     setLoading(true);
@@ -478,12 +480,18 @@ export default function AuthTrackerPage() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar
         title="Authorization Tracker"
-        subtitle={records.length + ' patients \u00b7 ' + active + ' active \u00b7 ' + critical + ' critical'}
+        subtitle={records.length + ' patients · ' + active + ' active · ' + critical + ' critical'}
         actions={
-          <button onClick={function() { setEditRecord(null); setShowModal(true); }}
-            style={{ padding: '8px 16px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-            + New Auth Record
-          </button>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={function() { setShowAIExtractor(true); }}
+              style={{ padding:'8px 16px', background:'#7C3AED', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+              ✨ AI Extract Auth
+            </button>
+            <button onClick={function() { setEditRecord(null); setShowModal(true); }}
+              style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+              + New Auth Record
+            </button>
+          </div>
         }
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -674,6 +682,14 @@ export default function AuthTrackerPage() {
           record={editRecord}
           onClose={function() { setShowModal(false); setEditRecord(null); }}
           onSave={function() { setShowModal(false); setEditRecord(null); fetchRecords(); }}
+        />
+      )}
+
+      {showAIExtractor && (
+        <AIDocExtractor
+          mode="auth"
+          onClose={() => setShowAIExtractor(false)}
+          onExtracted={() => { setShowAIExtractor(false); fetchRecords(); }}
         />
       )}
     </div>

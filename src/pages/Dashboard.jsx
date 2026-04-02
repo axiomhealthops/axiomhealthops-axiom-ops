@@ -23,6 +23,7 @@ import SettingsPage from './dashboard/SettingsPage';
 import StaffDirectoryPage from './dashboard/StaffDirectoryPage';
 import RegionsPage from './dashboard/RegionsPage';
 import ExpansionPage from './dashboard/ExpansionPage';
+import ReportsExportPage from './dashboard/ReportsExportPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -46,6 +47,7 @@ const PAGE_COMPONENTS = {
   staff:                StaffDirectoryPage,
   regions:              RegionsPage,
   expansion:            ExpansionPage,
+  reports:              ReportsExportPage,
 };
 
 function AccessDenied() {

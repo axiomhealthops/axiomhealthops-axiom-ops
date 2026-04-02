@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import AIDocExtractor from './AIDocExtractor';
 
 const REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
 const INSURANCES = ['Humana','CarePlus','FHCP','Devoted','Health First','Aetna','Medicare','Simply','Cigna','United Healthcare','Other'];
@@ -27,6 +28,7 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
   const [step, setStep] = useState(1);
+  const [showAI, setShowAI] = useState(false);
 
   function set(key, val) { setForm(p => ({ ...p, [key]: val })); }
 
@@ -118,8 +120,48 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
             <div style={{ fontSize:17, fontWeight:700, color:'var(--black)' }}>New Referral Entry</div>
             <div style={{ fontSize:12, color:'var(--gray)', marginTop:2 }}>Step {step} of {totalSteps} — {stepTitles[step-1]}</div>
           </div>
-          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:'var(--gray)' }}>×</button>
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            <button onClick={() => setShowAI(true)}
+              style={{ padding:'7px 14px', background:'#7C3AED', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
+              ✨ AI Extract from Doc
+            </button>
+            <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:'var(--gray)' }}>×</button>
+          </div>
         </div>
+
+        {showAI && (
+          <AIDocExtractor
+            mode="intake"
+            onClose={() => setShowAI(false)}
+            onExtracted={(data) => {
+              // Auto-fill the form with extracted data
+              setForm(p => ({
+                ...p,
+                patient_name: data.patient_name || p.patient_name,
+                dob: data.dob || p.dob,
+                phone: data.phone || p.phone,
+                contact_number: data.phone || p.contact_number,
+                location: data.address || p.location,
+                city: data.city || p.city,
+                zip_code: data.zip_code || p.zip_code,
+                county: data.county || p.county,
+                insurance: data.insurance || p.insurance,
+                policy_number: data.policy_number || p.policy_number,
+                secondary_insurance: data.secondary_insurance || p.secondary_insurance,
+                diagnosis: data.diagnosis || p.diagnosis,
+                referral_source: data.referral_source || p.referral_source,
+                referral_source_phone: data.referral_source_phone || p.referral_source_phone,
+                referral_source_fax: data.referral_source_fax || p.referral_source_fax,
+                pcp_name: data.pcp_name || p.pcp_name,
+                pcp_phone: data.pcp_phone || p.pcp_phone,
+                pcp_fax: data.pcp_fax || p.pcp_fax,
+                referral_type: data.referral_type || p.referral_type,
+                notes: data.notes || p.notes,
+              }));
+              setShowAI(false);
+            }}
+          />
+        )}
 
         {/* Progress tabs */}
         <div style={{ display:'flex', padding:'0 24px', borderBottom:'1px solid var(--border)', overflowX:'auto' }}>
