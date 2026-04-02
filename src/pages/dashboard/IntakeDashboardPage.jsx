@@ -6,9 +6,18 @@ import { supabase } from '../../lib/supabase';
 // ── helpers ──────────────────────────────────────────────────────────
 function sd(v) {
   if (!v) return null;
+  // JS Date object (from xlsx.js cellDates:true)
   if (v instanceof Date) { try { return v.toISOString().split('T')[0]; } catch { return null; } }
-  const s = String(v).trim().slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  const s = String(v).trim();
+  // Already ISO format YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // M/D/YYYY or MM/DD/YYYY format (xlsx.js sometimes returns this)
+  const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (mdyMatch) {
+    const [, m, d, y] = mdyMatch;
+    return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  return null;
 }
 function ss(v, max = 200) {
   if (v == null) return null;
@@ -181,7 +190,14 @@ export default function IntakeDashboardPage() {
   const [typeFilter, setTypeFilter] = useState('ALL');
   const [activeTab, setActiveTab] = useState('overview');
   const [showImport, setShowImport] = useState(false);
-  const [sortField, setSortField] = useState('date_desc');  // date_desc | date_asc | name_asc | status
+  const [sortField, setSortField] = useState('date_desc');
+  // Audit tab state (lifted to avoid hooks-in-render violation)
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditFilter, setAuditFilter] = useState('ALL');
+  // Payor tab state (lifted)
+  const [payorSearch, setPayorSearch] = useState('');
+  const [payorIns, setPayorIns] = useState('ALL');
+  const [payorDx, setPayorDx] = useState('ALL');
  
   async function fetchRecords() {
     setLoading(true);
@@ -570,13 +586,8 @@ export default function IntakeDashboardPage() {
  
           {/* DENIAL AUDIT TAB */}
           {activeTab === 'audit' && (() => {
-            const [auditRunning, setAuditRunning] = React.useState(false);
-            const [auditResults, setAuditResults] = React.useState(null);
-            const [auditSearch, setAuditSearch] = React.useState('');
-            const [auditFilter, setAuditFilter] = React.useState('ALL'); // ALL | HIGH | MEDIUM | LOW
- 
             // Pre-compute suspicious patterns from data alone (instant, no AI needed)
-            const suspiciousPatterns = React.useMemo(() => {
+            const suspiciousPatterns = (() => {
               const denied = records.filter(r => r.referral_status === 'Denied');
               const flags = [];
  
@@ -634,7 +645,7 @@ export default function IntakeDashboardPage() {
                 const order = { HIGH: 0, MEDIUM: 1, LOW: 2 };
                 return order[a.risk] - order[b.risk];
               });
-            }, [records]);
+            })();
  
             const highRisk = suspiciousPatterns.filter(f => f.risk === 'HIGH');
             const medRisk = suspiciousPatterns.filter(f => f.risk === 'MEDIUM');
@@ -791,10 +802,7 @@ export default function IntakeDashboardPage() {
             });
             const trend = Object.entries(trendMap).sort((a,b) => a[0].localeCompare(b[0])).slice(-12);
             const maxTrend = Math.max(...trend.map(t => t[1]), 1);
-            // Search state for patient list
-            const [payorSearch, setPayorSearch] = React.useState('');
-            const [payorIns, setPayorIns] = React.useState('ALL');
-            const [payorDx, setPayorDx] = React.useState('ALL');
+            // Uses lifted state: payorSearch, payorIns, payorDx
             const filteredOon = oonLymphedema.filter(r => {
               if (payorIns !== 'ALL' && r.insurance !== payorIns) return false;
               if (payorDx !== 'ALL' && r.diagnosis !== payorDx) return false;
