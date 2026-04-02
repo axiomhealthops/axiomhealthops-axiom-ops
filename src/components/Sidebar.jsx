@@ -75,7 +75,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
     <div style={{ ...S.sidebar, width: collapsed ? 64 : 220 }}>
       {/* Logo */}
       <div style={S.header}>
-        <div style={S.logoMark}>A</div>
+        <img src="/logo.png" alt="AHM" style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'contain', flexShrink: 0, background: 'transparent' }} />
         {!collapsed && (
           <div style={S.logoText}>
             <div style={S.logoTitle}>AxiomHealth</div>
