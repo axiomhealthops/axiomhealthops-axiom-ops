@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
- 
+
 // Sidebar sections in the correct flow order
 const ALL_SECTIONS = [
   { key: 'OVERVIEW',       label: 'OVERVIEW' },
@@ -13,7 +13,7 @@ const ALL_SECTIONS = [
   { key: 'OPERATIONS',     label: 'OPERATIONS' },
   { key: 'ADMIN',          label: 'ADMIN' },
 ];
- 
+
 const PAGE_ICONS = {
   overview: '◈', alerts: '⚡', actions: '✓',
   intake: '📥',
@@ -24,22 +24,22 @@ const PAGE_ICONS = {
   staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊',
   users: '👥', uploads: '↑', settings: '⚙',
 };
- 
+
 export default function Sidebar({ activePage, onNavigate, collapsed, onToggle }) {
   const { profile, canAccess, signOut } = useAuth();
   const [navItems, setNavItems] = useState([]);
- 
+
   useEffect(() => {
     loadNav();
   }, [profile]);
- 
+
   async function loadNav() {
     const { data: pages } = await supabase
       .from('page_permissions')
       .select('*')
       .order('sort_order');
     if (!pages) return;
- 
+
     // Filter to what this user can access
     const role = profile?.role;
     const accessible = pages.filter(p => {
@@ -49,28 +49,28 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
       if (role === 'team_member') return p.team_member;
       return false;
     });
- 
+
     // Group by section
     const grouped = {};
     accessible.forEach(p => {
       if (!grouped[p.page_section]) grouped[p.page_section] = [];
       grouped[p.page_section].push(p);
     });
- 
+
     const sections = ALL_SECTIONS
       .filter(s => grouped[s.key] && grouped[s.key].length > 0)
       .map(s => ({ ...s, items: grouped[s.key] }));
- 
+
     setNavItems(sections);
   }
- 
+
   const roleLabel = {
     super_admin: 'Super Admin',
     admin: 'Admin',
     pod_leader: 'Pod Leader',
     team_member: 'Team Member',
   }[profile?.role] || '';
- 
+
   return (
     <div style={{ ...S.sidebar, width: collapsed ? 64 : 220 }}>
       {/* Logo */}
@@ -84,7 +84,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
         )}
         <button onClick={onToggle} style={S.collapseBtn}>{collapsed ? '→' : '←'}</button>
       </div>
- 
+
       {/* Nav */}
       <nav style={S.nav}>
         {navItems.map(section => (
@@ -105,7 +105,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
           </div>
         ))}
       </nav>
- 
+
       {/* Footer */}
       <div style={S.footer}>
         {!collapsed && (
@@ -119,7 +119,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
     </div>
   );
 }
- 
+
 const S = {
   sidebar: { height: '100vh', background: '#0F1117', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden', borderRight: '1px solid #1E2535', position: 'fixed', top: 0, left: 0, zIndex: 100, transition: 'width 0.2s ease' },
   header: { display: 'flex', alignItems: 'center', gap: 10, padding: '16px 12px', borderBottom: '1px solid #1E2535', minHeight: 64 },
@@ -141,4 +141,3 @@ const S = {
   userRole: { fontSize: 10, color: '#4B5563', marginTop: 1 },
   signOutBtn: { background: 'none', border: 'none', color: '#4B5563', fontSize: 16, cursor: 'pointer', padding: 4, flexShrink: 0 },
 };
- 

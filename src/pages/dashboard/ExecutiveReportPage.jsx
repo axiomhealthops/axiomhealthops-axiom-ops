@@ -1,21 +1,21 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
- 
+
 const RATE = 230;
 function isEval(e) { return /eval/i.test(e||''); }
 function isCompleted(s) { return /completed/i.test(s||''); }
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
 function fmtD(n) { return '$' + Math.round(n).toLocaleString(); }
 function pct(a,b) { return b>0?Math.round((a/b)*100):0; }
- 
+
 export default function ExecutiveReportPage() {
   const [visits, setVisits] = useState([]);
   const [intake, setIntake] = useState([]);
   const [auth, setAuth] = useState([]);
   const [loading, setLoading] = useState(true);
   const printRef = useRef();
- 
+
   useEffect(() => {
     Promise.all([
       supabase.from('visit_schedule_data').select('patient_name,visit_date,discipline,event_type,status,staff_name,region,insurance').not('visit_date','is',null),
@@ -26,18 +26,18 @@ export default function ExecutiveReportPage() {
       setLoading(false);
     });
   }, []);
- 
+
   const stats = useMemo(() => {
     const now = new Date();
     const d7 = new Date(); d7.setDate(d7.getDate()-7); const d7s = d7.toISOString().slice(0,10);
     const d30 = new Date(); d30.setDate(d30.getDate()-30); const d30s = d30.toISOString().slice(0,10);
     const thisMonth = now.toISOString().slice(0,7);
- 
+
     // Visits
     const evalSeen = new Set();
     let completed = 0, cancelled = 0, missed = 0, scheduled = 0;
     let completed30 = 0, cancelled30 = 0;
- 
+
     visits.forEach(v => {
       const isCan = isCancelled(v.event_type, v.status);
       const isComp = isCompleted(v.status);
@@ -53,16 +53,16 @@ export default function ExecutiveReportPage() {
       else if (isMiss) missed++;
       else if (isSched) scheduled++;
     });
- 
+
     const revenueEarned = completed * RATE;
     const revenuePipeline = scheduled * RATE;
     const revenueLost = (cancelled + missed) * RATE;
     const completionRate = pct(completed, completed+cancelled+missed);
- 
+
     // Visits this week
     const visitsThisWeek = visits.filter(v => v.visit_date >= d7s && isCompleted(v.status) && !isCancelled(v.event_type,v.status)).length;
     const cancelledThisWeek = visits.filter(v => v.visit_date >= d7s && isCancelled(v.event_type,v.status)).length;
- 
+
     // Intake
     const totalIntake = intake.length;
     const accepted = intake.filter(i => i.referral_status==='Accepted').length;
@@ -70,25 +70,25 @@ export default function ExecutiveReportPage() {
     const conversionRate = pct(accepted, totalIntake);
     const thisMonthIntake = intake.filter(i => i.date_received?.startsWith(thisMonth));
     const thisMonthAccepted = thisMonthIntake.filter(i => i.referral_status==='Accepted').length;
- 
+
     // Auth
     const totalAuth = auth.length;
     const activeAuth = auth.filter(a => /approved|active/i.test(a.auth_status||'')).length;
     const pendingAuth = auth.filter(a => /pending/i.test(a.auth_status||'')).length;
     const authApprovalRate = pct(activeAuth, totalAuth);
- 
+
     // Visit utilization (used vs authorized)
     const avgUtilization = auth.length > 0 
       ? Math.round(auth.reduce((sum,a) => sum + pct(a.visits_used||0,a.visits_authorized||24), 0) / auth.length)
       : 0;
- 
+
     // Projection: annualized at current 30d rate
     const dailyRate = completed30 / 30;
     const annualProjection = dailyRate * 365 * RATE;
- 
+
     // Cancellation impact per week
     const weeklyCancelCost = (cancelledThisWeek * RATE);
- 
+
     return {
       completed, cancelled, missed, scheduled, revenueEarned, revenuePipeline, revenueLost,
       completionRate, visitsThisWeek, cancelledThisWeek,
@@ -97,7 +97,7 @@ export default function ExecutiveReportPage() {
       annualProjection, weeklyCancelCost,
     };
   }, [visits, intake, auth]);
- 
+
   function handlePrint() {
     const style = document.createElement('style');
     style.textContent = '@media print { body * { visibility: hidden; } #pulse-report, #pulse-report * { visibility: visible; } #pulse-report { position: fixed; top: 0; left: 0; width: 100%; } }';
@@ -105,9 +105,9 @@ export default function ExecutiveReportPage() {
     window.print();
     document.head.removeChild(style);
   }
- 
+
   const today = new Date().toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
- 
+
   const Stat = ({ label, val, sub, color='var(--black)', big=false }) => (
     <div style={{ textAlign:'center' }}>
       <div style={{ fontSize:big?28:20, fontWeight:800, fontFamily:'DM Mono, monospace', color }}>{val}</div>
@@ -115,18 +115,18 @@ export default function ExecutiveReportPage() {
       {sub && <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>{sub}</div>}
     </div>
   );
- 
+
   const RagDot = ({ good }) => (
     <div style={{ width:10, height:10, borderRadius:'50%', background: good?'#10B981':'#DC2626', flexShrink:0 }} />
   );
- 
+
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Executive Report" subtitle="Loading…" />
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading…</div>
     </div>
   );
- 
+
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Executive Report" subtitle="CEO Pulse Report — live company snapshot"
@@ -139,7 +139,7 @@ export default function ExecutiveReportPage() {
       />
       <div style={{ flex:1, overflow:'auto', padding:20 }}>
         <div id="pulse-report" ref={printRef} style={{ maxWidth:1000, margin:'0 auto', fontFamily:'DM Sans, system-ui, sans-serif' }}>
- 
+
           {/* Header */}
           <div style={{ background:'#0F1117', borderRadius:16, padding:'24px 32px', color:'#fff', marginBottom:20, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <div>
@@ -152,7 +152,7 @@ export default function ExecutiveReportPage() {
               <div style={{ marginTop:8, fontSize:11, color:'#9CA3AF' }}>CONFIDENTIAL — CEO Distribution</div>
             </div>
           </div>
- 
+
           {/* Financial Summary */}
           <div style={{ background:'linear-gradient(135deg,#065F46,#10B981)', borderRadius:14, padding:'20px 28px', marginBottom:16, color:'#fff' }}>
             <div style={{ fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.08em', opacity:0.8, marginBottom:12 }}>Financial Overview</div>
@@ -175,10 +175,10 @@ export default function ExecutiveReportPage() {
               </div>
             </div>
           </div>
- 
+
           {/* 3-column KPI grid */}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16, marginBottom:16 }}>
- 
+
             {/* Operations */}
             <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:20 }}>
               <div style={{ fontSize:12, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', color:'var(--gray)', marginBottom:14 }}>Operations — Visits</div>
@@ -201,7 +201,7 @@ export default function ExecutiveReportPage() {
                 ))}
               </div>
             </div>
- 
+
             {/* Intake */}
             <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:20 }}>
               <div style={{ fontSize:12, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', color:'var(--gray)', marginBottom:14 }}>Referral Intake</div>
@@ -223,7 +223,7 @@ export default function ExecutiveReportPage() {
                 ))}
               </div>
             </div>
- 
+
             {/* Authorization */}
             <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:20 }}>
               <div style={{ fontSize:12, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', color:'var(--gray)', marginBottom:14 }}>Authorization</div>
@@ -247,7 +247,7 @@ export default function ExecutiveReportPage() {
               </div>
             </div>
           </div>
- 
+
           {/* RAG Status Summary */}
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:20 }}>
             <div style={{ fontSize:12, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', color:'var(--gray)', marginBottom:14 }}>Company Health — Key Indicators</div>
@@ -271,7 +271,7 @@ export default function ExecutiveReportPage() {
               ))}
             </div>
           </div>
- 
+
           {/* Footer */}
           <div style={{ textAlign:'center', marginTop:16, fontSize:10, color:'var(--gray)' }}>
             AxiomHealth Management · Pulse Report · Generated {today} · Confidential
@@ -281,4 +281,3 @@ export default function ExecutiveReportPage() {
     </div>
   );
 }
- 

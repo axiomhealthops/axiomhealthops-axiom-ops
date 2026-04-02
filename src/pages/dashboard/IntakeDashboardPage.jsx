@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
- 
+
 // ── helpers ──────────────────────────────────────────────────────────
 function sd(v) {
   if (!v) return null;
@@ -47,7 +47,7 @@ function fmtMonth(key) {
   const [y, m] = key.split('-');
   return new Date(+y, +m - 1).toLocaleString('en-US', { month: 'short', year: '2-digit' });
 }
- 
+
 // ── XLSX parser ───────────────────────────────────────────────────────
 function parseIntakeXLSX(arrayBuffer) {
   const wb = XLSX.read(arrayBuffer, { type: 'array', cellDates: true, raw: false });
@@ -99,7 +99,7 @@ function parseIntakeXLSX(arrayBuffer) {
   }
   return out;
 }
- 
+
 // ── small reusable chart bars ─────────────────────────────────────────
 function HBar({ label, value, max, color, subLabel }) {
   const pct = max > 0 ? (value / max) * 100 : 0;
@@ -115,13 +115,13 @@ function HBar({ label, value, max, color, subLabel }) {
     </div>
   );
 }
- 
+
 // ── Import panel ──────────────────────────────────────────────────────
 function ImportPanel({ onImportDone }) {
   const [status, setStatus] = useState('idle');
   const [msg, setMsg] = useState('');
   const ref = useRef();
- 
+
   async function handleFile(file) {
     if (!file) return;
     setStatus('loading'); setMsg('Parsing file…');
@@ -157,7 +157,7 @@ function ImportPanel({ onImportDone }) {
     };
     reader.readAsArrayBuffer(file);
   }
- 
+
   return (
     <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 20 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -177,7 +177,7 @@ function ImportPanel({ onImportDone }) {
     </div>
   );
 }
- 
+
 // ── Main page ─────────────────────────────────────────────────────────
 export default function IntakeDashboardPage() {
   const [records, setRecords] = useState([]);
@@ -200,7 +200,7 @@ export default function IntakeDashboardPage() {
   const [payorSearch, setPayorSearch] = useState('');
   const [payorIns, setPayorIns] = useState('ALL');
   const [payorDx, setPayorDx] = useState('ALL');
- 
+
   async function fetchRecords() {
     setLoading(true);
     const { data } = await supabase.from('intake_referrals')
@@ -210,16 +210,16 @@ export default function IntakeDashboardPage() {
     setRecords(data || []);
     setLoading(false);
   }
- 
+
   useEffect(() => { fetchRecords(); }, []);
- 
+
   // ── computed stats ──────────────────────────────────────────────────
   const stats = useMemo(() => {
     const total = records.length;
     const accepted = records.filter(r => r.referral_status === 'Accepted').length;
     const denied = records.filter(r => r.referral_status === 'Denied').length;
     const acceptRate = total > 0 ? Math.round((accepted / total) * 100) : 0;
- 
+
     // Monthly trend
     const monthMap = {};
     records.forEach(r => {
@@ -230,7 +230,7 @@ export default function IntakeDashboardPage() {
       else monthMap[k].denied++;
     });
     const months = Object.keys(monthMap).sort().slice(-14).map(k => ({ key: k, label: fmtMonth(k), ...monthMap[k], total: monthMap[k].accepted + monthMap[k].denied }));
- 
+
     // By region
     const regionMap = {};
     records.forEach(r => {
@@ -242,7 +242,7 @@ export default function IntakeDashboardPage() {
     const byRegion = Object.entries(regionMap)
       .map(([r, v]) => ({ region: r, ...v, total: v.accepted + v.denied }))
       .sort((a, b) => b.total - a.total);
- 
+
     // By insurance
     const insMap = {};
     records.forEach(r => {
@@ -254,7 +254,7 @@ export default function IntakeDashboardPage() {
     const byInsurance = Object.entries(insMap)
       .map(([ins, v]) => ({ ins, ...v, total: v.accepted + v.denied }))
       .sort((a, b) => b.total - a.total).slice(0, 12);
- 
+
     // By diagnosis (top 15)
     const diagMap = {};
     records.forEach(r => {
@@ -266,7 +266,7 @@ export default function IntakeDashboardPage() {
     const byDiagnosis = Object.entries(diagMap)
       .map(([diag, v]) => ({ diag, ...v, total: v.accepted + v.denied }))
       .sort((a, b) => b.total - a.total).slice(0, 15);
- 
+
     // Denial reasons (top 10)
     const denialMap = {};
     records.filter(r => r.referral_status === 'Denied' && r.denial_reason).forEach(r => {
@@ -276,14 +276,14 @@ export default function IntakeDashboardPage() {
     const denialReasons = Object.entries(denialMap)
       .map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 8);
- 
+
     // Referral types
     const typeMap = {};
     records.forEach(r => {
       const k = r.referral_type || 'Unknown';
       typeMap[k] = (typeMap[k] || 0) + 1;
     });
- 
+
     // Chart status
     const csMap = {};
     records.filter(r => r.referral_status === 'Accepted').forEach(r => {
@@ -291,14 +291,14 @@ export default function IntakeDashboardPage() {
       csMap[k] = (csMap[k] || 0) + 1;
     });
     const chartStatuses = Object.entries(csMap).sort((a, b) => b[1] - a[1]).slice(0, 8);
- 
+
     // This month
     const thisMonth = new Date().toISOString().slice(0, 7);
     const thisMonthRecs = records.filter(r => monthKey(r.date_received) === thisMonth);
- 
+
     return { total, accepted, denied, acceptRate, months, byRegion, byInsurance, byDiagnosis, denialReasons, typeMap, chartStatuses, thisMonthRecs };
   }, [records]);
- 
+
   // ── filtered table ──────────────────────────────────────────────────
   const filtered = useMemo(() => {
     let list = records;
@@ -334,15 +334,15 @@ export default function IntakeDashboardPage() {
     });
     return list;
   }, [records, statusFilter, regionFilter, insuranceFilter, typeFilter, monthFilter, search, sortField]);
- 
+
   const uniqueRegions = [...new Set(records.map(r => r.region).filter(Boolean))].sort();
   const uniqueInsurances = [...new Set(records.map(r => r.insurance).filter(Boolean))].sort();
   const uniqueMonths = [...new Set(records.map(r => monthKey(r.date_received)).filter(Boolean))].sort().reverse().slice(0, 18);
   const uniqueTypes = [...new Set(records.map(r => r.referral_type).filter(Boolean))].sort();
- 
+
   const SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
   const maxMonthTotal = stats.months.length > 0 ? Math.max(...stats.months.map(m => m.total)) : 1;
- 
+
   const TABS = [
     { key: 'overview',  label: 'Overview' },
     { key: 'regions',   label: 'By Region' },
@@ -352,14 +352,14 @@ export default function IntakeDashboardPage() {
     { key: 'payor',     label: '⚡ Payor Opportunity' },
     { key: 'patients',  label: 'Patient Table' },
   ];
- 
+
   if (loading) return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Intake Dashboard" subtitle="Loading referral data…" />
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gray)' }}>Loading…</div>
     </div>
   );
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar
@@ -372,7 +372,7 @@ export default function IntakeDashboardPage() {
           </button>
         }
       />
- 
+
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* Import panel */}
         {showImport && (
@@ -380,7 +380,7 @@ export default function IntakeDashboardPage() {
             <ImportPanel onImportDone={() => { fetchRecords(); setShowImport(false); }} />
           </div>
         )}
- 
+
         {/* KPI strip — each tile is clickable and filters the patient table */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
@@ -402,7 +402,7 @@ export default function IntakeDashboardPage() {
             </div>
           ))}
         </div>
- 
+
         {/* Tabs + global search */}
         <div style={{ display: 'flex', alignItems: 'center', padding: '0 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', flexShrink: 0, gap: 12 }}>
           <div style={{ display: 'flex', gap: 2, flex: 1, paddingTop: 10 }}>
@@ -423,10 +423,10 @@ export default function IntakeDashboardPage() {
             style={{ padding: '6px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', background: 'var(--card-bg)', width: 280, marginBottom: 4 }}
           />
         </div>
- 
+
         {/* Tab content */}
         <div style={{ flex: 1, overflow: 'auto', padding: '20px' }}>
- 
+
           {/* OVERVIEW TAB */}
           {activeTab === 'overview' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
@@ -458,7 +458,7 @@ export default function IntakeDashboardPage() {
                   </div>
                 </div>
               </div>
- 
+
               {/* Insurance breakdown */}
               <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 16 }}>Referrals by Insurance (Top 12)</div>
@@ -469,7 +469,7 @@ export default function IntakeDashboardPage() {
                     subLabel={`${ins.accepted}A / ${ins.denied}D`} />
                 ))}
               </div>
- 
+
               {/* Referral types + chart status */}
               <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 16 }}>Referral Types</div>
@@ -485,7 +485,7 @@ export default function IntakeDashboardPage() {
               </div>
             </div>
           )}
- 
+
           {/* REGIONS TAB */}
           {activeTab === 'regions' && (
             <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
@@ -515,7 +515,7 @@ export default function IntakeDashboardPage() {
               })}
             </div>
           )}
- 
+
           {/* DIAGNOSES TAB */}
           {activeTab === 'diagnoses' && (
             <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
@@ -541,7 +541,7 @@ export default function IntakeDashboardPage() {
               })}
             </div>
           )}
- 
+
           {/* DENIAL ANALYSIS TAB */}
           {activeTab === 'denials' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
@@ -585,26 +585,26 @@ export default function IntakeDashboardPage() {
               </div>
             </div>
           )}
- 
+
           {/* DENIAL AUDIT TAB */}
           {activeTab === 'audit' && (() => {
             // Pre-compute suspicious patterns from data alone (instant, no AI needed)
             const suspiciousPatterns = (() => {
               const denied = records.filter(r => r.referral_status === 'Denied');
               const flags = [];
- 
+
               denied.forEach(r => {
                 const dx = (r.diagnosis || '').toLowerCase();
                 const reason = (r.denial_reason || '').toLowerCase();
                 const issues = [];
                 let risk = 'LOW';
- 
+
                 // Flag 1: Lymphedema diagnosis but denied as "non-lymphedema"
                 if ((dx.includes('lymphedema') || dx.includes('i89')) && reason.includes('non-lymphedema')) {
                   issues.push({ type: 'Diagnosis Mismatch', detail: 'Lymphedema diagnosis but denied as Non-lymphedema — possible coding error or denial override', risk: 'HIGH' });
                   risk = 'HIGH';
                 }
- 
+
                 // Flag 2: OON denial but insurance is one we DO accept (Humana, Careplus, etc.)
                 const inNetworkCarriers = ['humana', 'careplus', 'health first', 'devoted', 'fhcp', 'medicare', 'cigna', 'aetna'];
                 const insLower = (r.insurance || '').toLowerCase();
@@ -612,7 +612,7 @@ export default function IntakeDashboardPage() {
                   issues.push({ type: 'In-Network Carrier Flagged OON', detail: `${r.insurance} appears to be an in-network carrier but was denied as out-of-network`, risk: 'HIGH' });
                   risk = 'HIGH';
                 }
- 
+
                 // Flag 3: Accepted elsewhere with same denial reason (possible inconsistency)
                 const sameReasonAccepted = records.filter(rr =>
                   rr.referral_status === 'Accepted' &&
@@ -623,35 +623,35 @@ export default function IntakeDashboardPage() {
                   issues.push({ type: 'Inconsistent Decision', detail: `${sameReasonAccepted.length} other patient(s) with same insurance and diagnosis were Accepted`, risk: 'MEDIUM' });
                   if (risk === 'LOW') risk = 'MEDIUM';
                 }
- 
+
                 // Flag 4: Blank or vague denial reason
                 if (!r.denial_reason || r.denial_reason.trim().length < 5) {
                   issues.push({ type: 'Missing Denial Reason', detail: 'No denial reason recorded — may indicate incomplete intake processing', risk: 'MEDIUM' });
                   if (risk === 'LOW') risk = 'MEDIUM';
                 }
- 
+
                 // Flag 5: "Non-lymphedema" denial but diagnosis contains lymphedema-related terms
                 const lymphTerms = ['lymph', 'edema', 'i89', 'swelling', 'venous stasis'];
                 if (reason.includes('non-lymphedema') && lymphTerms.some(t => dx.includes(t)) && !issues.find(i => i.type === 'Diagnosis Mismatch')) {
                   issues.push({ type: 'Possible Lymphedema Missed', detail: `Diagnosis "${r.diagnosis}" may have lymphedema component — review if denial was appropriate`, risk: 'MEDIUM' });
                   if (risk === 'LOW') risk = 'MEDIUM';
                 }
- 
+
                 if (issues.length > 0) {
                   flags.push({ ...r, issues, risk });
                 }
               });
- 
+
               // Sort: HIGH first, then MEDIUM
               return flags.sort((a, b) => {
                 const order = { HIGH: 0, MEDIUM: 1, LOW: 2 };
                 return order[a.risk] - order[b.risk];
               });
             })();
- 
+
             const highRisk = suspiciousPatterns.filter(f => f.risk === 'HIGH');
             const medRisk = suspiciousPatterns.filter(f => f.risk === 'MEDIUM');
- 
+
             const filtered = suspiciousPatterns.filter(f => {
               if (auditFilter !== 'ALL' && f.risk !== auditFilter) return false;
               // Type filter (set by tile clicks)
@@ -666,10 +666,10 @@ export default function IntakeDashboardPage() {
               }
               return true;
             });
- 
+
             const riskColor = { HIGH: '#DC2626', MEDIUM: '#D97706', LOW: '#6B7280' };
             const riskBg = { HIGH: '#FEF2F2', MEDIUM: '#FFFBEB', LOW: '#F9FAFB' };
- 
+
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {/* Header */}
@@ -693,7 +693,7 @@ export default function IntakeDashboardPage() {
                     ))}
                   </div>
                 </div>
- 
+
                 {/* Flag type breakdown */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
                   {[
@@ -723,7 +723,7 @@ export default function IntakeDashboardPage() {
                     );
                   })}
                 </div>
- 
+
                 {/* Flagged patient list */}
                 <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
                   <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -852,7 +852,7 @@ export default function IntakeDashboardPage() {
               </div>
             );
           })()}
- 
+
           {/* PAYOR OPPORTUNITY TAB */}
           {activeTab === 'payor' && (() => {
             // Lymphedema OON = confirmed lymphedema diagnosis, denied only due to OON insurance
@@ -911,7 +911,7 @@ export default function IntakeDashboardPage() {
             });
             const uniquePayorIns = [...new Set(oonLymphedema.map(r => r.insurance).filter(Boolean))].sort();
             const uniquePayorDx = [...new Set(oonLymphedema.map(r => r.diagnosis).filter(Boolean))].sort();
- 
+
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {/* Header callout */}
@@ -935,7 +935,7 @@ export default function IntakeDashboardPage() {
                     ))}
                   </div>
                 </div>
- 
+
                 {/* Top grid */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                   {/* By insurance */}
@@ -957,7 +957,7 @@ export default function IntakeDashboardPage() {
                       );
                     })}
                   </div>
- 
+
                   {/* Trend + region */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                     <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
@@ -988,7 +988,7 @@ export default function IntakeDashboardPage() {
                     </div>
                   </div>
                 </div>
- 
+
                 {/* Patient list */}
                 <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
                   <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -1032,7 +1032,7 @@ export default function IntakeDashboardPage() {
               </div>
             );
           })()}
- 
+
           {/* PATIENT TABLE TAB */}
           {activeTab === 'patients' && (
             <div>
@@ -1068,7 +1068,7 @@ export default function IntakeDashboardPage() {
                 </select>
                 <span style={{ fontSize: 12, color: 'var(--gray)', marginLeft: 'auto' }}>{filtered.length.toLocaleString()} records</span>
               </div>
- 
+
               <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '0.8fr 2.2fr 0.5fr 0.9fr 1.5fr 1.5fr 0.8fr', padding: '8px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   <span>Date</span><span>Patient</span><span>Rgn</span><span>Type</span><span>Insurance</span><span>Diagnosis</span><span>Status</span>
@@ -1108,4 +1108,3 @@ export default function IntakeDashboardPage() {
     </div>
   );
 }
- 
