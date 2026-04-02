@@ -112,48 +112,127 @@ function UploadCard(props) {
     if (!file) return;
     setStatus('loading');
     setMessage('Parsing file...');
- 
+
     var reader = new FileReader();
     reader.onerror = function() { setStatus('error'); setMessage('Failed to read file'); };
     reader.onload = async function(e) {
       try {
         var csv = parseXLSXFile(e.target.result);
         var data = props.parseType === 'visits' ? parseVisitCSV(csv) : parseCensusCSV(csv);
- 
+
         setMessage('Uploading ' + data.length + ' records to Supabase...');
- 
+
         // 1. Create batch record
         var batchRes = await supabase.from('upload_batches').insert([{
           batch_type: props.batchType,
           file_name: file.name,
           record_count: data.length,
         }]).select('id').single();
- 
+
         if (batchRes.error) throw new Error('Batch create failed: ' + batchRes.error.message);
         var batchId = batchRes.data.id;
- 
-        // 2. Delete previous records for this batch type
+
         var table = props.batchType === 'visits' ? 'visit_schedule_data' : 'census_data';
-        await supabase.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000');
- 
-        // 3. Insert new records in chunks of 200
-        var rows = data.map(function(r) { return Object.assign({}, r, { batch_id: batchId }); });
-        var chunkSize = 200;
-        for (var i = 0; i < rows.length; i += chunkSize) {
-          var chunk = rows.slice(i, i + chunkSize);
-          var ins = await supabase.from(table).insert(chunk);
-          if (ins.error) throw new Error('Insert failed: ' + ins.error.message);
-          setMessage('Uploading... ' + Math.min(i + chunkSize, rows.length) + '/' + rows.length);
+
+        if (props.batchType === 'visits') {
+          // Visit data: wipe and replace (expected point-in-time snapshot behavior)
+          await supabase.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          var rows = data.map(function(r) { return Object.assign({}, r, { batch_id: batchId }); });
+          for (var i = 0; i < rows.length; i += 200) {
+            var ins = await supabase.from(table).insert(rows.slice(i, i + 200));
+            if (ins.error) throw new Error('Insert failed: ' + ins.error.message);
+            setMessage('Uploading... ' + Math.min(i + 200, rows.length) + '/' + rows.length);
+          }
+        } else {
+          // Census data: smart diff — detect status changes, auto-log hospitalizations
+          setMessage('Comparing with previous census...');
+
+          var { data: prevRecords } = await supabase.from('census_data').select('patient_name, status, region, insurance');
+          var prevMap = {};
+          (prevRecords || []).forEach(function(r) {
+            if (r.patient_name) prevMap[r.patient_name.toLowerCase().trim()] = r;
+          });
+
+          var now = new Date().toISOString();
+          var statusChanges = [];
+          var newHospitalizations = [];
+
+          var toInsert = data.map(function(r) {
+            var key = r.patient_name ? r.patient_name.toLowerCase().trim() : '';
+            var prev = prevMap[key];
+            var row = Object.assign({}, r, { batch_id: batchId, patient_key: key });
+
+            if (prev && prev.status !== r.status) {
+              row.previous_status = prev.status;
+              row.status_changed_at = now;
+              statusChanges.push({
+                patient_name: r.patient_name,
+                patient_key: key,
+                region: r.region,
+                insurance: r.insurance,
+                old_status: prev.status,
+                new_status: r.status,
+                batch_id: batchId,
+                changed_at: now,
+              });
+              // Transitioned INTO Hospitalized → auto-create hospitalization record
+              if (r.status === 'Hospitalized' && prev.status !== 'Hospitalized') {
+                newHospitalizations.push(r);
+              }
+            } else if (!prev && r.status === 'Hospitalized') {
+              // New patient already showing as Hospitalized
+              newHospitalizations.push(r);
+            }
+            return row;
+          });
+
+          // Replace census with new snapshot
+          await supabase.from('census_data').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          for (var i = 0; i < toInsert.length; i += 200) {
+            var ins = await supabase.from('census_data').insert(toInsert.slice(i, i + 200));
+            if (ins.error) throw new Error('Insert failed: ' + ins.error.message);
+            setMessage('Uploading... ' + Math.min(i + 200, toInsert.length) + '/' + toInsert.length);
+          }
+
+          // Log all status changes
+          if (statusChanges.length > 0) {
+            await supabase.from('census_status_log').insert(statusChanges);
+          }
+
+          // Auto-create hospitalization records for newly hospitalized patients
+          for (var h of newHospitalizations) {
+            var { data: existing } = await supabase.from('hospitalizations')
+              .select('id').eq('patient_name', h.patient_name).is('discharge_date', null).limit(1);
+            if (!existing || existing.length === 0) {
+              await supabase.from('hospitalizations').insert({
+                patient_name: h.patient_name,
+                region: h.region,
+                insurance: h.insurance,
+                admission_date: new Date().toISOString().slice(0, 10),
+                admitting_diagnosis: 'Pending — auto-detected from census',
+                cause_category: 'unknown',
+                outcome: 'still_admitted',
+                reported_by: 'System (census auto-detect)',
+                reported_date: new Date().toISOString().slice(0, 10),
+                review_notes: 'Auto-created when patient status changed to Hospitalized in census. Please add clinical details.',
+              });
+            }
+          }
+
+          var extraMsg = '';
+          if (newHospitalizations.length > 0) extraMsg += ' ⚠ ' + newHospitalizations.length + ' new hospitalization(s) auto-logged.';
+          if (statusChanges.length > 0) extraMsg += ' ' + statusChanges.length + ' status change(s) recorded.';
+          if (extraMsg) { setMessage(data.length + ' records saved.' + extraMsg); }
         }
- 
-        // 4. Also cache in localStorage for fast reads (visits page still uses it)
+
         localStorage.setItem(props.storageKey, JSON.stringify(data));
- 
         setCount(data.length);
         setStatus('success');
-        setMessage(data.length + ' records saved to Supabase');
+        if (!newHospitalizations || newHospitalizations.length === 0) {
+          setMessage(data.length + ' records saved to Supabase');
+        }
         setLastUpload({ file_name: file.name, record_count: data.length, uploaded_at: new Date().toISOString() });
- 
+
         if (props.onSuccess) props.onSuccess(data);
       } catch (err) {
         setStatus('error');

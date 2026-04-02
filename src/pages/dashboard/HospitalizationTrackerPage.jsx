@@ -257,7 +257,7 @@ export default function HospitalizationTrackerPage() {
   async function load() {
     const [{ data: h }, { data: c }] = await Promise.all([
       supabase.from('hospitalizations').select('*').order('admission_date', { ascending: false }),
-      supabase.from('census_data').select('patient_name').limit(2000),
+      supabase.from('census_data').select('patient_name, status, region, insurance').limit(2000),
     ]);
     setRecords(h||[]); setCensus(c||[]); setLoading(false);
   }
@@ -287,7 +287,8 @@ export default function HospitalizationTrackerPage() {
 
   // Rate calculations
   // Denominator = active census patients
-  const activeCensus = census.length || 543; // fallback to known count
+  const activeCensus = useMemo(() => census.filter(c => c.status === 'Active' || c.status === 'Active - Auth Pendin').length || 543, [census]);
+  const currentlyHospitalized = useMemo(() => census.filter(c => c.status === 'Hospitalized'), [census]);
 
   const lymphHosps = filtered.filter(r => r.cause_category === 'lymphedema_related');
   const otherHosps = filtered.filter(r => r.cause_category === 'other_cause');
@@ -495,7 +496,7 @@ export default function HospitalizationTrackerPage() {
               {/* Currently admitted alert */}
               {stillAdmitted.length > 0 && (
                 <div style={{ background:'#FEF2F2', border:'2px solid #FECACA', borderRadius:12, padding:16 }}>
-                  <div style={{ fontSize:14, fontWeight:700, color:'#DC2626', marginBottom:10 }}>🛏 Currently Admitted ({stillAdmitted.length})</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:'#DC2626', marginBottom:10 }}>🛏 Currently Admitted — Logged Records ({stillAdmitted.length})</div>
                   {stillAdmitted.map(r => (
                     <div key={r.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 12px', background:'white', borderRadius:7, marginBottom:6, border:'1px solid #FECACA' }}>
                       <div>
@@ -512,6 +513,40 @@ export default function HospitalizationTrackerPage() {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Live census feed — patients showing Hospitalized status in current census upload */}
+              {currentlyHospitalized.length > 0 && (
+                <div style={{ background:'#FFF7ED', border:'2px solid #FCD34D', borderRadius:12, padding:16 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+                    <div>
+                      <div style={{ fontSize:14, fontWeight:700, color:'#92400E' }}>📋 Census: Patients Currently Marked Hospitalized ({currentlyHospitalized.length})</div>
+                      <div style={{ fontSize:11, color:'#B45309', marginTop:2 }}>Live from latest Pariox census upload — these patients have status = "Hospitalized"</div>
+                    </div>
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px,1fr))', gap:8 }}>
+                    {currentlyHospitalized.map(p => {
+                      const hasLog = records.some(r => r.patient_name === p.patient_name && !r.discharge_date);
+                      return (
+                        <div key={p.patient_name} style={{ background:'white', border:'1px solid #FCD34D', borderRadius:8, padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                          <div>
+                            <div style={{ fontSize:12, fontWeight:700 }}>{p.patient_name}</div>
+                            <div style={{ fontSize:10, color:'var(--gray)' }}>Region {p.region||'?'}</div>
+                          </div>
+                          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                            {hasLog
+                              ? <span style={{ fontSize:10, color:'#065F46', fontWeight:700, background:'#ECFDF5', padding:'2px 7px', borderRadius:999 }}>✅ Logged</span>
+                              : canEdit && <button onClick={() => { setEditRecord({ patient_name: p.patient_name, region: p.region, insurance: p.insurance, outcome:'still_admitted', cause_category:'unknown' }); setShowForm(true); setActiveTab('log'); }}
+                                  style={{ fontSize:10, fontWeight:600, color:'#DC2626', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>
+                                  + Log Details
+                                </button>
+                            }
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
