@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth.jsx';
 
 export default function Login() {
@@ -7,43 +8,120 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [view, setView] = useState('login'); // 'login' | 'forgot'
+  const [resetSent, setResetSent] = useState(false);
 
-  async function handleSubmit(e) {
+  async function handleSignIn(e) {
     e.preventDefault();
-    setError('');
-    setLoading(true);
-    const { error: signInError } = await signIn(email.trim(), password);
-    if (signInError) setError('Invalid email or password. Please try again.');
+    setError(''); setLoading(true);
+    const { error: err } = await signIn(email.trim(), password);
+    if (err) setError('Invalid email or password. Please try again.');
     setLoading(false);
   }
 
-  return (
-    <div style={styles.outer}>
-      <div style={styles.card}>
-        <div style={styles.brand}>
-          <div style={styles.logoMark}>A</div>
+  async function handleForgotPassword(e) {
+    e.preventDefault();
+    setError(''); setLoading(true);
+    const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: 'https://axiomhealthops-axiom-ops.vercel.app/reset-password',
+    });
+    if (err) { setError(err.message); setLoading(false); return; }
+    setResetSent(true);
+    setLoading(false);
+  }
+
+  const S = styles;
+
+  if (view === 'forgot') return (
+    <div style={S.outer}>
+      <div style={S.card}>
+        <div style={S.brand}>
+          <div style={S.logoMark}>A</div>
           <div>
-            <div style={styles.logoTitle}>AxiomHealth</div>
-            <div style={styles.logoSub}>Operations Platform</div>
+            <div style={S.logoTitle}>AxiomHealth</div>
+            <div style={S.logoSub}>Operations Platform</div>
           </div>
         </div>
-        <div style={styles.divider} />
-        <h2 style={styles.heading}>Sign in to your account</h2>
-        {error && <div style={styles.errorBox}>{error}</div>}
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <div style={styles.field}>
-            <label style={styles.label}>Email address</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" placeholder="you@axiomhealthmanagement.com" style={styles.input} />
+        <div style={S.divider} />
+        {resetSent ? (
+          <>
+            <div style={{ textAlign: 'center', marginBottom: 24 }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📧</div>
+              <h2 style={{ ...S.heading, marginBottom: 8 }}>Check your email</h2>
+              <p style={{ fontSize: 14, color: 'var(--gray)', lineHeight: 1.6 }}>
+                We sent a password reset link to <strong>{email}</strong>.<br />
+                Click the link in the email to set your new password.
+              </p>
+            </div>
+            <button onClick={() => { setView('login'); setResetSent(false); }} style={S.button}>
+              Back to sign in
+            </button>
+          </>
+        ) : (
+          <>
+            <h2 style={S.heading}>Reset your password</h2>
+            <p style={{ fontSize: 14, color: 'var(--gray)', marginBottom: 24, marginTop: -12 }}>
+              Enter your email and we'll send you a reset link.
+            </p>
+            {error && <div style={S.errorBox}>{error}</div>}
+            <form onSubmit={handleForgotPassword} style={S.form}>
+              <div style={S.field}>
+                <label style={S.label}>Email address</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                  required autoComplete="email" placeholder="you@axiomhealthmanagement.com"
+                  style={S.input} />
+              </div>
+              <button type="submit" disabled={loading} style={{ ...S.button, opacity: loading ? 0.7 : 1 }}>
+                {loading ? 'Sending...' : 'Send reset link'}
+              </button>
+            </form>
+            <button onClick={() => { setView('login'); setError(''); }}
+              style={{ ...S.linkBtn, marginTop: 16 }}>
+              ← Back to sign in
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={S.outer}>
+      <div style={S.card}>
+        <div style={S.brand}>
+          <div style={S.logoMark}>A</div>
+          <div>
+            <div style={S.logoTitle}>AxiomHealth</div>
+            <div style={S.logoSub}>Operations Platform</div>
           </div>
-          <div style={styles.field}>
-            <label style={styles.label}>Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" placeholder="••••••••" style={styles.input} />
+        </div>
+        <div style={S.divider} />
+        <h2 style={S.heading}>Sign in to your account</h2>
+        {error && <div style={S.errorBox}>{error}</div>}
+        <form onSubmit={handleSignIn} style={S.form}>
+          <div style={S.field}>
+            <label style={S.label}>Email address</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              required autoComplete="email" placeholder="you@axiomhealthmanagement.com"
+              style={S.input} />
           </div>
-          <button type="submit" disabled={loading} style={{ ...styles.button, opacity: loading ? 0.7 : 1 }}>
+          <div style={S.field}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={S.label}>Password</label>
+              <button type="button" onClick={() => { setView('forgot'); setError(''); }}
+                style={S.linkBtn}>
+                Forgot password?
+              </button>
+            </div>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+              required autoComplete="current-password" placeholder="••••••••"
+              style={S.input} />
+          </div>
+          <button type="submit" disabled={loading} style={{ ...S.button, opacity: loading ? 0.7 : 1 }}>
             {loading ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
-        <p style={styles.footer}>Contact your administrator if you need access.</p>
+        <p style={S.footer}>Contact your administrator if you need access.</p>
       </div>
     </div>
   );
@@ -63,6 +141,7 @@ const styles = {
   field: { display: 'flex', flexDirection: 'column', gap: '6px' },
   label: { fontSize: '13px', fontWeight: '500', color: 'var(--black)' },
   input: { padding: '10px 14px', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '14px', color: 'var(--black)', background: 'var(--bg)', outline: 'none' },
-  button: { padding: '12px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', marginTop: '4px', cursor: 'pointer' },
+  button: { padding: '12px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', marginTop: '4px', cursor: 'pointer', width: '100%' },
+  linkBtn: { background: 'none', border: 'none', color: 'var(--red)', fontSize: '13px', fontWeight: '500', cursor: 'pointer', padding: 0, textDecoration: 'none' },
   footer: { marginTop: '24px', textAlign: 'center', fontSize: '13px', color: 'var(--gray)' },
 };

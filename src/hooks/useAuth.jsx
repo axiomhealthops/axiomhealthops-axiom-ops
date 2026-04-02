@@ -86,6 +86,10 @@ export function AuthProvider({ children }) {
     return permissions.includes(pageKey);
   }
 
+  async function signIn(email, password) {
+    return await supabase.auth.signInWithPassword({ email, password });
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
   }
@@ -97,7 +101,7 @@ export function AuthProvider({ children }) {
   return (
     <AuthContext.Provider value={{
       session, user, profile, permissions, loading,
-      canAccess, signOut, refreshPermissions,
+      canAccess, signIn, signOut, refreshPermissions,
     }}>
       {children}
     </AuthContext.Provider>

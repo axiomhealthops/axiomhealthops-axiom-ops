@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth.jsx';
 import { DIRECTOR_ROLES, MISSION_ROLES, COORDINATOR_ROLES } from './lib/constants';
 import Login from './pages/Login';
+import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
 
 function MissionControlPlaceholder() {
@@ -71,6 +72,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginGuard />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/" element={<RoleRouter />} />
           <Route path="/dashboard/*" element={
             <ProtectedRoute allowedRoles={DIRECTOR_ROLES}>
