@@ -11,8 +11,102 @@ function daysUntil(d) {
   return Math.round((new Date(d) - new Date()) / 86400000);
 }
 
-function PatientProfile({ patient, visits, authData, intakeData, onClose }) {
+function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpdate }) {
   const [tab, setTab] = useState('overview');
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState('');
+
+  // Find the intake record to edit
+  const patIntakeRecord = intakeData.find(i =>
+    i.patient_name?.toLowerCase().trim() === patient.patient_name?.toLowerCase().trim()
+  );
+
+  const [editForm, setEditForm] = useState({
+    patient_name: patient.patient_name || '',
+    region: patient.region || '',
+    insurance: patient.insurance || '',
+    status: patient.status || 'active',
+    // Intake fields
+    phone: patIntakeRecord?.phone || patIntakeRecord?.contact_number || '',
+    dob: patIntakeRecord?.dob || '',
+    location: patIntakeRecord?.location || '',
+    city: patIntakeRecord?.city || '',
+    zip_code: patIntakeRecord?.zip_code || '',
+    county: patIntakeRecord?.county || '',
+    diagnosis: patIntakeRecord?.diagnosis || '',
+    pcp_name: patIntakeRecord?.pcp_name || '',
+    pcp_phone: patIntakeRecord?.pcp_phone || '',
+    pcp_fax: patIntakeRecord?.pcp_fax || '',
+    referral_source: patIntakeRecord?.referral_source || '',
+    referral_status: patIntakeRecord?.referral_status || '',
+    chart_status: patIntakeRecord?.chart_status || '',
+    notes: patIntakeRecord?.notes || '',
+  });
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveMsg('');
+    try {
+      // Update census_data
+      await supabase.from('census_data').update({
+        patient_name: editForm.patient_name,
+        region: editForm.region,
+        insurance: editForm.insurance,
+        status: editForm.status,
+      }).eq('id', patient.id);
+
+      // Update intake_referrals if record exists
+      if (patIntakeRecord?.id) {
+        await supabase.from('intake_referrals').update({
+          patient_name: editForm.patient_name,
+          region: editForm.region,
+          insurance: editForm.insurance,
+          phone: editForm.phone,
+          contact_number: editForm.phone,
+          dob: editForm.dob || null,
+          location: editForm.location,
+          city: editForm.city,
+          zip_code: editForm.zip_code,
+          county: editForm.county,
+          diagnosis: editForm.diagnosis,
+          diagnosis_clean: editForm.diagnosis?.split('(')[0]?.trim(),
+          pcp_name: editForm.pcp_name,
+          pcp_phone: editForm.pcp_phone,
+          pcp_fax: editForm.pcp_fax,
+          referral_source: editForm.referral_source,
+          referral_status: editForm.referral_status,
+          chart_status: editForm.chart_status,
+          notes: editForm.notes,
+        }).eq('id', patIntakeRecord.id);
+      }
+
+      setSaveMsg('✓ Saved successfully');
+      setEditing(false);
+      onUpdate?.(); // refresh parent
+    } catch (err) {
+      setSaveMsg('Error: ' + err.message);
+    }
+    setSaving(false);
+  }
+
+  const INSURANCES = ['Humana','CarePlus','FHCP','Devoted','Health First','Aetna','Medicare','Simply','Cigna','United Healthcare','Other'];
+  const REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
+  const E = ({ label, name, type='text', opts }) => (
+    <div>
+      <div style={{ fontSize:10, fontWeight:600, color:'var(--gray)', marginBottom:3 }}>{label}</div>
+      {opts ? (
+        <select value={editForm[name]||''} onChange={e => setEditForm(p=>({...p,[name]:e.target.value}))}
+          style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
+          <option value="">—</option>
+          {opts.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      ) : (
+        <input type={type} value={editForm[name]||''} onChange={e => setEditForm(p=>({...p,[name]:e.target.value}))}
+          style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', boxSizing:'border-box', background:'var(--card-bg)' }} />
+      )}
+    </div>
+  );
 
   // All visits for this patient
   const patVisits = visits.filter(v =>
@@ -60,13 +154,68 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose }) {
         {/* Header */}
         <div style={{ padding:'18px 24px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'#0F1117', borderRadius:'16px 16px 0 0' }}>
           <div>
-            <div style={{ fontSize:18, fontWeight:700, color:'#fff' }}>{patient.patient_name}</div>
+            <div style={{ fontSize:18, fontWeight:700, color:'#fff' }}>{editing ? editForm.patient_name : patient.patient_name}</div>
             <div style={{ fontSize:12, color:'#9CA3AF', marginTop:2 }}>
               Region {patient.region || '—'} · {patient.insurance || '—'} · {patient.status || 'Active'}
             </div>
           </div>
-          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'#9CA3AF' }}>×</button>
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            {saveMsg && <span style={{ fontSize:12, color:saveMsg.startsWith('✓')?'#10B981':'#FCA5A5', fontWeight:600 }}>{saveMsg}</span>}
+            <button onClick={() => { setEditing(v=>!v); setSaveMsg(''); }}
+              style={{ padding:'6px 14px', background:editing?'rgba(255,255,255,0.1)':'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.2)', borderRadius:6, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+              {editing ? 'Cancel' : '✏ Edit Profile'}
+            </button>
+            <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'#9CA3AF' }}>×</button>
+          </div>
         </div>
+
+        {/* Edit Panel */}
+        {editing && (
+          <div style={{ padding:20, background:'#F0F7FF', borderBottom:'1px solid var(--border)' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:'var(--black)', marginBottom:12 }}>Edit Patient Information</div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:12 }}>
+              <E label="Patient Name" name="patient_name" />
+              <E label="Region" name="region" opts={REGIONS} />
+              <E label="Insurance" name="insurance" opts={INSURANCES} />
+              <E label="Status" name="status" opts={['active','inactive','discharged','on_hold']} />
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:12 }}>
+              <E label="Phone" name="phone" />
+              <E label="Date of Birth" name="dob" type="date" />
+              <E label="City" name="city" />
+              <E label="Zip Code" name="zip_code" />
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
+              <E label="Full Address" name="location" />
+              <E label="County" name="county" />
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:12 }}>
+              <E label="Diagnosis" name="diagnosis" />
+              <E label="Referral Status" name="referral_status" opts={['Pending','Accepted','Denied','On Hold']} />
+              <E label="Chart Status" name="chart_status" opts={['Chart Pending','Chart Received','Chart Incomplete','Ready for Auth']} />
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:12 }}>
+              <E label="PCP Name" name="pcp_name" />
+              <E label="PCP Phone" name="pcp_phone" />
+              <E label="PCP Fax" name="pcp_fax" />
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
+              <E label="Referral Source" name="referral_source" />
+              <div>
+                <div style={{ fontSize:10, fontWeight:600, color:'var(--gray)', marginBottom:3 }}>Notes</div>
+                <textarea value={editForm.notes} onChange={e => setEditForm(p=>({...p,notes:e.target.value}))}
+                  style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:50, background:'var(--card-bg)' }} />
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={handleSave} disabled={saving}
+                style={{ padding:'8px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+                {saving ? 'Saving…' : '✓ Save Changes'}
+              </button>
+              <button onClick={() => setEditing(false)} style={{ padding:'8px 14px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
+            </div>
+          </div>
+        )}
 
         {/* Visit stat strip */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', borderBottom:'1px solid var(--border)' }}>
@@ -408,7 +557,22 @@ export default function PatientCensusPage() {
       </div>
 
       {selected && (
-        <PatientProfile patient={selected} visits={visits} authData={authData} intakeData={intakeData} onClose={() => setSelected(null)} />
+        <PatientProfile
+          patient={selected}
+          visits={visits}
+          authData={authData}
+          intakeData={intakeData}
+          onClose={() => setSelected(null)}
+          onUpdate={async () => {
+            // Reload census and intake data after edit
+            const [c, i] = await Promise.all([
+              supabase.from('census_data').select('*'),
+              supabase.from('intake_referrals').select('*').not('date_received','is',null).order('date_received',{ascending:false}),
+            ]);
+            if (c.data) setCensus(c.data);
+            if (i.data) setIntakeData(i.data);
+          }}
+        />
       )}
     </div>
   );

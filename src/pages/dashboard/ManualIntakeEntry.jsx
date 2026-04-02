@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -11,51 +11,32 @@ const CHART_STATUSES = ['Chart Pending','Chart Received','Chart Incomplete','Rea
 export default function ManualIntakeEntry({ onClose, onSaved }) {
   const { profile } = useAuth();
   const today = new Date().toISOString().slice(0,10);
+  const fileRef = useRef();
 
   const [form, setForm] = useState({
-    date_received: today,
-    referral_status: 'Pending',
-    referral_type: 'New Referral',
-    region: '',
-    // Patient
-    patient_name: '',
-    dob: '',
-    contact_number: '',
-    phone: '',
-    location: '',
-    city: '',
-    zip_code: '',
-    county: '',
-    // Insurance
-    insurance: '',
-    policy_number: '',
-    medicare_type: '',
-    secondary_insurance: '',
-    secondary_id: '',
-    // Clinical
-    diagnosis: '',
-    denial_reason: '',
-    // Referral Source
-    referral_source: '',
-    referral_source_phone: '',
-    referral_source_fax: '',
-    // PCP
-    pcp_name: '',
-    pcp_phone: '',
-    pcp_fax: '',
-    // Status
-    chart_status: 'Chart Pending',
-    census_status: '',
-    welcome_call: '',
-    first_appt: '',
-    notes: '',
+    date_received: today, referral_status: 'Pending', referral_type: 'New Referral', region: '',
+    patient_name: '', dob: '', contact_number: '', phone: '', location: '', city: '', zip_code: '', county: '',
+    insurance: '', policy_number: '', medicare_type: '', secondary_insurance: '', secondary_id: '',
+    diagnosis: '', denial_reason: '', referral_source: '', referral_source_phone: '', referral_source_fax: '',
+    pcp_name: '', pcp_phone: '', pcp_fax: '', chart_status: 'Chart Pending',
+    census_status: '', welcome_call: '', first_appt: '', notes: '',
   });
 
+  const [file, setFile] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
-  const [step, setStep] = useState(1); // 1=Patient, 2=Insurance, 3=Clinical, 4=Source/PCP
+  const [step, setStep] = useState(1);
 
   function set(key, val) { setForm(p => ({ ...p, [key]: val })); }
+
+  function handleFileChange(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > 52428800) { setErrors(p => ({ ...p, file: 'File too large (max 50MB)' })); return; }
+    setErrors(p => ({ ...p, file: undefined }));
+    setFile(f);
+  }
 
   function validate() {
     const e = {};
@@ -69,7 +50,34 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
   async function handleSave() {
     if (!validate()) { setStep(1); return; }
     setSaving(true);
-    const payload = { ...form, diagnosis_clean: form.diagnosis?.split('(')[0]?.trim() };
+
+    let referral_document_path = null;
+    let referral_document_name = null;
+
+    // Upload file first if one is attached
+    if (file) {
+      const safeName = form.patient_name.replace(/[^a-zA-Z0-9]/g, '_');
+      const ext = file.name.split('.').pop();
+      const path = `referrals/${today}/${safeName}_${Date.now()}.${ext}`;
+      const { data: uploadData, error: uploadErr } = await supabase.storage
+        .from('referral-documents')
+        .upload(path, file, { cacheControl: '3600', upsert: false });
+      if (uploadErr) {
+        setErrors({ submit: 'File upload failed: ' + uploadErr.message });
+        setSaving(false);
+        return;
+      }
+      referral_document_path = uploadData.path;
+      referral_document_name = file.name;
+    }
+
+    const payload = {
+      ...form,
+      diagnosis_clean: form.diagnosis?.split('(')[0]?.trim(),
+      referral_document_path,
+      referral_document_name,
+    };
+
     const { error } = await supabase.from('intake_referrals').insert(payload);
     setSaving(false);
     if (error) { setErrors({ submit: error.message }); return; }
@@ -85,37 +93,39 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
       {children}
     </div>
   );
-  const I = (props) => (
-    <input {...props} style={{ width:'100%', padding:'8px 10px', border:`1px solid ${errors[props.name]?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)', ...props.style }} />
+  const I = ({ name, ...props }) => (
+    <input name={name} value={form[name]||''} onChange={e => set(name, e.target.value)} {...props}
+      style={{ width:'100%', padding:'8px 10px', border:`1px solid ${errors[name]?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)', ...props.style }} />
   );
   const S = ({ name, opts, ...props }) => (
-    <select name={name} value={form[name]} onChange={e => set(name, e.target.value)} {...props}
+    <select name={name} value={form[name]||''} onChange={e => set(name, e.target.value)} {...props}
       style={{ width:'100%', padding:'8px 10px', border:`1px solid ${errors[name]?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', ...props.style }}>
       <option value="">— Select —</option>
       {opts.map(o => <option key={o} value={o}>{o}</option>)}
     </select>
   );
 
-  const stepTitles = ['Patient Info','Insurance','Clinical','Referral Source & PCP'];
-  const totalSteps = 4;
+  const stepTitles = ['Patient Info','Insurance','Clinical','Source & PCP','Documents'];
+  const totalSteps = 5;
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
       <div style={{ background:'var(--card-bg)', borderRadius:16, width:'100%', maxWidth:700, maxHeight:'90vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+
         {/* Header */}
-        <div style={{ padding:'20px 24px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <div style={{ padding:'18px 24px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <div>
             <div style={{ fontSize:17, fontWeight:700, color:'var(--black)' }}>New Referral Entry</div>
             <div style={{ fontSize:12, color:'var(--gray)', marginTop:2 }}>Step {step} of {totalSteps} — {stepTitles[step-1]}</div>
           </div>
-          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:'var(--gray)', lineHeight:1 }}>×</button>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:'var(--gray)' }}>×</button>
         </div>
 
-        {/* Progress */}
-        <div style={{ display:'flex', padding:'0 24px', borderBottom:'1px solid var(--border)' }}>
+        {/* Progress tabs */}
+        <div style={{ display:'flex', padding:'0 24px', borderBottom:'1px solid var(--border)', overflowX:'auto' }}>
           {stepTitles.map((t,i) => (
             <button key={i} onClick={() => setStep(i+1)}
-              style={{ flex:1, padding:'10px 4px', border:'none', background:'none', fontSize:11, fontWeight:step===i+1?700:400, color:step===i+1?'var(--red)':step>i+1?'#065F46':'var(--gray)', borderBottom:step===i+1?'2px solid var(--red)':step>i+1?'2px solid #10B981':'2px solid transparent', cursor:'pointer' }}>
+              style={{ flex:'0 0 auto', padding:'10px 12px', border:'none', background:'none', fontSize:11, fontWeight:step===i+1?700:400, color:step===i+1?'var(--red)':step>i+1?'#065F46':'var(--gray)', borderBottom:step===i+1?'2px solid var(--red)':step>i+1?'2px solid #10B981':'2px solid transparent', cursor:'pointer', whiteSpace:'nowrap' }}>
               {step > i+1 ? '✓ ' : ''}{t}
             </button>
           ))}
@@ -130,16 +140,16 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
               <div style={{ gridColumn:'span 2' }}>
                 <F label="Patient Name *" err={errors.patient_name}>
-                  <I name="patient_name" value={form.patient_name} onChange={e => set('patient_name', e.target.value)} placeholder="Last, First" />
+                  <I name="patient_name" placeholder="Last, First" />
                 </F>
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, gridColumn:'span 2' }}>
-                <F label="Date Received *"><I type="date" name="date_received" value={form.date_received} onChange={e => set('date_received', e.target.value)} /></F>
+                <F label="Date Received *"><I name="date_received" type="date" /></F>
                 <F label="Status"><S name="referral_status" opts={STATUSES} /></F>
                 <F label="Referral Type"><S name="referral_type" opts={REFERRAL_TYPES} /></F>
               </div>
-              <F label="Date of Birth"><I type="date" name="dob" value={form.dob} onChange={e => set('dob', e.target.value)} /></F>
-              <F label="Phone Number"><I name="phone" value={form.phone} onChange={e => set('phone', e.target.value)} placeholder="(555) 000-0000" /></F>
+              <F label="Date of Birth"><I name="dob" type="date" /></F>
+              <F label="Phone Number"><I name="phone" placeholder="(555) 000-0000" /></F>
               <F label="Region *" err={errors.region}>
                 <select value={form.region} onChange={e => set('region', e.target.value)}
                   style={{ width:'100%', padding:'8px 10px', border:`1px solid ${errors.region?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
@@ -147,11 +157,11 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
                   {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
                 </select>
               </F>
-              <F label="County"><I name="county" value={form.county} onChange={e => set('county', e.target.value)} /></F>
-              <F label="City"><I name="city" value={form.city} onChange={e => set('city', e.target.value)} /></F>
-              <F label="Zip Code"><I name="zip_code" value={form.zip_code} onChange={e => set('zip_code', e.target.value)} /></F>
+              <F label="County"><I name="county" /></F>
+              <F label="City"><I name="city" /></F>
+              <F label="Zip Code"><I name="zip_code" /></F>
               <div style={{ gridColumn:'span 2' }}>
-                <F label="Full Address"><I name="location" value={form.location} onChange={e => set('location', e.target.value)} placeholder="Street address" /></F>
+                <F label="Full Address"><I name="location" placeholder="Street address" /></F>
               </div>
             </div>
           )}
@@ -159,25 +169,21 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
           {/* STEP 2: Insurance */}
           {step === 2 && (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-              <F label="Primary Insurance *" err={errors.insurance}>
-                <S name="insurance" opts={INSURANCES} />
-              </F>
-              <F label="Policy / Member ID"><I name="policy_number" value={form.policy_number} onChange={e => set('policy_number', e.target.value)} /></F>
-              <F label="Medicare Type (if applicable)">
+              <F label="Primary Insurance *" err={errors.insurance}><S name="insurance" opts={INSURANCES} /></F>
+              <F label="Policy / Member ID"><I name="policy_number" /></F>
+              <F label="Medicare Type">
                 <select value={form.medicare_type} onChange={e => set('medicare_type', e.target.value)}
                   style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
                   <option value="">— None / N/A —</option>
                   {['Part A','Part B','Part C (Medicare Advantage)','Part D','Medicare + Medicaid'].map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </F>
-              <F label="Secondary Insurance"><I name="secondary_insurance" value={form.secondary_insurance} onChange={e => set('secondary_insurance', e.target.value)} /></F>
-              <div style={{ gridColumn:'span 2' }}>
-                <F label="Secondary Insurance ID"><I name="secondary_id" value={form.secondary_id} onChange={e => set('secondary_id', e.target.value)} /></F>
-              </div>
+              <F label="Secondary Insurance"><I name="secondary_insurance" /></F>
+              <F label="Secondary ID"><I name="secondary_id" /></F>
               <F label="Chart Status"><S name="chart_status" opts={CHART_STATUSES} /></F>
-              <F label="Census Status"><I name="census_status" value={form.census_status} onChange={e => set('census_status', e.target.value)} /></F>
-              <F label="Welcome Call Completed"><I name="welcome_call" value={form.welcome_call} onChange={e => set('welcome_call', e.target.value)} placeholder="Date or 'No'" /></F>
-              <F label="First Appointment"><I name="first_appt" value={form.first_appt} onChange={e => set('first_appt', e.target.value)} placeholder="Date or 'Pending'" /></F>
+              <F label="Census Status"><I name="census_status" /></F>
+              <F label="Welcome Call"><I name="welcome_call" placeholder="Date or 'No'" /></F>
+              <F label="First Appointment"><I name="first_appt" placeholder="Date or 'Pending'" /></F>
             </div>
           )}
 
@@ -205,16 +211,72 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
           {/* STEP 4: Source & PCP */}
           {step === 4 && (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-              <div style={{ gridColumn:'span 2', fontSize:13, fontWeight:700, color:'var(--black)', paddingBottom:4, borderBottom:'1px solid var(--border)', marginBottom:4 }}>Referral Source</div>
-              <F label="Referral Source Name"><I name="referral_source" value={form.referral_source} onChange={e => set('referral_source', e.target.value)} placeholder="Hospital, clinic, physician…" /></F>
-              <F label="Referral Source Phone"><I name="referral_source_phone" value={form.referral_source_phone} onChange={e => set('referral_source_phone', e.target.value)} /></F>
-              <F label="Referral Source Fax"><I name="referral_source_fax" value={form.referral_source_fax} onChange={e => set('referral_source_fax', e.target.value)} /></F>
+              <div style={{ gridColumn:'span 2', fontSize:13, fontWeight:700, color:'var(--black)', paddingBottom:4, borderBottom:'1px solid var(--border)' }}>Referral Source</div>
+              <F label="Source Name"><I name="referral_source" placeholder="Hospital, clinic, physician…" /></F>
+              <F label="Source Phone"><I name="referral_source_phone" /></F>
+              <F label="Source Fax"><I name="referral_source_fax" /></F>
               <div />
+              <div style={{ gridColumn:'span 2', fontSize:13, fontWeight:700, color:'var(--black)', paddingBottom:4, borderBottom:'1px solid var(--border)', marginTop:8 }}>Primary Care Physician</div>
+              <F label="PCP Name"><I name="pcp_name" /></F>
+              <F label="PCP Phone"><I name="pcp_phone" /></F>
+              <F label="PCP Fax"><I name="pcp_fax" /></F>
+            </div>
+          )}
 
-              <div style={{ gridColumn:'span 2', fontSize:13, fontWeight:700, color:'var(--black)', paddingBottom:4, borderBottom:'1px solid var(--border)', marginTop:8, marginBottom:4 }}>Primary Care Physician</div>
-              <F label="PCP Name"><I name="pcp_name" value={form.pcp_name} onChange={e => set('pcp_name', e.target.value)} /></F>
-              <F label="PCP Phone"><I name="pcp_phone" value={form.pcp_phone} onChange={e => set('pcp_phone', e.target.value)} /></F>
-              <F label="PCP Fax"><I name="pcp_fax" value={form.pcp_fax} onChange={e => set('pcp_fax', e.target.value)} /></F>
+          {/* STEP 5: Documents */}
+          {step === 5 && (
+            <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+              <div style={{ fontSize:14, fontWeight:600, color:'var(--black)' }}>Attach Referral Document</div>
+              <div style={{ fontSize:13, color:'var(--gray)', lineHeight:1.6 }}>
+                Upload the original referral from the PCP or hospital. Accepted formats: PDF, JPG, PNG, TIFF, DOC, DOCX (max 50MB).
+              </div>
+
+              {/* Drop zone */}
+              <div
+                onClick={() => fileRef.current?.click()}
+                onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor='var(--red)'; e.currentTarget.style.background='#FEF2F2'; }}
+                onDragLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--bg)'; }}
+                onDrop={e => {
+                  e.preventDefault();
+                  e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--bg)';
+                  const f = e.dataTransfer.files[0];
+                  if (f) { const fakeEvt = { target: { files: [f] } }; handleFileChange(fakeEvt); }
+                }}
+                style={{ border:'2px dashed var(--border)', borderRadius:12, padding:'32px 24px', textAlign:'center', cursor:'pointer', background:'var(--bg)', transition:'all 0.15s' }}>
+                <div style={{ fontSize:32, marginBottom:12 }}>📄</div>
+                {file ? (
+                  <>
+                    <div style={{ fontSize:14, fontWeight:700, color:'#065F46', marginBottom:4 }}>✓ {file.name}</div>
+                    <div style={{ fontSize:12, color:'var(--gray)' }}>{(file.size / 1024 / 1024).toFixed(2)} MB · Click to replace</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize:14, fontWeight:600, color:'var(--black)', marginBottom:4 }}>Click to upload or drag & drop</div>
+                    <div style={{ fontSize:12, color:'var(--gray)' }}>PDF, JPG, PNG, TIFF, DOC, DOCX · max 50MB</div>
+                  </>
+                )}
+                <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.tiff,.doc,.docx" onChange={handleFileChange} style={{ display:'none' }} />
+              </div>
+
+              {errors.file && (
+                <div style={{ fontSize:12, color:'#DC2626', fontWeight:600 }}>⚠ {errors.file}</div>
+              )}
+
+              {file && (
+                <div style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', background:'#ECFDF5', border:'1px solid #10B981', borderRadius:8 }}>
+                  <span style={{ fontSize:20 }}>📎</span>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:13, fontWeight:600, color:'#065F46' }}>{file.name}</div>
+                    <div style={{ fontSize:11, color:'#065F46' }}>{(file.size / 1024 / 1024).toFixed(2)} MB — will be uploaded on submit</div>
+                  </div>
+                  <button onClick={() => { setFile(null); if (fileRef.current) fileRef.current.value=''; }}
+                    style={{ background:'none', border:'none', color:'#DC2626', cursor:'pointer', fontSize:16, lineHeight:1 }}>×</button>
+                </div>
+              )}
+
+              <div style={{ padding:16, background:'#FEF3C7', border:'1px solid #F59E0B', borderRadius:8, fontSize:12, color:'#92400E' }}>
+                <strong>Note:</strong> The referral document will be securely stored and linked to this patient's record. You can also upload documents later from the Patient Census profile.
+              </div>
             </div>
           )}
         </div>
@@ -225,16 +287,19 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
             style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:step===1?'not-allowed':'pointer', opacity:step===1?0.4:1 }}>
             ← Previous
           </button>
-          <div style={{ display:'flex', gap:8 }}>
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            {step === 5 && !file && (
+              <span style={{ fontSize:12, color:'var(--gray)' }}>No document attached (optional)</span>
+            )}
             {step < totalSteps ? (
-              <button onClick={() => setStep(s => Math.min(totalSteps, s+1))}
+              <button onClick={() => setStep(s => s+1)}
                 style={{ padding:'8px 20px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
                 Next →
               </button>
             ) : (
               <button onClick={handleSave} disabled={saving}
                 style={{ padding:'8px 24px', background:'var(--red)', color:'#fff', border:'none', borderRadius:7, fontSize:14, fontWeight:700, cursor:saving?'wait':'pointer' }}>
-                {saving ? 'Saving…' : '✓ Submit Referral'}
+                {saving ? (file ? 'Uploading & Saving…' : 'Saving…') : '✓ Submit Referral'}
               </button>
             )}
           </div>

@@ -4,10 +4,10 @@ import { supabase } from '../../lib/supabase';
 
 // Regional Managers (not care coordinators)
 const REGIONAL_MANAGERS = {
-  A: 'Gypsy Renos',
-  B: 'Mary Imperio', C: 'Mary Imperio', G: 'Mary Imperio',
-  H: 'Audrey Sarmiento', J: 'Audrey Sarmiento', M: 'Audrey Sarmiento', N: 'Audrey Sarmiento',
-  T: 'April Manalo', V: 'April Manalo',
+  A: 'Uma Jacobs',
+  B: 'Lia Davis', C: 'Earl Dimaano', G: 'Samantha Faliks',
+  H: 'Kaylee Ramsey', J: 'Hollie Fincher', M: 'Ariel Maboudi', N: 'Ariel Maboudi',
+  T: 'Samantha Faliks', V: 'Samantha Faliks',
 };
 
 const REGION_ORDER = ['A','B','C','G','H','J','M','N','T','V'];

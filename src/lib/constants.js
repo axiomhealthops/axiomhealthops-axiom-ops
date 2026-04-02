@@ -39,16 +39,16 @@ export const METRICS = {
 };
 
 export const REGIONS = {
-  A: 'Gypsy Renos',
-  B: 'Mary Imperio',
-  C: 'Mary Imperio',
-  G: 'Mary Imperio',
-  H: 'Audrey Sarmiento',
-  J: 'Audrey Sarmiento',
-  M: 'Audrey Sarmiento',
-  N: 'Audrey Sarmiento',
-  T: 'April Manalo',
-  V: 'April Manalo',
+  A: 'Uma Jacobs',
+  B: 'Lia Davis',
+  C: 'Earl Dimaano',
+  G: 'Samantha Faliks',
+  H: 'Kaylee Ramsey',
+  J: 'Hollie Fincher',
+  M: 'Ariel Maboudi',
+  N: 'Ariel Maboudi',
+  T: 'Samantha Faliks',
+  V: 'Samantha Faliks',
 };
 
 export const SETTINGS_PIN = '2208';
