@@ -12,21 +12,23 @@ import UserManagementPage from './dashboard/UserManagementPage';
 import DailyReportsPage from './dashboard/DailyReportsPage';
 import ExecutiveReportPage from './dashboard/ExecutiveReportPage';
 import ProductivityPage from './dashboard/ProductivityPage';
+import IntakeDashboardPage from './dashboard/IntakeDashboardPage';
 import CoordinatorRouter from './CoordinatorRouter';
  
 var PAGE_COMPONENTS = {
-  overview: OverviewPage,
-  uploads: UploadsPage,
-  visits: VisitSchedulePage,
-  census: PatientCensusPage,
-  auth: AuthTrackerPage,
-  actions: ActionListPage,
-  expansion: ExpansionPage,
-  'on-hold': OnHoldRecoveryPage,
-  users: UserManagementPage,
-  'daily-reports': DailyReportsPage,
-  'exec-report': ExecutiveReportPage,
-  productivity: ProductivityPage,
+  overview:             OverviewPage,
+  uploads:              UploadsPage,
+  visits:               VisitSchedulePage,
+  census:               PatientCensusPage,
+  auth:                 AuthTrackerPage,
+  actions:              ActionListPage,
+  expansion:            ExpansionPage,
+  'on-hold':            OnHoldRecoveryPage,
+  users:                UserManagementPage,
+  'daily-reports':      DailyReportsPage,
+  'exec-report':        ExecutiveReportPage,
+  productivity:         ProductivityPage,
+  intake:               IntakeDashboardPage,
   'coordinator-portal': CoordinatorRouter,
 };
  
@@ -37,7 +39,6 @@ function ComingSoon(props) {
       <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--black)', textTransform: 'capitalize' }}>
         {(props.page || '').replace(/-/g, ' ')}
       </div>
-      <div style={{ marginTop: 12, fontSize: 14, color: 'var(--gray)' }}>This page is being built.</div>
     </div>
   );
 }
