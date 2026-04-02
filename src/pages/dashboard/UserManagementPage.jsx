@@ -41,13 +41,41 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
   }
 
   async function handleSetPassword() {
-    if (!newPwd || newPwd.length < 8) { setPwdMsg('Min 8 characters'); return; }
-    if (!user.user_id) { setPwdMsg('User has no auth account yet'); return; }
+    if (!newPwd || newPwd.length < 8) { setPwdMsg('Min 8 characters required'); return; }
+    if (!user.user_id) { setPwdMsg('No auth account linked — create one first via User Management'); return; }
     setSaving(true);
-    const { data } = await supabase.rpc('admin_update_user', { target_user_id: user.user_id, new_password: newPwd });
-    setPwdMsg(data?.success ? '✓ Password updated' : 'Error: ' + (data?.error||'unknown'));
+    setPwdMsg('');
+
+    // Try dedicated password function first, fall back to combined function
+    let result = null;
+    let rpcError = null;
+
+    const { data: d1, error: e1 } = await supabase.rpc('admin_set_password', {
+      target_user_id: user.user_id,
+      new_password: newPwd,
+    });
+
+    if (e1) {
+      // Fallback to original combined function
+      const { data: d2, error: e2 } = await supabase.rpc('admin_update_user', {
+        target_user_id: user.user_id,
+        new_password: newPwd,
+      });
+      result = d2;
+      rpcError = e2;
+    } else {
+      result = d1;
+    }
+
+    if (rpcError) {
+      setPwdMsg('RPC error: ' + rpcError.message);
+    } else if (result?.success) {
+      setPwdMsg('✓ Password updated successfully');
+      setNewPwd('');
+    } else {
+      setPwdMsg('Failed: ' + (result?.error || 'Unknown error — check Supabase RLS policies'));
+    }
     setSaving(false);
-    setNewPwd('');
   }
 
   async function handleSendReset() {
