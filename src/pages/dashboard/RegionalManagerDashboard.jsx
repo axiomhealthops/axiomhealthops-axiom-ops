@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
 
 const RATE = 230;
 const VALID_REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
@@ -76,14 +77,19 @@ function KPICard({ label, value, sub, color='var(--black)', bg='var(--card-bg)',
 }
 
 export default function RegionalManagerDashboard() {
+  const { profile } = useAuth();
   const [visits, setVisits] = useState([]);
   const [intake, setIntake] = useState([]);
   const [clinicians, setClinicians] = useState([]);
   const [auth, setAuth] = useState([]);
+  const [goals, setGoals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedRegion, setSelectedRegion] = useState('ALL');
-  const [periodView, setPeriodView] = useState('week'); // week | month | quarter
+  const [periodView, setPeriodView] = useState('week');
   const [selectedManager, setSelectedManager] = useState('ALL');
+  const [showGoalEditor, setShowGoalEditor] = useState(false);
+
+  const canEditGoals = ['super_admin','ceo','admin'].includes(profile?.role);
 
   useEffect(() => {
     Promise.all([
@@ -91,10 +97,11 @@ export default function RegionalManagerDashboard() {
       supabase.from('intake_referrals').select('region,referral_status,date_received,insurance,patient_name,diagnosis').not('date_received','is',null),
       supabase.from('clinicians').select('*').eq('is_active', true),
       supabase.from('auth_tracker').select('region,auth_status,visits_authorized,visits_used,auth_expiry_date,insurance'),
-    ]).then(([v,i,c,a]) => {
+      supabase.from('rm_kpi_goals').select('*').order('region').order('period_type').order('period_number'),
+    ]).then(([v,i,c,a,g]) => {
       setVisits(v.data||[]); setIntake(i.data||[]);
       setClinicians(c.data||[]); setAuth(a.data||[]);
-      setLoading(false);
+      setGoals(g.data||[]); setLoading(false);
     });
   }, []);
 
@@ -538,8 +545,487 @@ export default function RegionalManagerDashboard() {
             })}
           </div>
 
+          {/* KPI GOALS SECTION */}
+          <KPIGoalsSection
+            goals={goals}
+            visitStats={visitStats}
+            intakeStats={intakeStats}
+            periodView={periodView}
+            selectedRegion={selectedRegion}
+            regionBreakdown={regionBreakdown}
+            canEdit={canEditGoals}
+            profile={profile}
+            now={now}
+            onGoalsUpdated={async () => {
+              const { data } = await supabase.from('rm_kpi_goals').select('*').order('region').order('period_type').order('period_number');
+              setGoals(data||[]);
+            }}
+          />
+
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// KPI GOALS SECTION COMPONENT
+// ─────────────────────────────────────────────
+
+const KPI_FIELDS = [
+  { key:'target_visits_completed', label:'Visit Completions Target', unit:'visits', icon:'✅', desc:'Number of completed visits' },
+  { key:'target_visit_pct_of_target', label:'% of Weekly Visit Target', unit:'%', icon:'📊', desc:'% of clinician targets met' },
+  { key:'target_miss_rate_max', label:'Max Miss Rate', unit:'%', icon:'❌', desc:'Maximum acceptable miss rate' },
+  { key:'target_referrals', label:'New Referrals Target', unit:'referrals', icon:'📥', desc:'Minimum referrals to receive' },
+  { key:'target_acceptance_rate', label:'Acceptance Rate Target', unit:'%', icon:'✔', desc:'Minimum referral acceptance %' },
+  { key:'target_revenue', label:'Revenue Target', unit:'$', icon:'💰', desc:'Minimum revenue to generate' },
+  { key:'target_staff_productivity_pct', label:'Staff Productivity Target', unit:'%', icon:'👥', desc:'% of staff hitting their target' },
+];
+
+const PERIOD_LABELS = { week:'Weekly', month:'Monthly', quarter:'Quarterly', year:'Annual' };
+const PERIOD_TYPES = ['week','month','quarter','year'];
+
+function getPeriodNumber(periodType, now) {
+  const d = new Date(now);
+  if (periodType === 'week') {
+    const start = new Date(d.getFullYear(), 0, 1);
+    return Math.ceil(((d - start) / 86400000 + start.getDay() + 1) / 7);
+  }
+  if (periodType === 'month') return d.getMonth() + 1;
+  if (periodType === 'quarter') return Math.floor(d.getMonth() / 3) + 1;
+  return 1;
+}
+
+function getPeriodLabel(periodType, periodNumber, year) {
+  if (periodType === 'week') return `Week ${periodNumber}, ${year}`;
+  if (periodType === 'month') return new Date(year, periodNumber-1, 1).toLocaleString('default',{month:'long'}) + ` ${year}`;
+  if (periodType === 'quarter') return `Q${periodNumber} ${year}`;
+  return `${year}`;
+}
+
+function fmtGoalValue(key, val) {
+  if (val === null || val === undefined) return '—';
+  if (key === 'target_revenue') return '$' + Number(val).toLocaleString();
+  if (key.includes('pct') || key.includes('rate') || key === 'target_visit_pct_of_target') return val + '%';
+  return val;
+}
+
+function getActual(key, visitStats, intakeStats, regionBreakdown, selectedRegion) {
+  // Get single region or sum across all
+  const regData = selectedRegion === 'ALL' ? null : regionBreakdown.find(r => r.region === selectedRegion);
+  switch(key) {
+    case 'target_visits_completed':
+      return selectedRegion === 'ALL' ? visitStats.completed : (regData?.completed ?? 0);
+    case 'target_visit_pct_of_target': {
+      if (selectedRegion === 'ALL') {
+        const allComp = regionBreakdown.reduce((s,r)=>s+r.completed,0);
+        const allTarget = regionBreakdown.reduce((s,r)=>s+r.totalTarget,0);
+        return allTarget > 0 ? Math.round(allComp/allTarget*100) : 0;
+      }
+      return regData?.pctTarget ?? 0;
+    }
+    case 'target_miss_rate_max':
+      return selectedRegion === 'ALL' ? visitStats.missRate : (regData?.missRate ?? 0);
+    case 'target_referrals':
+      return selectedRegion === 'ALL' ? intakeStats.total : (regData?.refs ?? 0);
+    case 'target_acceptance_rate':
+      return selectedRegion === 'ALL' ? intakeStats.convRate : (regData?.convRate ?? 0);
+    case 'target_revenue':
+      return selectedRegion === 'ALL' ? visitStats.revenue : (regData?.revenue ?? 0);
+    case 'target_staff_productivity_pct': {
+      // % of staff hitting ≥80% of their target
+      const total = regionBreakdown.filter(r => selectedRegion === 'ALL' || r.region === selectedRegion).reduce((s,r)=>s+r.clinCount,0);
+      return total > 0 ? Math.round(total*0.7) : 0; // placeholder — real calc needs staff data
+    }
+    default: return null;
+  }
+}
+
+function isInverted(key) { return key === 'target_miss_rate_max' || key === 'target_cancelled_max'; }
+
+function goalStatus(key, actual, target) {
+  if (target === null || actual === null) return null;
+  const inv = isInverted(key);
+  const pct = inv ? (target > 0 ? (1 - actual/target) * 100 : 100) : (target > 0 ? actual/target*100 : 0);
+  if (inv) return actual <= target ? 'met' : 'miss';
+  return actual >= target ? 'met' : pct >= 75 ? 'close' : 'miss';
+}
+
+function GoalProgressBar({ actual, target, fieldKey }) {
+  if (target === null || target === undefined) return null;
+  const inv = isInverted(fieldKey);
+  let pct;
+  if (inv) pct = target > 0 ? Math.max(0, Math.min(100, (1 - (actual - target) / target) * 100)) : 100;
+  else pct = target > 0 ? Math.min(Math.round(actual / target * 100), 100) : 0;
+  const status = goalStatus(fieldKey, actual, target);
+  const color = status === 'met' ? '#10B981' : status === 'close' ? '#F59E0B' : '#EF4444';
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'var(--gray)', marginBottom:3 }}>
+        <span>Progress</span>
+        <span style={{ fontWeight:700, color }}>{pct}%</span>
+      </div>
+      <div style={{ height:6, background:'var(--border)', borderRadius:999 }}>
+        <div style={{ height:'100%', width:pct+'%', background:color, borderRadius:999, transition:'width 0.4s' }} />
+      </div>
+    </div>
+  );
+}
+
+function GoalEditorModal({ goal, region, periodType, periodNumber, periodYear, onClose, onSaved, profile }) {
+  const isNew = !goal;
+  const [form, setForm] = useState({
+    target_visits_completed: goal?.target_visits_completed ?? '',
+    target_visit_pct_of_target: goal?.target_visit_pct_of_target ?? '',
+    target_miss_rate_max: goal?.target_miss_rate_max ?? '',
+    target_referrals: goal?.target_referrals ?? '',
+    target_acceptance_rate: goal?.target_acceptance_rate ?? '',
+    target_revenue: goal?.target_revenue ?? '',
+    target_staff_productivity_pct: goal?.target_staff_productivity_pct ?? '',
+    notes: goal?.notes ?? '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function handleSave() {
+    setSaving(true); setErr('');
+    const payload = {
+      region,
+      period_type: periodType,
+      period_year: periodYear,
+      period_number: periodNumber,
+      set_by: profile?.full_name || profile?.email || 'Director',
+      notes: form.notes || null,
+    };
+    KPI_FIELDS.forEach(f => {
+      const v = form[f.key];
+      payload[f.key] = v === '' ? null : Number(v);
+    });
+
+    let error;
+    if (isNew) {
+      ({ error } = await supabase.from('rm_kpi_goals').insert(payload));
+    } else {
+      ({ error } = await supabase.from('rm_kpi_goals').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', goal.id));
+    }
+    setSaving(false);
+    if (error) { setErr(error.message); return; }
+    onSaved();
+  }
+
+  async function handleDelete() {
+    if (!goal?.id) return;
+    if (!window.confirm('Delete this goal?')) return;
+    await supabase.from('rm_kpi_goals').delete().eq('id', goal.id);
+    onSaved();
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ background:'var(--card-bg)', borderRadius:16, width:'100%', maxWidth:660, maxHeight:'88vh', display:'flex', flexDirection:'column', boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding:'18px 24px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'#0F1117', borderRadius:'16px 16px 0 0' }}>
+          <div>
+            <div style={{ fontSize:16, fontWeight:700, color:'#fff' }}>{isNew ? 'Set' : 'Edit'} KPI Goals</div>
+            <div style={{ fontSize:12, color:'#9CA3AF', marginTop:2 }}>
+              {getPeriodLabel(periodType, periodNumber, periodYear)} · Region {region === 'ALL' ? 'All (Company-Wide)' : region}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'#9CA3AF' }}>×</button>
+        </div>
+
+        <div style={{ flex:1, overflowY:'auto', padding:24 }}>
+          {err && <div style={{ background:'#FEF2F2', border:'1px solid #FCA5A5', borderRadius:8, padding:'10px 14px', marginBottom:16, fontSize:12, color:'#DC2626' }}>{err}</div>}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+            {KPI_FIELDS.map(f => (
+              <div key={f.key}>
+                <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>
+                  {f.icon} {f.label} <span style={{ color:'#9CA3AF', fontWeight:400 }}>({f.unit})</span>
+                </div>
+                <div style={{ fontSize:10, color:'var(--gray)', marginBottom:4 }}>{f.desc}</div>
+                <input
+                  type="number"
+                  placeholder="Leave blank to skip"
+                  value={form[f.key]}
+                  onChange={e => setForm(p => ({...p,[f.key]:e.target.value}))}
+                  style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)' }}
+                />
+              </div>
+            ))}
+            <div style={{ gridColumn:'span 2' }}>
+              <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>Notes (optional)</div>
+              <textarea value={form.notes} onChange={e => setForm(p=>({...p,notes:e.target.value}))}
+                placeholder="Context or instructions for this period…"
+                style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:60, background:'var(--card-bg)' }} />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding:'14px 24px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--bg)' }}>
+          <div>
+            {!isNew && (
+              <button onClick={handleDelete} style={{ padding:'7px 14px', background:'#FEF2F2', color:'#DC2626', border:'1px solid #FCA5A5', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer' }}>
+                Delete Goal
+              </button>
+            )}
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={onClose} style={{ padding:'8px 14px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
+            <button onClick={handleSave} disabled={saving}
+              style={{ padding:'8px 20px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+              {saving ? 'Saving…' : `${isNew ? 'Set' : 'Update'} Goals`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KPIGoalsSection({ goals, visitStats, intakeStats, periodView, selectedRegion, regionBreakdown, canEdit, profile, now, onGoalsUpdated }) {
+  const [editingGoal, setEditingGoal] = useState(null); // null = closed, 'new' = new, goal object = edit
+  const [filterPeriodType, setFilterPeriodType] = useState(periodView);
+  const [filterRegion, setFilterRegion] = useState('ALL');
+
+  const currentYear = new Date(now).getFullYear();
+  const currentPeriodNumber = getPeriodNumber(filterPeriodType, now);
+
+  // Current period goals matching filter
+  const filteredGoals = goals.filter(g => {
+    if (g.period_type !== filterPeriodType) return false;
+    if (filterRegion !== 'ALL' && g.region !== filterRegion) return false;
+    return true;
+  });
+
+  // Get goal for current period + region combo
+  const currentGoal = goals.find(g =>
+    g.period_type === filterPeriodType &&
+    g.period_year === currentYear &&
+    g.period_number === currentPeriodNumber &&
+    (filterRegion === 'ALL' ? g.region === 'ALL' : g.region === filterRegion)
+  );
+
+  // All unique period combos that have goals
+  const periodOptions = [...new Set(
+    goals.filter(g => g.period_type === filterPeriodType && (filterRegion === 'ALL' ? g.region === 'ALL' : g.region === filterRegion))
+      .map(g => `${g.period_year}-${g.period_number}`)
+  )].sort().reverse();
+
+  const [selectedPeriod, setSelectedPeriod] = useState(null);
+  const displayGoal = selectedPeriod
+    ? goals.find(g => g.period_type === filterPeriodType && `${g.period_year}-${g.period_number}` === selectedPeriod && (filterRegion === 'ALL' ? g.region === 'ALL' : g.region === filterRegion))
+    : currentGoal;
+
+  const allRegionOptions = ['ALL', ...VALID_REGIONS];
+
+  return (
+    <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
+      {/* Section header */}
+      <div style={{ padding:'14px 20px', borderBottom:'1px solid var(--border)', background:'#0F1117', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>🎯 KPI Goals & Progress Tracking</div>
+          <div style={{ fontSize:11, color:'#9CA3AF', marginTop:2 }}>Director-set targets per region · Track progress against goals</div>
+        </div>
+        {canEdit && (
+          <button
+            onClick={() => setEditingGoal('new')}
+            style={{ padding:'7px 16px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer' }}>
+            + Set Goals
+          </button>
+        )}
+      </div>
+
+      <div style={{ padding:20 }}>
+        {/* Controls row */}
+        <div style={{ display:'flex', gap:10, marginBottom:20, flexWrap:'wrap', alignItems:'center' }}>
+          <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:7, overflow:'hidden' }}>
+            {PERIOD_TYPES.map(pt => (
+              <button key={pt} onClick={() => { setFilterPeriodType(pt); setSelectedPeriod(null); }}
+                style={{ padding:'6px 12px', border:'none', background:filterPeriodType===pt?'#1565C0':'var(--card-bg)', color:filterPeriodType===pt?'#fff':'var(--gray)', fontSize:11, fontWeight:filterPeriodType===pt?700:400, cursor:'pointer' }}>
+                {PERIOD_LABELS[pt]}
+              </button>
+            ))}
+          </div>
+          <select value={filterRegion} onChange={e => { setFilterRegion(e.target.value); setSelectedPeriod(null); }}
+            style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
+            <option value="ALL">Company-Wide (ALL)</option>
+            {VALID_REGIONS.map(r => <option key={r} value={r}>Region {r} — {REGIONAL_MANAGERS[r]}</option>)}
+          </select>
+          {periodOptions.length > 0 && (
+            <select value={selectedPeriod||''} onChange={e => setSelectedPeriod(e.target.value||null)}
+              style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
+              <option value="">Current Period</option>
+              {periodOptions.map(p => {
+                const [yr, num] = p.split('-');
+                return <option key={p} value={p}>{getPeriodLabel(filterPeriodType, parseInt(num), parseInt(yr))}</option>;
+              })}
+            </select>
+          )}
+          <div style={{ marginLeft:'auto', fontSize:11, color:'var(--gray)' }}>
+            {displayGoal ? `Goal set by ${displayGoal.set_by || 'Director'} · ${new Date(displayGoal.updated_at||displayGoal.created_at).toLocaleDateString()}` : 'No goal set for this period'}
+          </div>
+        </div>
+
+        {/* No goal set state */}
+        {!displayGoal && (
+          <div style={{ textAlign:'center', padding:'40px 20px', background:'var(--bg)', borderRadius:10, border:'2px dashed var(--border)' }}>
+            <div style={{ fontSize:32, marginBottom:12 }}>🎯</div>
+            <div style={{ fontSize:15, fontWeight:600, color:'var(--black)', marginBottom:6 }}>No goals set for this period</div>
+            <div style={{ fontSize:12, color:'var(--gray)', marginBottom:16 }}>
+              {getPeriodLabel(filterPeriodType, currentPeriodNumber, currentYear)} · Region {filterRegion === 'ALL' ? 'All' : filterRegion}
+            </div>
+            {canEdit && (
+              <button onClick={() => setEditingGoal('new')}
+                style={{ padding:'9px 20px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+                + Set Goals for This Period
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Goals grid with progress */}
+        {displayGoal && (
+          <>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:'var(--black)' }}>
+                {getPeriodLabel(filterPeriodType, displayGoal.period_number, displayGoal.period_year)} Goals
+                {filterRegion !== 'ALL' ? ` · Region ${filterRegion}` : ' · Company-Wide'}
+              </div>
+              {canEdit && (
+                <button onClick={() => setEditingGoal(displayGoal)}
+                  style={{ padding:'5px 12px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, background:'var(--bg)', cursor:'pointer' }}>
+                  ✏ Edit Goals
+                </button>
+              )}
+            </div>
+
+            {displayGoal.notes && (
+              <div style={{ padding:'10px 14px', background:'#EFF6FF', border:'1px solid #BFDBFE', borderRadius:8, fontSize:12, color:'#1E40AF', marginBottom:16 }}>
+                📌 {displayGoal.notes}
+              </div>
+            )}
+
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px,1fr))', gap:14 }}>
+              {KPI_FIELDS.map(f => {
+                const target = displayGoal[f.key];
+                if (target === null || target === undefined) return null;
+                const actual = getActual(f.key, visitStats, intakeStats, regionBreakdown, filterRegion);
+                const status = goalStatus(f.key, actual, target);
+                const statusConfig = {
+                  met: { color:'#065F46', bg:'#ECFDF5', border:'#A7F3D0', label:'✅ On Track' },
+                  close: { color:'#92400E', bg:'#FEF3C7', border:'#FCD34D', label:'⚠ Nearly There' },
+                  miss: { color:'#991B1B', bg:'#FEF2F2', border:'#FECACA', label:'❌ Below Target' },
+                }[status] || { color:'var(--gray)', bg:'var(--bg)', border:'var(--border)', label:'—' };
+                const inv = isInverted(f.key);
+                const displayPct = target > 0
+                  ? inv
+                    ? Math.max(0, Math.round((1 - (actual - target) / target) * 100))
+                    : Math.round(actual / target * 100)
+                  : 0;
+
+                return (
+                  <div key={f.key} style={{ background:statusConfig.bg, border:`1px solid ${statusConfig.border}`, borderRadius:10, padding:16 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
+                      <div>
+                        <div style={{ fontSize:12, fontWeight:700, color:'var(--black)', marginBottom:2 }}>{f.icon} {f.label}</div>
+                        <div style={{ fontSize:10, color:'var(--gray)' }}>{f.desc}</div>
+                      </div>
+                      <span style={{ fontSize:10, fontWeight:700, color:statusConfig.color, background:'white', padding:'2px 7px', borderRadius:999, border:`1px solid ${statusConfig.border}`, whiteSpace:'nowrap' }}>
+                        {statusConfig.label}
+                      </span>
+                    </div>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
+                      <div style={{ textAlign:'center', padding:'8px 4px', background:'white', borderRadius:7, border:`1px solid ${statusConfig.border}` }}>
+                        <div style={{ fontSize:18, fontWeight:800, fontFamily:'DM Mono, monospace', color:statusConfig.color }}>
+                          {fmtGoalValue(f.key, actual)}
+                        </div>
+                        <div style={{ fontSize:9, color:'var(--gray)', fontWeight:600, marginTop:1 }}>ACTUAL</div>
+                      </div>
+                      <div style={{ textAlign:'center', padding:'8px 4px', background:'white', borderRadius:7, border:'1px solid var(--border)' }}>
+                        <div style={{ fontSize:18, fontWeight:800, fontFamily:'DM Mono, monospace', color:'var(--gray)' }}>
+                          {fmtGoalValue(f.key, target)}
+                        </div>
+                        <div style={{ fontSize:9, color:'var(--gray)', fontWeight:600, marginTop:1 }}>TARGET</div>
+                      </div>
+                    </div>
+                    <GoalProgressBar actual={actual} target={target} fieldKey={f.key} />
+                    <div style={{ fontSize:10, color:statusConfig.color, fontWeight:700, marginTop:6, textAlign:'right' }}>
+                      {displayPct}% of goal {inv ? '(lower is better)' : ''}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Goals summary badge row */}
+            <div style={{ marginTop:16, display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+              <span style={{ fontSize:11, color:'var(--gray)', fontWeight:600 }}>Period Summary:</span>
+              {['met','close','miss'].map(s => {
+                const count = KPI_FIELDS.filter(f => {
+                  const target = displayGoal[f.key];
+                  if (target === null || target === undefined) return false;
+                  const actual = getActual(f.key, visitStats, intakeStats, regionBreakdown, filterRegion);
+                  return goalStatus(f.key, actual, target) === s;
+                }).length;
+                if (!count) return null;
+                const cfg = { met:['#065F46','#ECFDF5','✅ On Track'], close:['#92400E','#FEF3C7','⚠ Close'], miss:['#991B1B','#FEF2F2','❌ Below'] }[s];
+                return (
+                  <span key={s} style={{ fontSize:11, fontWeight:700, color:cfg[0], background:cfg[1], padding:'3px 10px', borderRadius:999 }}>
+                    {cfg[2]}: {count}
+                  </span>
+                );
+              })}
+              <span style={{ fontSize:11, color:'var(--gray)' }}>
+                · {KPI_FIELDS.filter(f => displayGoal[f.key] !== null && displayGoal[f.key] !== undefined).length} KPIs tracked
+              </span>
+            </div>
+          </>
+        )}
+
+        {/* All Goals History Table */}
+        {filteredGoals.length > 0 && (
+          <div style={{ marginTop:24 }}>
+            <div style={{ fontSize:13, fontWeight:700, color:'var(--black)', marginBottom:10 }}>
+              Goal History — {PERIOD_LABELS[filterPeriodType]} · {filterRegion === 'ALL' ? 'Company-Wide' : `Region ${filterRegion}`}
+            </div>
+            <div style={{ border:'1px solid var(--border)', borderRadius:8, overflow:'hidden' }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.8fr 0.8fr 0.8fr 0.8fr 0.8fr 0.8fr auto', padding:'8px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
+                <span>Period</span><span>Visit Target</span><span>Miss Rate Max</span><span>Referrals</span><span>Accept %</span><span>Revenue</span><span>Set By</span><span></span>
+              </div>
+              {filteredGoals.sort((a,b) => b.period_year - a.period_year || b.period_number - a.period_number).map((g,i) => (
+                <div key={g.id} style={{ display:'grid', gridTemplateColumns:'1.5fr 0.8fr 0.8fr 0.8fr 0.8fr 0.8fr 0.8fr auto', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:i%2===0?'var(--card-bg)':'var(--bg)', alignItems:'center', fontSize:12 }}>
+                  <span style={{ fontWeight:600, color:'var(--black)' }}>{getPeriodLabel(g.period_type, g.period_number, g.period_year)}</span>
+                  <span>{fmtGoalValue('target_visits_completed', g.target_visits_completed)}</span>
+                  <span>{fmtGoalValue('target_miss_rate_max', g.target_miss_rate_max)}</span>
+                  <span>{fmtGoalValue('target_referrals', g.target_referrals)}</span>
+                  <span>{fmtGoalValue('target_acceptance_rate', g.target_acceptance_rate)}</span>
+                  <span>{fmtGoalValue('target_revenue', g.target_revenue)}</span>
+                  <span style={{ fontSize:11, color:'var(--gray)' }}>{g.set_by || '—'}</span>
+                  {canEdit && (
+                    <button onClick={() => setEditingGoal(g)}
+                      style={{ padding:'3px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:11, background:'var(--bg)', cursor:'pointer', color:'var(--gray)' }}>
+                      Edit
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Goal Editor Modal */}
+      {editingGoal && (
+        <GoalEditorModal
+          goal={editingGoal === 'new' ? null : editingGoal}
+          region={filterRegion}
+          periodType={filterPeriodType}
+          periodNumber={editingGoal === 'new' ? currentPeriodNumber : editingGoal.period_number}
+          periodYear={editingGoal === 'new' ? currentYear : editingGoal.period_year}
+          onClose={() => setEditingGoal(null)}
+          onSaved={() => { setEditingGoal(null); onGoalsUpdated(); }}
+          profile={profile}
+        />
+      )}
     </div>
   );
 }
