@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import ManualIntakeEntry from './ManualIntakeEntry';
 
 // ── helpers ──────────────────────────────────────────────────────────
 function sd(v) {
@@ -190,6 +191,7 @@ export default function IntakeDashboardPage() {
   const [typeFilter, setTypeFilter] = useState('ALL');
   const [activeTab, setActiveTab] = useState('overview');
   const [showImport, setShowImport] = useState(false);
+  const [showManualEntry, setShowManualEntry] = useState(false);
   const [sortField, setSortField] = useState('date_desc');
   // Audit tab state (lifted to avoid hooks-in-render violation)
   const [auditSearch, setAuditSearch] = useState('');
@@ -364,14 +366,27 @@ export default function IntakeDashboardPage() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar
         title="Intake Dashboard"
-        subtitle={stats.total.toLocaleString() + ' referrals \u00b7 ' + stats.acceptRate + '% accept rate'}
+        subtitle={stats.total.toLocaleString() + ' referrals · ' + stats.acceptRate + '% accept rate'}
         actions={
-          <button onClick={() => setShowImport(v => !v)}
-            style={{ padding: '7px 14px', background: showImport ? 'var(--border)' : 'var(--red)', color: showImport ? 'var(--black)' : '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-            {showImport ? 'Close Import' : '↑ Import XLSX'}
-          </button>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={() => setShowManualEntry(true)}
+              style={{ padding:'7px 14px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer' }}>
+              + New Referral
+            </button>
+            <button onClick={() => setShowImport(v => !v)}
+              style={{ padding:'7px 14px', background:showImport?'var(--border)':'var(--red)', color:showImport?'var(--black)':'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer' }}>
+              {showImport ? 'Close Import' : '↑ Import XLSX'}
+            </button>
+          </div>
         }
       />
+
+      {showManualEntry && (
+        <ManualIntakeEntry
+          onClose={() => setShowManualEntry(false)}
+          onSaved={() => { setShowManualEntry(false); fetchRecords(); }}
+        />
+      )}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* Import panel */}
