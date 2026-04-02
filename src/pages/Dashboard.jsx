@@ -3,6 +3,7 @@ import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../hooks/useAuth';
 
 import OverviewPage from './dashboard/OverviewPage';
+import LiveAlertsPage from './dashboard/LiveAlertsPage';
 import UploadsPage from './dashboard/UploadsPage';
 import VisitSchedulePage from './dashboard/VisitSchedulePage';
 import PatientCensusPage from './dashboard/PatientCensusPage';
@@ -25,6 +26,7 @@ import ExpansionPage from './dashboard/ExpansionPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
+  alerts:               LiveAlertsPage,
   uploads:              UploadsPage,
   visits:               VisitSchedulePage,
   census:               PatientCensusPage,

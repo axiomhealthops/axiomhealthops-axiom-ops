@@ -32,7 +32,7 @@ function fmtDollar(n) {
 export default function RevenuePage() {
   const [visits, setVisits] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState('weekly'); // weekly | daily
+  const [viewMode, setViewMode] = useState('clinician'); // clinician | region | insurance
 
   useEffect(() => {
     supabase.from('visit_schedule_data')
@@ -133,9 +133,22 @@ export default function RevenuePage() {
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
 
+    // By region
+    const regionMap = {};
+    billable.forEach(v => {
+      const k = v.region || 'Unknown';
+      if (!regionMap[k]) regionMap[k] = { visits: 0, revenue: 0 };
+      regionMap[k].visits++;
+      regionMap[k].revenue += RATE;
+    });
+    const byRegion = Object.entries(regionMap)
+      .filter(([r]) => r !== 'Unknown' && r !== 'All')
+      .map(([region, d]) => ({ region, ...d }))
+      .sort((a, b) => a.region.localeCompare(b.region)); // alphabetical by region
+
     const maxWeekRev = weeks.length > 0 ? Math.max(...weeks.map(w => w.revenue), 1) : 1;
 
-    return { totalCompleted, totalRevenue, scheduled, projectedRevenue, cancelled, missed, lostRevenue, weeks, byClinician, byInsurance, maxWeekRev };
+    return { totalCompleted, totalRevenue, scheduled, projectedRevenue, cancelled, missed, lostRevenue, weeks, byClinician, byInsurance, byRegion, maxWeekRev };
   }, [visits]);
 
   const TILE = { flex: 1, padding: '14px 18px', borderRight: '1px solid var(--border)', textAlign: 'center' };
@@ -207,55 +220,73 @@ export default function RevenuePage() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-            {/* Top Clinicians */}
-            <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Revenue by Clinician (Top 15)</div>
-              <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Completed visits only · $230/visit</div>
-              {stats.byClinician.map((c, i) => (
-                <div key={c.name} style={{ marginBottom: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
-                    <span style={{ fontWeight: 500, color: 'var(--black)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>{c.name}</span>
-                    <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: '#065F46', flexShrink: 0 }}>{fmtDollar(c.revenue)} <span style={{ color: 'var(--gray)', fontWeight: 400, fontSize: 10 }}>({c.visits}v)</span></span>
-                  </div>
-                  <div style={{ height: 6, background: 'var(--border)', borderRadius: 999 }}>
-                    <div style={{ height: '100%', width: (c.revenue / stats.byClinician[0].revenue * 100) + '%', background: '#10B981', borderRadius: 999 }} />
-                  </div>
-                </div>
+          <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+            {/* Tab header */}
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
+              {[['clinician','By Clinician'],['region','By Region'],['insurance','By Insurance']].map(([key, label]) => (
+                <button key={key} onClick={() => setViewMode(key)}
+                  style={{ padding: '10px 20px', border: 'none', background: 'none', fontSize: 13, fontWeight: viewMode === key ? 700 : 400, color: viewMode === key ? 'var(--black)' : 'var(--gray)', borderBottom: viewMode === key ? '2px solid var(--red)' : '2px solid transparent', cursor: 'pointer' }}>
+                  {label}
+                </button>
               ))}
             </div>
-
-            {/* By Insurance */}
-            <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Revenue by Insurance (Top 10)</div>
-              <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Which payers generate the most revenue</div>
-              {stats.byInsurance.map((ins) => (
-                <div key={ins.ins} style={{ marginBottom: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
-                    <span style={{ fontWeight: 500, color: 'var(--black)' }}>{ins.ins}</span>
-                    <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: '#1565C0' }}>{fmtDollar(ins.revenue)} <span style={{ color: 'var(--gray)', fontWeight: 400, fontSize: 10 }}>({ins.visits}v)</span></span>
-                  </div>
-                  <div style={{ height: 6, background: 'var(--border)', borderRadius: 999 }}>
-                    <div style={{ height: '100%', width: (ins.revenue / stats.byInsurance[0].revenue * 100) + '%', background: '#1565C0', borderRadius: 999 }} />
-                  </div>
-                </div>
-              ))}
-
-              {/* Lost revenue breakdown */}
-              <div style={{ marginTop: 20, padding: 14, background: '#FEF2F2', borderRadius: 10, border: '1px solid #FCA5A5' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#DC2626', marginBottom: 8 }}>Lost Revenue Breakdown</div>
-                {[
-                  { label: 'Cancellations', count: stats.cancelled, rev: stats.cancelled * RATE },
-                  { label: 'Missed Visits', count: stats.missed, rev: stats.missed * RATE },
-                ].map(item => (
-                  <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12 }}>
-                    <span style={{ color: '#7F1D1D' }}>{item.label} ({item.count})</span>
-                    <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: '#DC2626' }}>{fmtDollar(item.rev)}</span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+              {/* Left: chart */}
+              <div style={{ padding: 20, borderRight: '1px solid var(--border)' }}>
+                {viewMode === 'clinician' && stats.byClinician.map((c, i) => (
+                  <div key={c.name} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                      <span style={{ fontWeight: 500, color: 'var(--black)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>{c.name}</span>
+                      <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: '#065F46', flexShrink: 0 }}>{fmtDollar(c.revenue)} <span style={{ color: 'var(--gray)', fontWeight: 400, fontSize: 10 }}>({c.visits}v)</span></span>
+                    </div>
+                    <div style={{ height: 6, background: 'var(--border)', borderRadius: 999 }}>
+                      <div style={{ height: '100%', width: (c.revenue / stats.byClinician[0].revenue * 100) + '%', background: '#10B981', borderRadius: 999 }} />
+                    </div>
                   </div>
                 ))}
-                <div style={{ borderTop: '1px solid #FCA5A5', paddingTop: 6, display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700 }}>
-                  <span style={{ color: '#7F1D1D' }}>Total Lost</span>
-                  <span style={{ fontFamily: 'DM Mono, monospace', color: '#DC2626' }}>{fmtDollar(stats.lostRevenue)}</span>
+                {viewMode === 'region' && stats.byRegion.map(r => (
+                  <div key={r.region} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                      <span style={{ fontWeight: 700, color: 'var(--black)', fontSize: 14 }}>Region {r.region}</span>
+                      <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: '#065F46', flexShrink: 0 }}>{fmtDollar(r.revenue)} <span style={{ color: 'var(--gray)', fontWeight: 400, fontSize: 10 }}>({r.visits}v)</span></span>
+                    </div>
+                    <div style={{ height: 6, background: 'var(--border)', borderRadius: 999 }}>
+                      <div style={{ height: '100%', width: stats.byRegion.length > 0 ? (r.revenue / Math.max(...stats.byRegion.map(x=>x.revenue)) * 100) + '%' : '0%', background: '#7C3AED', borderRadius: 999 }} />
+                    </div>
+                  </div>
+                ))}
+                {viewMode === 'insurance' && stats.byInsurance.map(ins => (
+                  <div key={ins.ins} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                      <span style={{ fontWeight: 500, color: 'var(--black)' }}>{ins.ins}</span>
+                      <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: '#1565C0' }}>{fmtDollar(ins.revenue)} <span style={{ color: 'var(--gray)', fontWeight: 400, fontSize: 10 }}>({ins.visits}v)</span></span>
+                    </div>
+                    <div style={{ height: 6, background: 'var(--border)', borderRadius: 999 }}>
+                      <div style={{ height: '100%', width: (ins.revenue / stats.byInsurance[0].revenue * 100) + '%', background: '#1565C0', borderRadius: 999 }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* Right: lost revenue breakdown */}
+              <div style={{ padding: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Revenue Efficiency</div>
+                <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Earned vs lost this period</div>
+                {[
+                  { label: 'Revenue Earned', val: fmtDollar(stats.totalRevenue), color: '#065F46', bg: '#ECFDF5', pct: 100 },
+                  { label: 'Projected Pipeline', val: fmtDollar(stats.projectedRevenue), color: '#1565C0', bg: '#EFF6FF', pct: Math.round(stats.projectedRevenue/Math.max(stats.totalRevenue+stats.projectedRevenue,1)*100) },
+                  { label: `Cancellations (${stats.cancelled})`, val: fmtDollar(stats.cancelled*RATE), color: '#DC2626', bg: '#FEF2F2', pct: null },
+                  { label: `Missed Visits (${stats.missed})`, val: fmtDollar(stats.missed*RATE), color: '#D97706', bg: '#FEF3C7', pct: null },
+                ].map(item => (
+                  <div key={item.label} style={{ padding: '12px 14px', background: item.bg, borderRadius: 8, marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: item.color }}>{item.label}</span>
+                      <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: item.color, fontSize: 14 }}>{item.val}</span>
+                    </div>
+                  </div>
+                ))}
+                <div style={{ marginTop: 16, padding: '12px 14px', background: '#FEF2F2', borderRadius: 10, border: '1px solid #FCA5A5' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#DC2626', marginBottom: 4 }}>Total Lost Revenue</div>
+                  <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 20, fontWeight: 800, color: '#DC2626' }}>{fmtDollar(stats.lostRevenue)}</div>
                 </div>
               </div>
             </div>

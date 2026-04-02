@@ -133,17 +133,22 @@ export default function GrowthTrackerPage() {
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Monthly Referral Intake (14 Months)</div>
           <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Total, accepted, and denied referrals per month</div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 140 }}>
+          {stats.intakeMonths.length === 0 ? (
+            <div style={{ padding:'20px 0', color:'var(--gray)', fontSize:13 }}>No intake data available — re-import your XLSX to populate dates.</div>
+          ) : (
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 140 }}>
             {stats.intakeMonths.map((m) => {
-              const tH = Math.max((m.total/stats.maxIntake)*120,4);
-              const aH = Math.max((m.accepted/stats.maxIntake)*120,2);
+              const maxH = Math.max(stats.maxIntake, 1);
+              const tH = Math.max((m.total/maxH)*120,4);
+              const aH = m.total > 0 ? Math.max((m.accepted/m.total)*tH, 2) : 0;
+              const dH = tH - aH;
               const pct = m.total>0?Math.round((m.accepted/m.total)*100):0;
               return (
                 <div key={m.k} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
                   <div style={{ fontSize:8, color:'var(--gray)', fontWeight:500 }}>{pct}%</div>
-                  <div style={{ width:'100%', height:tH, position:'relative', display:'flex', alignItems:'flex-end' }}>
-                    <div style={{ position:'absolute', bottom:0, width:'100%', height:tH, background:'#E5E7EB', borderRadius:'3px 3px 0 0' }} />
-                    <div style={{ position:'absolute', bottom:0, width:'100%', height:aH, background:'#10B981', borderRadius:'3px 3px 0 0' }} />
+                  <div style={{ width:'100%', height:tH, display:'flex', flexDirection:'column', borderRadius:'3px 3px 0 0', overflow:'hidden' }}>
+                    <div style={{ width:'100%', height:dH, background:'#FCA5A5', flexShrink:0 }} />
+                    <div style={{ width:'100%', flex:1, background:'#10B981' }} />
                   </div>
                   <div style={{ fontSize:8, color:'var(--gray)', textAlign:'center' }}>{m.label}</div>
                   <div style={{ fontSize:9, fontWeight:700 }}>{m.total}</div>
@@ -151,8 +156,9 @@ export default function GrowthTrackerPage() {
               );
             })}
           </div>
+          )}
           <div style={{ display:'flex', gap:16, marginTop:10 }}>
-            {[['#10B981','Accepted'],['#E5E7EB','Total (denied in gray)']].map(([c,l])=>(
+            {[['#10B981','Accepted'],['#FCA5A5','Denied']].map(([c,l])=>(
               <div key={l} style={{ display:'flex', alignItems:'center', gap:5, fontSize:11 }}>
                 <div style={{ width:10, height:10, background:c, border:'1px solid var(--border)', borderRadius:2 }} />{l}
               </div>
