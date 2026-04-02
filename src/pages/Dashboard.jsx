@@ -24,6 +24,7 @@ import StaffDirectoryPage from './dashboard/StaffDirectoryPage';
 import RegionsPage from './dashboard/RegionsPage';
 import ExpansionPage from './dashboard/ExpansionPage';
 import ReportsExportPage from './dashboard/ReportsExportPage';
+import RegionalManagerDashboard from './dashboard/RegionalManagerDashboard';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -48,6 +49,7 @@ const PAGE_COMPONENTS = {
   regions:              RegionsPage,
   expansion:            ExpansionPage,
   reports:              ReportsExportPage,
+  'rm-dashboard':       RegionalManagerDashboard,
 };
 
 function AccessDenied() {

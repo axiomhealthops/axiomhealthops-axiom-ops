@@ -21,7 +21,7 @@ const PAGE_ICONS = {
   auth: '🔐',
   'coordinator-portal': '👩‍💼',
   productivity: '📊', revenue: '💰', growth: '📈', scorecard: '🎯',
-  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤',
+  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯',
   users: '👥', uploads: '↑', settings: '⚙',
 };
 
