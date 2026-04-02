@@ -5,6 +5,7 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
+  const [user, setUser] = useState(null);       // kept for App.jsx compatibility
   const [profile, setProfile] = useState(null);
   const [permissions, setPermissions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -12,54 +13,71 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session) loadProfile(session.user.id);
+      setUser(session?.user ?? null);
+      if (session?.user) loadProfile(session.user.id);
       else setLoading(false);
     });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session) loadProfile(session.user.id);
+      setUser(session?.user ?? null);
+      if (session?.user) loadProfile(session.user.id);
       else { setProfile(null); setPermissions([]); setLoading(false); }
     });
+
     return () => subscription.unsubscribe();
   }, []);
 
   async function loadProfile(userId) {
-    const { data: prof } = await supabase
-      .from('coordinators')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-    setProfile(prof);
-    if (prof) await loadPermissions(prof);
-    setLoading(false);
+    try {
+      const { data: prof, error } = await supabase
+        .from('coordinators')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle();           // maybeSingle() returns null instead of throwing if no row
+
+      setProfile(prof || null);
+      if (prof) await loadPermissions(prof);
+    } catch (err) {
+      console.error('loadProfile error:', err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadPermissions(prof) {
-    // Load base page permissions for this role
-    const { data: pages } = await supabase.from('page_permissions').select('*').order('sort_order');
-    // Load user-level overrides
-    const { data: overrides } = await supabase
-      .from('user_page_overrides')
-      .select('*')
-      .eq('coordinator_id', prof.id);
-    const overrideMap = {};
-    (overrides || []).forEach(o => { overrideMap[o.page_key] = o.granted; });
+    try {
+      const { data: pages } = await supabase
+        .from('page_permissions')
+        .select('*')
+        .order('sort_order');
 
-    const role = prof.role;
-    const allowed = (pages || [])
-      .filter(p => {
-        // Check if there's a user-level override first
-        if (overrideMap[p.page_key] === true) return true;
-        if (overrideMap[p.page_key] === false) return false;
-        // Fall back to role-based default
-        if (role === 'super_admin') return p.super_admin;
-        if (role === 'admin') return p.admin;
-        if (role === 'pod_leader') return p.pod_leader;
-        if (role === 'team_member') return p.team_member;
-        return false;
-      })
-      .map(p => p.page_key);
-    setPermissions(allowed);
+      const { data: overrides } = await supabase
+        .from('user_page_overrides')
+        .select('*')
+        .eq('coordinator_id', prof.id);
+
+      const overrideMap = {};
+      (overrides || []).forEach(o => { overrideMap[o.page_key] = o.granted; });
+
+      const role = prof.role;
+      const allowed = (pages || [])
+        .filter(p => {
+          if (overrideMap[p.page_key] === true) return true;
+          if (overrideMap[p.page_key] === false) return false;
+          if (role === 'super_admin') return p.super_admin;
+          if (role === 'admin') return p.admin;
+          if (role === 'pod_leader') return p.pod_leader;
+          if (role === 'team_member') return p.team_member;
+          return false;
+        })
+        .map(p => p.page_key);
+
+      setPermissions(allowed);
+    } catch (err) {
+      console.error('loadPermissions error:', err);
+      setPermissions([]);
+    }
   }
 
   function canAccess(pageKey) {
@@ -77,7 +95,10 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, profile, permissions, loading, canAccess, signOut, refreshPermissions }}>
+    <AuthContext.Provider value={{
+      session, user, profile, permissions, loading,
+      canAccess, signOut, refreshPermissions,
+    }}>
       {children}
     </AuthContext.Provider>
   );
