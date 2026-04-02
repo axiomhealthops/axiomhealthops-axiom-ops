@@ -17,7 +17,7 @@ function RoleRouter() {
   const { user, profile, loading } = useAuth();
   if (loading) return <Loader />;
   if (!user) return <Navigate to="/login" replace />;
-  // All roles go to /dashboard — page-level RBAC controls what each role sees
+  // All authenticated users go to dashboard — page-level RBAC handles what they see
   if (profile) return <Navigate to="/dashboard" replace />;
   return <Loader />;
 }
@@ -49,7 +49,7 @@ export default function App() {
               <Dashboard />
             </ProtectedRoute>
           } />
-          {/* Legacy routes — redirect to dashboard */}
+          {/* Catch all legacy routes and redirect to dashboard */}
           <Route path="/mission/*" element={<Navigate to="/dashboard" replace />} />
           <Route path="/coordinator/*" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
