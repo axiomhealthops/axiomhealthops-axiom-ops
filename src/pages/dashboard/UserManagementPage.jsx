@@ -209,7 +209,7 @@ export default function UserManagementPage() {
                   )}
                 </div>
                 {isAdmin && user.id !== profile?.id && (
-                  <div style={{ display:'flex', gap:8' }}>
+                  <div style={{ display:'flex', gap:8 }}>
                     <button onClick={() => setEditing(isEditing ? null : user.id)}
                       style={{ padding:'6px 12px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, background:'var(--bg)', cursor:'pointer', fontWeight:500 }}>
                       {isEditing ? 'Close' : 'Edit'}
