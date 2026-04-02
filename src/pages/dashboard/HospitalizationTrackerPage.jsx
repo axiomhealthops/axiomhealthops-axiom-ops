@@ -292,6 +292,7 @@ export default function HospitalizationTrackerPage() {
 
   const lymphHosps = filtered.filter(r => r.cause_category === 'lymphedema_related');
   const otherHosps = filtered.filter(r => r.cause_category === 'other_cause');
+  const unknownHosps = filtered.filter(r => r.cause_category === 'unknown');
   const stillAdmitted = filtered.filter(r => !r.discharge_date || r.outcome === 'still_admitted');
   const preventable = filtered.filter(r => r.potentially_preventable);
   const returnedPts = filtered.filter(r => r.returned_to_service);
@@ -369,7 +370,12 @@ export default function HospitalizationTrackerPage() {
                   {lymphRate <= LYMPH_BENCHMARK ? '✅ Within' : '❌ Exceeds'} benchmark
                 </span>
               </div>
-              <div style={{ fontSize:10, color:'var(--gray)', marginTop:3 }}>Target: &lt;{LYMPH_BENCHMARK}% · {lymphHosps.length} admissions</div>
+              <div style={{ fontSize:10, color:'var(--gray)', marginTop:3 }}>Target: &lt;{LYMPH_BENCHMARK}% · {lymphHosps.length} classified admissions</div>
+              {unknownHosps.length > 0 && (
+                <div style={{ fontSize:10, color:'#D97706', fontWeight:600, marginTop:3 }}>
+                  ⚠ {unknownHosps.length} unclassified — rate may be higher
+                </div>
+              )}
               {/* Rate bar */}
               <div style={{ marginTop:8, height:6, background:'rgba(0,0,0,0.08)', borderRadius:999 }}>
                 <div style={{ height:'100%', width:Math.min(lymphRate/LYMPH_BENCHMARK*100,100)+'%', background:rateColor(lymphRate, LYMPH_BENCHMARK), borderRadius:999 }} />
@@ -386,11 +392,16 @@ export default function HospitalizationTrackerPage() {
                 {otherRate.toFixed(2)}%
               </div>
               <div style={{ fontSize:11, marginTop:4 }}>
-                <span style={{ fontWeight:700, color:otherRate <= OTHER_BENCHMARK ? '#065F46' : '#DC2626' }}>
+                <span style={{ fontWeight:700, color:otherRate <= OTHER_BENCHMARK ? '#065F46' : '#DC2626' }}> 
                   {otherRate <= OTHER_BENCHMARK ? '✅ Within' : '❌ Exceeds'} benchmark
                 </span>
               </div>
-              <div style={{ fontSize:10, color:'var(--gray)', marginTop:3 }}>Target: &lt;{OTHER_BENCHMARK}% · {otherHosps.length} admissions</div>
+              <div style={{ fontSize:10, color:'var(--gray)', marginTop:3 }}>Target: &lt;{OTHER_BENCHMARK}% · {otherHosps.length} classified admissions</div>
+              {unknownHosps.length > 0 && (
+                <div style={{ fontSize:10, color:'#D97706', fontWeight:600, marginTop:3 }}>
+                  ⚠ {unknownHosps.length} pending classification
+                </div>
+              )}
               <div style={{ marginTop:8, height:6, background:'rgba(0,0,0,0.08)', borderRadius:999 }}>
                 <div style={{ height:'100%', width:Math.min(otherRate/OTHER_BENCHMARK*100,100)+'%', background:rateColor(otherRate, OTHER_BENCHMARK), borderRadius:999 }} />
               </div>
@@ -400,7 +411,10 @@ export default function HospitalizationTrackerPage() {
             </div>
 
             <StatCard label="Total Hospitalizations" value={filtered.length} icon="🏥"
-              sub={`${totalRate.toFixed(2)}% of ${activeCensus} patients · ${periodLabel}`} />
+              sub={`${totalRate.toFixed(2)}% of ${activeCensus} active · ${unknownHosps.length > 0 ? unknownHosps.length + ' need classification' : 'all classified'}`}
+              color={unknownHosps.length > 0 ? '#D97706' : 'var(--black)'}
+              bg={unknownHosps.length > 0 ? '#FEF3C7' : 'var(--card-bg)'}
+              alert={unknownHosps.length > 0} />
             <StatCard label="Currently Admitted" value={stillAdmitted.length} icon="🛏"
               sub={stillAdmitted.length > 0 ? stillAdmitted.slice(0,2).map(r=>r.patient_name.split(',')[0]).join(', ')+(stillAdmitted.length>2?'…':'') : 'None currently admitted'}
               color={stillAdmitted.length > 0 ? '#DC2626' : '#065F46'}
