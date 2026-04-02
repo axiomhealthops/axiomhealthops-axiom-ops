@@ -196,11 +196,11 @@ function UploadCard(props) {
               <div style={{ fontSize: 12, color: 'var(--gray)' }}>{message}</div>
             </div>
           : status === 'success'
-          ? <div style={{ color: 'var(--green)', fontWeight: 600 }}>&#10003; {message}</div>
+          ? <div style={{ color: 'var(--green)', fontWeight: 600 }}>✓ {message}</div>
           : status === 'error'
           ? <div style={{ color: 'var(--danger)' }}>{message}</div>
           : <div>
-              <div style={{ fontSize: 28, marginBottom: 8 }}>&#128196;</div>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
               <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--black)', marginBottom: 4 }}>Drop .xlsx file here or click to browse</div>
               <div style={{ fontSize: 12, color: 'var(--gray)' }}>Pariox export &middot; saves permanently to Supabase</div>
             </div>
@@ -254,13 +254,13 @@ export default function UploadsPage() {
  
         {alertStatus && (
           <div style={{ background: '#EFF6FF', border: '1px solid #93C5FD', borderRadius: 8, padding: '10px 16px', marginBottom: 20, fontSize: 13, color: '#1E40AF', fontWeight: 500 }}>
-            &#128276; {alertStatus}
+            🔔 {alertStatus}
           </div>
         )}
  
         {/* Data Status Banner */}
         <div style={{ background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 10, padding: '12px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 18 }}>&#9989;</span>
+          <span style={{ fontSize: 18 }}>✅</span>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#065F46' }}>All uploads save permanently to Supabase</div>
             <div style={{ fontSize: 12, color: '#047857', marginTop: 2 }}>Visit data and census data no longer disappear on refresh. Historical uploads are tracked below.</div>
@@ -293,7 +293,7 @@ export default function UploadsPage() {
               {uploadHistory.map(function(batch) {
                 return (
                   <div key={batch.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                    <span style={{ fontSize: 16 }}>{batch.batch_type === 'visits' ? '&#128197;' : '&#128101;'}</span>
+                    <span style={{ fontSize: 16 }}>{batch.batch_type === 'visits' ? '📅' : '👥'}</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{batch.file_name || 'Unknown file'}</div>
                       <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>
@@ -326,7 +326,7 @@ export default function UploadsPage() {
           {driveLink && (
             <a href={driveLink} target="_blank" rel="noopener noreferrer"
               style={{ display: 'inline-block', marginTop: 12, fontSize: 13, color: 'var(--blue)', textDecoration: 'none' }}>
-              Open Drive &#8594;
+              Open Drive →
             </a>
           )}
         </div>
