@@ -194,6 +194,8 @@ export default function IntakeDashboardPage() {
   // Audit tab state (lifted to avoid hooks-in-render violation)
   const [auditSearch, setAuditSearch] = useState('');
   const [auditFilter, setAuditFilter] = useState('ALL');
+  const [auditTypeFilter, setAuditTypeFilter] = useState('ALL'); // filter by flag type
+  const [auditSelected, setAuditSelected] = useState(null); // selected patient for detail panel
   // Payor tab state (lifted)
   const [payorSearch, setPayorSearch] = useState('');
   const [payorIns, setPayorIns] = useState('ALL');
@@ -652,12 +654,15 @@ export default function IntakeDashboardPage() {
  
             const filtered = suspiciousPatterns.filter(f => {
               if (auditFilter !== 'ALL' && f.risk !== auditFilter) return false;
+              // Type filter (set by tile clicks)
+              if (auditTypeFilter !== 'ALL' && !f.issues.some(i => i.type === auditTypeFilter)) return false;
               if (auditSearch) {
                 const q = auditSearch.toLowerCase();
                 return (f.patient_name||'').toLowerCase().includes(q) ||
                        (f.diagnosis||'').toLowerCase().includes(q) ||
                        (f.insurance||'').toLowerCase().includes(q) ||
-                       f.issues.some(i => i.detail.toLowerCase().includes(q));
+                       (f.region||'').toLowerCase().includes(q) ||
+                       f.issues.some(i => i.type.toLowerCase().includes(q) || i.detail.toLowerCase().includes(q));
               }
               return true;
             });
@@ -692,21 +697,31 @@ export default function IntakeDashboardPage() {
                 {/* Flag type breakdown */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
                   {[
-                    { label: 'Diagnosis Mismatch', desc: 'Lymphedema dx denied as non-lymphedema', color: '#DC2626', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Diagnosis Mismatch')).length },
-                    { label: 'In-Network Carrier OON', desc: 'Known in-network carrier flagged as OON', color: '#DC2626', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'In-Network Carrier Flagged OON')).length },
-                    { label: 'Inconsistent Decision', desc: 'Same dx + insurance accepted elsewhere', color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Inconsistent Decision')).length },
-                    { label: 'Possible Lymphedema Missed', desc: 'Lymphedema-related dx denied as non-lymphedema', color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Possible Lymphedema Missed')).length },
-                    { label: 'Missing Denial Reason', desc: 'Denial recorded with no reason', color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Missing Denial Reason')).length },
-                  ].map(cat => (
-                    <div key={cat.label} onClick={() => { setAuditSearch(cat.label); }}
-                      style={{ background: 'var(--card-bg)', border: `1px solid var(--border)`, borderRadius: 10, padding: 16, cursor: 'pointer' }}
-                      onMouseEnter={e => e.currentTarget.style.borderColor = cat.color}
-                      onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}>
-                      <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: cat.color }}>{cat.count}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)', marginTop: 4 }}>{cat.label}</div>
-                      <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>{cat.desc}</div>
-                    </div>
-                  ))}
+                    { label: 'Diagnosis Mismatch',        desc: 'Lymphedema dx denied as non-lymphedema',           color: '#DC2626', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Diagnosis Mismatch')).length },
+                    { label: 'In-Network Carrier OON',    desc: 'Known in-network carrier flagged as OON',           color: '#DC2626', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'In-Network Carrier Flagged OON')).length },
+                    { label: 'Inconsistent Decision',     desc: 'Same dx + insurance accepted elsewhere',            color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Inconsistent Decision')).length },
+                    { label: 'Possible Lymphedema Missed',desc: 'Lymphedema-related dx denied as non-lymphedema',    color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Possible Lymphedema Missed')).length },
+                    { label: 'Missing Denial Reason',     desc: 'Denial recorded with no reason',                    color: '#D97706', count: suspiciousPatterns.filter(f => f.issues.some(i => i.type === 'Missing Denial Reason')).length },
+                  ].map(cat => {
+                    // Map tile label → actual issue.type string
+                    const typeMap = {
+                      'In-Network Carrier OON': 'In-Network Carrier Flagged OON',
+                    };
+                    const issueType = typeMap[cat.label] || cat.label;
+                    const isActive = auditTypeFilter === issueType;
+                    return (
+                      <div key={cat.label}
+                        onClick={() => { setAuditTypeFilter(isActive ? 'ALL' : issueType); setAuditSearch(''); setAuditSelected(null); }}
+                        style={{ background: isActive ? cat.color + '18' : 'var(--card-bg)', border: `2px solid ${isActive ? cat.color : 'var(--border)'}`, borderRadius: 10, padding: 16, cursor: 'pointer', transition: 'all 0.15s' }}
+                        onMouseEnter={e => { if (!isActive) e.currentTarget.style.borderColor = cat.color; }}
+                        onMouseLeave={e => { if (!isActive) e.currentTarget.style.borderColor = 'var(--border)'; }}>
+                        <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: cat.color }}>{cat.count}</div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)', marginTop: 4 }}>{cat.label}</div>
+                        <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>{cat.desc}</div>
+                        {isActive && <div style={{ fontSize: 10, color: cat.color, marginTop: 6, fontWeight: 700 }}>✓ Active filter — click to clear</div>}
+                      </div>
+                    );
+                  })}
                 </div>
  
                 {/* Flagged patient list */}
@@ -714,10 +729,16 @@ export default function IntakeDashboardPage() {
                   <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)' }}>Flagged Referrals</div>
-                      <div style={{ fontSize: 11, color: 'var(--gray)' }}>Review each case — click patient row to see all flags</div>
+                      <div style={{ fontSize: 11, color: 'var(--gray)' }}>Click any row to investigate — see full referral details and flag explanations</div>
                     </div>
-                    <input placeholder="Search…" value={auditSearch} onChange={e => setAuditSearch(e.target.value)}
-                      style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', width: 200 }} />
+                    {auditTypeFilter !== 'ALL' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#FEF2F2', border: '1px solid #DC2626', borderRadius: 6, padding: '4px 10px' }}>
+                        <span style={{ fontSize: 11, color: '#DC2626', fontWeight: 600 }}>Filter: {auditTypeFilter}</span>
+                        <button onClick={() => setAuditTypeFilter('ALL')} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+                      </div>
+                    )}
+                    <input placeholder="Search name, diagnosis, insurance…" value={auditSearch} onChange={e => { setAuditSearch(e.target.value); setAuditSelected(null); }}
+                      style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', width: 230 }} />
                     {['ALL','HIGH','MEDIUM'].map(f => (
                       <button key={f} onClick={() => setAuditFilter(f)}
                         style={{ padding: '5px 12px', border: `1px solid ${auditFilter === f ? riskColor[f] || '#1565C0' : 'var(--border)'}`, borderRadius: 6, fontSize: 11, fontWeight: auditFilter === f ? 700 : 400, background: auditFilter === f ? (riskBg[f] || '#EFF6FF') : 'transparent', color: auditFilter === f ? (riskColor[f] || '#1565C0') : 'var(--gray)', cursor: 'pointer' }}>
@@ -729,31 +750,104 @@ export default function IntakeDashboardPage() {
                   <div style={{ display: 'grid', gridTemplateColumns: '0.6fr 1.8fr 0.5fr 1fr 1.4fr 1.8fr', padding: '8px 20px', background: 'var(--bg)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     <span>Risk</span><span>Patient</span><span>Rgn</span><span>Insurance</span><span>Diagnosis</span><span>Flags</span>
                   </div>
-                  {filtered.slice(0, 250).map((r, i) => (
-                    <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '0.6fr 1.8fr 0.5fr 1fr 1.4fr 1.8fr', padding: '10px 20px', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)', alignItems: 'start' }}>
-                      <div>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: riskColor[r.risk], background: riskBg[r.risk], padding: '2px 7px', borderRadius: 999 }}>{r.risk}</span>
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name || '—'}</div>
-                        <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>{r.date_received ? r.date_received.slice(0,10) : '—'}</div>
-                      </div>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
-                      <span style={{ fontSize: 11, color: 'var(--black)' }}>{r.insurance || '—'}</span>
-                      <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 35)}</span>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {r.issues.map((issue, j) => (
-                          <div key={j} style={{ background: riskBg[issue.risk], border: `1px solid ${riskColor[issue.risk]}30`, borderRadius: 6, padding: '4px 8px' }}>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: riskColor[issue.risk] }}>{issue.type}</div>
-                            <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{issue.detail}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
                   {filtered.length === 0 && (
                     <div style={{ padding: 40, textAlign: 'center', color: 'var(--gray)', fontSize: 13 }}>No flagged referrals match your filters.</div>
                   )}
+                  {filtered.slice(0, 250).map((r, i) => {
+                    const isSelected = auditSelected?.id === r.id;
+                    return (
+                      <React.Fragment key={r.id}>
+                        <div onClick={() => setAuditSelected(isSelected ? null : r)}
+                          style={{ display: 'grid', gridTemplateColumns: '0.6fr 1.8fr 0.5fr 1fr 1.4fr 1.8fr', padding: '10px 20px', borderBottom: isSelected ? 'none' : '1px solid var(--border)', background: isSelected ? '#F0F7FF' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)', alignItems: 'start', cursor: 'pointer', borderLeft: isSelected ? '3px solid #1565C0' : '3px solid transparent' }}
+                          onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = '#F8F9FA'; }}
+                          onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)'; }}>
+                          <div>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: riskColor[r.risk], background: riskBg[r.risk], padding: '2px 7px', borderRadius: 999 }}>{r.risk}</span>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name || '—'}</div>
+                            <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>{r.date_received ? r.date_received.slice(0,10) : '—'}</div>
+                          </div>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
+                          <span style={{ fontSize: 11, color: 'var(--black)' }}>{r.insurance || '—'}</span>
+                          <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 35)}</span>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {r.issues.map((issue, j) => (
+                              <span key={j} style={{ fontSize: 9, fontWeight: 700, color: riskColor[issue.risk], background: riskBg[issue.risk], padding: '2px 6px', borderRadius: 999, whiteSpace: 'nowrap' }}>{issue.type}</span>
+                            ))}
+                          </div>
+                        </div>
+                        {/* DETAIL PANEL — expands inline below the selected row */}
+                        {isSelected && (
+                          <div style={{ borderBottom: '1px solid var(--border)', background: '#F0F7FF', borderLeft: '3px solid #1565C0', padding: '0 20px 20px 20px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, paddingTop: 16 }}>
+                              {/* Left: full referral details */}
+                              <div>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: '#1565C0', marginBottom: 12 }}>Referral Details</div>
+                                {[
+                                  ['Patient', r.patient_name],
+                                  ['Date Received', r.date_received],
+                                  ['Region', r.region],
+                                  ['Referral Type', r.referral_type],
+                                  ['Insurance', r.insurance],
+                                  ['Diagnosis', r.diagnosis],
+                                  ['Referral Status', r.referral_status],
+                                  ['Denial Reason', r.denial_reason || '— none recorded —'],
+                                  ['Chart Status', r.chart_status],
+                                  ['Referral Source', r.referral_source],
+                                  ['PCP Name', r.pcp_name],
+                                  ['PCP Phone', r.pcp_phone],
+                                ].map(([label, val]) => val ? (
+                                  <div key={label} style={{ display: 'flex', gap: 8, marginBottom: 6, fontSize: 12 }}>
+                                    <span style={{ color: 'var(--gray)', fontWeight: 600, minWidth: 110, flexShrink: 0 }}>{label}:</span>
+                                    <span style={{ color: 'var(--black)', fontWeight: label === 'Denial Reason' ? 700 : 400, color: label === 'Denial Reason' ? '#DC2626' : 'var(--black)' }}>{val}</span>
+                                  </div>
+                                ) : null)}
+                                {/* Accepted matches for Inconsistent Decision */}
+                                {r.issues.some(i => i.type === 'Inconsistent Decision') && (() => {
+                                  const matches = records.filter(rr => rr.referral_status === 'Accepted' && rr.insurance === r.insurance && rr.diagnosis === r.diagnosis);
+                                  return matches.length > 0 ? (
+                                    <div style={{ marginTop: 10, padding: 10, background: '#ECFDF5', border: '1px solid #10B981', borderRadius: 8 }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: '#065F46', marginBottom: 6 }}>Patients Accepted with same Insurance + Diagnosis:</div>
+                                      {matches.slice(0,5).map(m => (
+                                        <div key={m.id} style={{ fontSize: 11, color: '#065F46' }}>✓ {m.patient_name} ({m.date_received?.slice(0,10)}, Region {m.region})</div>
+                                      ))}
+                                    </div>
+                                  ) : null;
+                                })()}
+                              </div>
+                              {/* Right: flags with recommended actions */}
+                              <div>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', marginBottom: 12 }}>Flags & Recommended Actions</div>
+                                {r.issues.map((issue, j) => (
+                                  <div key={j} style={{ background: '#fff', border: `1px solid ${riskColor[issue.risk]}40`, borderLeft: `3px solid ${riskColor[issue.risk]}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                      <span style={{ fontSize: 10, fontWeight: 700, color: riskColor[issue.risk], background: riskBg[issue.risk], padding: '2px 8px', borderRadius: 999 }}>{issue.risk}</span>
+                                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--black)' }}>{issue.type}</span>
+                                    </div>
+                                    <div style={{ fontSize: 12, color: 'var(--gray)', marginBottom: 8 }}>{issue.detail}</div>
+                                    <div style={{ fontSize: 11, fontWeight: 600, color: '#1565C0' }}>
+                                      {issue.type === 'Diagnosis Mismatch' && '→ Review referral document — if diagnosis is confirmed lymphedema, denial should be reversed and patient re-admitted'}
+                                      {issue.type === 'In-Network Carrier Flagged OON' && '→ Verify insurance plan type — patient may have a non-contracted plan variant. If standard plan, update insurance record and reconsider'}
+                                      {issue.type === 'Inconsistent Decision' && '→ Compare this referral with accepted patients above — if criteria are the same, escalate to supervisor for denial review'}
+                                      {issue.type === 'Possible Lymphedema Missed' && '→ Pull referral document and have clinical team review diagnosis — lymphedema component may warrant admission'}
+                                      {issue.type === 'Missing Denial Reason' && '→ Contact intake coordinator who processed this referral — denial reason must be documented for compliance'}
+                                    </div>
+                                  </div>
+                                ))}
+                                {r.referral_document && (
+                                  <a href={r.referral_document} target="_blank" rel="noopener noreferrer"
+                                    style={{ display: 'inline-block', marginTop: 4, padding: '7px 14px', background: '#1565C0', color: '#fff', borderRadius: 7, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>
+                                    📄 View Referral Document
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </div>
               </div>
             );
