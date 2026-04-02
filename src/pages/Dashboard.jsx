@@ -25,6 +25,7 @@ import RegionsPage from './dashboard/RegionsPage';
 import ExpansionPage from './dashboard/ExpansionPage';
 import ReportsExportPage from './dashboard/ReportsExportPage';
 import RegionalManagerDashboard from './dashboard/RegionalManagerDashboard';
+import HospitalizationTrackerPage from './dashboard/HospitalizationTrackerPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -50,6 +51,7 @@ const PAGE_COMPONENTS = {
   expansion:            ExpansionPage,
   reports:              ReportsExportPage,
   'rm-dashboard':       RegionalManagerDashboard,
+  hospitalizations:     HospitalizationTrackerPage,
 };
 
 function AccessDenied() {

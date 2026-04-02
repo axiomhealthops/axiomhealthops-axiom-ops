@@ -9,6 +9,7 @@ const ALL_SECTIONS = [
   { key: 'PATIENTS',       label: 'PATIENTS' },
   { key: 'AUTHORIZATION',  label: 'AUTHORIZATION' },
   { key: 'COORDINATION',   label: 'CARE COORDINATION' },
+  { key: 'CLINICAL',       label: 'CLINICAL' },
   { key: 'PERFORMANCE',    label: 'PERFORMANCE' },
   { key: 'OPERATIONS',     label: 'OPERATIONS' },
   { key: 'ADMIN',          label: 'ADMIN' },
@@ -21,7 +22,7 @@ const PAGE_ICONS = {
   auth: '🔐',
   'coordinator-portal': '👩‍💼',
   productivity: '📊', revenue: '💰', growth: '📈', scorecard: '🎯',
-  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯',
+  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥',
   users: '👥', uploads: '↑', settings: '⚙',
 };
 
