@@ -44,6 +44,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
     const role = profile?.role;
     const accessible = pages.filter(p => {
       if (role === 'super_admin') return p.super_admin;
+      if (role === 'ceo') return p.super_admin; // CEO sees everything super_admin sees
       if (role === 'admin') return p.admin;
       if (role === 'pod_leader') return p.pod_leader;
       if (role === 'team_member') return p.team_member;
@@ -66,6 +67,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
 
   const roleLabel = {
     super_admin: 'Super Admin',
+    ceo: 'CEO',
     admin: 'Admin',
     pod_leader: 'Pod Leader',
     team_member: 'Team Member',
