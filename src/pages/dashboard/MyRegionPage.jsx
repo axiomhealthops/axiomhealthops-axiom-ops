@@ -38,7 +38,7 @@ export default function MyRegionPage() {
   const [intake, setIntake] = useState([]);
   const [onHold, setOnHold] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState('alerts');
   const [searchPatient, setSearchPatient] = useState('');
   const [filterClinician, setFilterClinician] = useState('ALL');
 
@@ -151,6 +151,93 @@ export default function MyRegionPage() {
   const lowVisits = authData.filter(a => a.visits_authorized && a.visits_used && (a.visits_authorized - a.visits_used) <= 4);
 
   const clinicians_in_region = clinicians.map(c => c.full_name).filter(Boolean);
+  // ── ALERT GENERATION ──────────────────────────────────────────
+  const alerts = useMemo(() => {
+    const list = [];
+    const today = new Date().toISOString().slice(0,10);
+    const weekAgo = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
+
+    // 1. MISSED VISITS — last 7 days
+    visits.filter(v => v.visit_date >= weekAgo && /missed/i.test(v.status||'') && !/cancel/i.test(v.event_type||'')).forEach(v => {
+      list.push({ id:`miss-${v.id}`, type:'missed_visit', severity:'high', title:'Missed Visit',
+        body:`${v.patient_name} — ${(v.event_type||'').replace(' *e*','').replace(' (PDF)','')}`,
+        detail:`Clinician: ${v.staff_name||'Unassigned'} · ${v.visit_date}`, region:v.region, date:v.visit_date, icon:'❌' });
+    });
+
+    // 2. AUTH EXPIRING ≤14 DAYS
+    authData.forEach(a => {
+      if (!a.auth_expiry_date) return;
+      const days = Math.floor((new Date(a.auth_expiry_date) - new Date()) / 86400000);
+      if (days >= 0 && days <= 14) list.push({ id:`auth-exp-${a.id}`, type:'auth_expiring', severity:days<=7?'critical':'high',
+        title:days<=7?'Auth Expiring This Week':'Auth Expiring Soon',
+        body:`${a.patient_name} — ${a.insurance||'Insurance unknown'}`,
+        detail:`Expires ${a.auth_expiry_date} · ${days} day${days!==1?'s':''} remaining`, region:a.region, date:a.auth_expiry_date, icon:'🔑' });
+    });
+
+    // 3. AUTH LOW VISITS ≤4 REMAINING
+    authData.forEach(a => {
+      const left = (a.visits_authorized||0)-(a.visits_used||0);
+      if (a.visits_authorized && left>=0 && left<=4) list.push({ id:`auth-vis-${a.id}`, type:'auth_low_visits', severity:left<=2?'critical':'high',
+        title:'Auth Visits Running Low', body:`${a.patient_name} — ${left} visit${left!==1?'s':''} remaining`,
+        detail:`${a.visits_used||0} of ${a.visits_authorized} used · ${a.insurance||''}`, region:a.region, date:today, icon:'⚠️' });
+    });
+
+    // 4. CLINICIAN BELOW 60% PRODUCTIVITY
+    clinicianStats.forEach(c => {
+      if (c.pct < 60 && c.target > 0) list.push({ id:`prod-${c.id}`, type:'low_productivity', severity:c.pct<40?'critical':'medium',
+        title:'Clinician Below Target', body:`${c.full_name} — ${c.pct}% of weekly target`,
+        detail:`${c.comp} completed of ${c.target} target · Region ${c.region}`, region:c.region, date:today, icon:'📉' });
+    });
+
+    // 5. PATIENTS ON HOLD 30+ DAYS
+    onHold.forEach(p => {
+      const days = p.days_on_hold||0;
+      if (days >= 30) list.push({ id:`hold-${p.id}`, type:'hold_overdue', severity:'high', title:'On Hold — Follow Up Overdue',
+        body:`${p.patient_name} — ${days} days on hold`,
+        detail:`${p.hold_type||'On Hold'} · Last contact: ${p.last_contact_date?fmtDate(p.last_contact_date):'None logged'}`,
+        region:p.region, date:today, icon:'⏸' });
+      else if (days >= 14) list.push({ id:`hold-med-${p.id}`, type:'hold_approaching', severity:'medium', title:'On Hold — Check In Needed',
+        body:`${p.patient_name} — ${days} days on hold`,
+        detail:`${p.hold_type||'On Hold'} · Expected return: ${p.expected_return_date?fmtDate(p.expected_return_date):'Not set'}`,
+        region:p.region, date:today, icon:'🕐' });
+    });
+
+    // 6. HOSPITALIZED PATIENTS
+    census.filter(p => p.status==='Hospitalized').forEach(p => {
+      list.push({ id:`hosp-${p.patient_name}`, type:'hospitalized', severity:'high', title:'Patient Hospitalized',
+        body:`${p.patient_name} — Currently admitted`, detail:`Region ${p.region} · ${p.insurance||'Insurance unknown'}`,
+        region:p.region, date:today, icon:'🏥' });
+    });
+
+    // 7. HIGH CANCELLATIONS (clinician with 3+ this week)
+    const weekCancelled = visits.filter(v => v.visit_date >= weekAgo && /cancel/i.test(v.event_type||''));
+    const byClinic = {};
+    weekCancelled.forEach(v => { const k=v.staff_name||'Unknown'; byClinic[k]=(byClinic[k]||0)+1; });
+    Object.entries(byClinic).filter(([,n])=>n>=3).forEach(([name,cnt]) => {
+      const r = weekCancelled.find(v=>v.staff_name===name)?.region||'';
+      list.push({ id:`canc-${name}`, type:'high_cancellations', severity:'medium', title:'High Cancellation Rate',
+        body:`${name} — ${cnt} cancellations this week`, detail:`Region ${r} · Review schedule`, region:r, date:today, icon:'🚫' });
+    });
+
+    const SEV = { critical:0, high:1, medium:2, low:3 };
+    return list.sort((a,b) => SEV[a.severity]!==SEV[b.severity]?SEV[a.severity]-SEV[b.severity]:b.date.localeCompare(a.date));
+  }, [visits, authData, clinicianStats, onHold, census]);
+
+  const alertCounts = {
+    critical: alerts.filter(a=>a.severity==='critical').length,
+    high: alerts.filter(a=>a.severity==='high').length,
+    medium: alerts.filter(a=>a.severity==='medium').length,
+  };
+  const ALERT_C = {
+    critical:{color:'#DC2626',bg:'#FEF2F2',border:'#FECACA'},
+    high:{color:'#D97706',bg:'#FEF3C7',border:'#FCD34D'},
+    medium:{color:'#1565C0',bg:'#EFF6FF',border:'#BFDBFE'},
+    low:{color:'#6B7280',bg:'var(--bg)',border:'var(--border)'},
+  };
+  const ATYPE = { missed_visit:'Missed Visits', auth_expiring:'Auth Expiring', auth_low_visits:'Auth Low Visits',
+    low_productivity:'Low Productivity', hold_overdue:'Hold Overdue', hold_approaching:'Hold Check-In',
+    hospitalized:'Hospitalized', high_cancellations:'High Cancellations' };
+
 
   if (!profile) return null;
 
@@ -182,7 +269,7 @@ export default function MyRegionPage() {
 
         {/* Tab bar */}
         <div style={{ display:'flex', gap:0, borderBottom:'1px solid var(--border)', background:'var(--card-bg)', padding:'0 20px' }}>
-          {[['overview','📊 Overview'],['productivity','👤 Clinician Productivity'],['patients','🧑 My Patients'],['auth','🔑 Authorizations'],['onhold','⏸ On Hold']].map(([k,l]) => (
+          {[['alerts','🔔 Alerts'],['overview','📊 Overview'],['productivity','👤 Clinician Productivity'],['patients','🧑 My Patients'],['auth','🔑 Authorizations'],['onhold','⏸ On Hold']].map(([k,l]) => (
             <button key={k} onClick={() => setActiveTab(k)}
               style={{ padding:'12px 16px', border:'none', borderBottom:`2px solid ${activeTab===k?'#DC2626':'transparent'}`, background:'none', fontSize:12, fontWeight:activeTab===k?700:400, color:activeTab===k?'#DC2626':'var(--gray)', cursor:'pointer', whiteSpace:'nowrap' }}>
               {l}
@@ -199,6 +286,69 @@ export default function MyRegionPage() {
         </div>
 
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
+
+          {/* ── ALERTS TAB ───────────────────────────────────────────── */}
+          {activeTab === 'alerts' && (
+            <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 }}>
+                {[
+                  {label:'🔴 Critical', val:alertCounts.critical, color:'#DC2626', bg:alertCounts.critical>0?'#FEF2F2':'var(--card-bg)', sub:'Immediate action'},
+                  {label:'🟡 High', val:alertCounts.high, color:'#D97706', bg:alertCounts.high>0?'#FEF3C7':'var(--card-bg)', sub:'Address today'},
+                  {label:'🔵 Medium', val:alertCounts.medium, color:'#1565C0', bg:alertCounts.medium>0?'#EFF6FF':'var(--card-bg)', sub:'Monitor this week'},
+                  {label:'📋 Total', val:alerts.length, color:'var(--black)', bg:'var(--card-bg)', sub:regionLabel},
+                ].map(c => (
+                  <div key={c.label} style={{ background:c.bg, border:`1px solid var(--border)`, borderRadius:10, padding:'14px 16px' }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:c.color, textTransform:'uppercase', letterSpacing:'0.04em' }}>{c.label}</div>
+                    <div style={{ fontSize:28, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:4 }}>{c.val}</div>
+                    <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>{c.sub}</div>
+                  </div>
+                ))}
+              </div>
+
+              {alerts.length > 0 && (
+                <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, padding:'12px 16px', display:'flex', flexWrap:'wrap', gap:8 }}>
+                  {Object.entries(alerts.reduce((acc,a)=>{acc[a.type]=(acc[a.type]||0)+1;return acc;},{})).map(([type,cnt])=>{
+                    const sev = alerts.find(a=>a.type===type)?.severity||'low';
+                    const c = ALERT_C[sev];
+                    return <span key={type} style={{ fontSize:11, fontWeight:600, padding:'3px 10px', borderRadius:999, background:c.bg, color:c.color, border:`1px solid ${c.border}` }}>{ATYPE[type]||type}: {cnt}</span>;
+                  })}
+                </div>
+              )}
+
+              {alerts.length === 0 ? (
+                <div style={{ background:'#ECFDF5', border:'2px solid #A7F3D0', borderRadius:12, padding:40, textAlign:'center' }}>
+                  <div style={{ fontSize:36 }}>✅</div>
+                  <div style={{ fontSize:16, fontWeight:700, color:'#065F46', marginTop:12 }}>All Clear — No Active Alerts</div>
+                  <div style={{ fontSize:13, color:'#047857', marginTop:6 }}>No missed visits, expiring auths, or productivity issues in {regionLabel}</div>
+                </div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  {alerts.map(alert => {
+                    const c = ALERT_C[alert.severity];
+                    return (
+                      <div key={alert.id} style={{ display:'flex', gap:14, padding:'14px 18px', background:c.bg, border:`1px solid ${c.border}`, borderRadius:10, borderLeft:`4px solid ${c.color}`, alignItems:'flex-start' }}>
+                        <span style={{ fontSize:22, flexShrink:0, marginTop:1 }}>{alert.icon}</span>
+                        <div style={{ flex:1 }}>
+                          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:4 }}>
+                            <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                              <span style={{ fontSize:11, fontWeight:800, color:c.color, textTransform:'uppercase', letterSpacing:'0.05em' }}>{alert.title}</span>
+                              <span style={{ fontSize:10, fontWeight:700, color:c.color, background:'white', padding:'1px 7px', borderRadius:999, border:`1px solid ${c.border}` }}>{alert.severity.toUpperCase()}</span>
+                            </div>
+                            <div style={{ display:'flex', gap:6, flexShrink:0 }}>
+                              {alert.region && <span style={{ fontSize:10, fontWeight:700, color:'var(--gray)', background:'var(--border)', padding:'2px 7px', borderRadius:999 }}>Rgn {alert.region}</span>}
+                              <span style={{ fontSize:10, color:'var(--gray)', fontFamily:'DM Mono, monospace' }}>{fmtDate(alert.date)}</span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize:13, fontWeight:600, color:'var(--black)', marginBottom:2 }}>{alert.body}</div>
+                          <div style={{ fontSize:11, color:'var(--gray)' }}>{alert.detail}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── OVERVIEW TAB ──────────────────────────────────────── */}
           {activeTab === 'overview' && (
