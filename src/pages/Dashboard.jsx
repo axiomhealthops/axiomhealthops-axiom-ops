@@ -30,7 +30,6 @@ import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
 import MyRegionPage from './dashboard/MyRegionPage';
 import MedicareTrackerPage from './dashboard/MedicareTrackerPage';
 import MarketingCRMPage from './dashboard/MarketingCRMPage';
-import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -59,7 +58,6 @@ const PAGE_COMPONENTS = {
   hospitalizations:     HospitalizationTrackerPage,
   'missed-cancelled':       MissedCancelledReportPage,
   'my-region':              MyRegionPage,
-  'clinical-progression':   ClinicalProgressionPage,
 };
 
 function AccessDenied() {
