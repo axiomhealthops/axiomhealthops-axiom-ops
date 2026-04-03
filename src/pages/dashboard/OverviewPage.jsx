@@ -40,6 +40,7 @@ export default function OverviewPage() {
   const [visits, setVisits] = useState([]);
   const [authStats, setAuthStats] = useState([]);
   const [census, setCensus] = useState([]);
+  const [freshness, setFreshness] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -51,10 +52,12 @@ export default function OverviewPage() {
       supabase.from('auth_tracker')
         .select('insurance,auth_status,visits_authorized,visits_used,auth_expiry_date,region,patient_name'),
       supabase.from('census_data').select('insurance,region,status,patient_name'),
-    ]).then(([v, a, c]) => {
+      supabase.from('data_freshness').select('*'),
+    ]).then(([v, a, c, f]) => {
       setVisits(v.data || []);
       setAuthStats(a.data || []);
       setCensus(c.data || []);
+      setFreshness(f.data || []);
       setLoading(false);
     });
   }, []);
@@ -133,6 +136,31 @@ export default function OverviewPage() {
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Operations Overview" subtitle={`Welcome back, Liam`} />
+      {/* Data Freshness Banner */}
+      {freshness.length > 0 && (() => {
+        const stale = freshness.filter(f => {
+          if (!f.last_upload) return true;
+          const days = Math.floor((new Date() - new Date(f.last_upload)) / 86400000);
+          return days > (f.stale_threshold_days || 8);
+        });
+        const oldest = freshness.reduce((a, b) => (!a || new Date(b.last_upload) < new Date(a.last_upload)) ? b : a, null);
+        const daysSince = oldest ? Math.floor((new Date() - new Date(oldest.last_upload)) / 86400000) : null;
+        if (stale.length > 0) return (
+          <div style={{ background:'#FEF3C7', borderBottom:'2px solid #FCD34D', padding:'8px 20px', display:'flex', alignItems:'center', gap:12, flexShrink:0 }}>
+            <span style={{ fontSize:16 }}>⚠</span>
+            <div style={{ flex:1 }}>
+              <span style={{ fontSize:12, fontWeight:700, color:'#92400E' }}>Data may be stale — </span>
+              <span style={{ fontSize:12, color:'#92400E' }}>{stale.map(f => f.data_type).join(', ')} last uploaded {daysSince}+ days ago. Upload fresh Pariox data to update all metrics.</span>
+            </div>
+          </div>
+        );
+        return (
+          <div style={{ background:'#F0FFF4', borderBottom:'1px solid #A7F3D0', padding:'6px 20px', display:'flex', alignItems:'center', gap:10, flexShrink:0 }}>
+            <span style={{ fontSize:12 }}>✅</span>
+            <span style={{ fontSize:11, color:'#065F46' }}>All data current — last upload {daysSince === 0 ? 'today' : daysSince + 'd ago'} · {freshness.reduce((s,f) => s+(f.record_count||0), 0).toLocaleString()} total records</span>
+          </div>
+        );
+      })()}
       <div style={{ flex:1, overflow:'auto' }}>
         {/* KPI Row */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', borderBottom:'1px solid var(--border)' }}>

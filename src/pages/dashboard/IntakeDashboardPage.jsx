@@ -298,7 +298,15 @@ export default function IntakeDashboardPage() {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const thisMonthRecs = records.filter(r => monthKey(r.date_received) === thisMonth);
 
-    return { total, accepted, denied, acceptRate, months, byRegion, byInsurance, byDiagnosis, denialReasons, typeMap, chartStatuses, thisMonthRecs };
+    // Patient classification breakdown
+    const newPatients = records.filter(r => r.referral_type === 'New Patient');
+    const existingPatients = records.filter(r => r.referral_type === 'Existing Patient' || r.referral_type === 'Resumption Referral');
+    const insuranceChange = records.filter(r => r.referral_type === 'Patient Switched Insurance');
+    const unclassified = records.filter(r => !r.referral_type);
+    const thisMonthNew = thisMonthRecs.filter(r => r.referral_type === 'New Patient');
+    const thisMonthExisting = thisMonthRecs.filter(r => r.referral_type === 'Existing Patient' || r.referral_type === 'Resumption Referral');
+
+    return { total, accepted, denied, acceptRate, months, byRegion, byInsurance, byDiagnosis, denialReasons, typeMap, chartStatuses, thisMonthRecs, newPatients, existingPatients, insuranceChange, unclassified, thisMonthNew, thisMonthExisting };
   }, [records]);
 
   // ── filtered table ──────────────────────────────────────────────────
@@ -397,23 +405,42 @@ export default function IntakeDashboardPage() {
         )}
 
         {/* KPI strip — each tile is clickable and filters the patient table */}
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0, flexWrap: 'wrap' }}>
           {[
-            { label: 'Total Referrals',       val: stats.total.toLocaleString(),    color: 'var(--black)',  sub: 'all time',               action: () => { setStatusFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
-            { label: 'Accepted',              val: stats.accepted.toLocaleString(), color: 'var(--green)',  sub: stats.acceptRate + '% accept rate', action: () => { setStatusFilter('Accepted'); setSearch(''); setActiveTab('patients'); } },
-            { label: 'Denied',                val: stats.denied.toLocaleString(),   color: '#DC2626',       sub: (100 - stats.acceptRate) + '% deny rate', alert: true, action: () => { setStatusFilter('Denied'); setSearch(''); setActiveTab('patients'); } },
-            { label: 'This Month',            val: stats.thisMonthRecs.length,      color: '#1565C0',       sub: stats.thisMonthRecs.filter(r => r.referral_status === 'Accepted').length + ' accepted', action: () => { setMonthFilter(new Date().toISOString().slice(0,7)); setStatusFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
-            { label: 'Lymphedema Dx',         val: records.filter(r => r.diagnosis === 'I89.0 Lymphedema').length, color: '#7C3AED', sub: 'primary diagnosis', action: () => { setSearch('I89.0 Lymphedema'); setStatusFilter('ALL'); setActiveTab('patients'); } },
-            { label: 'Non-Lymphedema Denied', val: records.filter(r => r.denial_reason === 'In network but Non-lymphedema').length, color: '#92400E', sub: 'top denial reason', alert: true, action: () => { setStatusFilter('Denied'); setSearch('Non-lymphedema'); setActiveTab('patients'); } },
+            { label: 'Total Referrals',    val: stats.total.toLocaleString(),             color: 'var(--black)', sub: 'all time',               action: () => { setStatusFilter('ALL'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
+            { label: '🆕 New Patients',    val: stats.newPatients.length.toLocaleString(), color: '#1565C0',      sub: stats.thisMonthNew.length + ' this month', bg: '#EFF6FF', action: () => { setTypeFilter('New Patient'); setStatusFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
+            { label: '🔄 Existing Patients', val: stats.existingPatients.length.toLocaleString(), color: '#065F46', sub: 'resumptions + continuations', bg: '#ECFDF5', action: () => { setTypeFilter('Existing Patient'); setStatusFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
+            { label: 'Accepted',           val: stats.accepted.toLocaleString(),           color: 'var(--green)', sub: stats.acceptRate + '% accept rate', action: () => { setStatusFilter('Accepted'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
+            { label: 'Denied',             val: stats.denied.toLocaleString(),             color: '#DC2626',      sub: (100 - stats.acceptRate) + '% deny rate', alert: true, action: () => { setStatusFilter('Denied'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
+            { label: 'This Month',         val: stats.thisMonthRecs.length,                color: '#7C3AED',      sub: stats.thisMonthNew.length + ' new · ' + stats.thisMonthExisting.length + ' existing', action: () => { setMonthFilter(new Date().toISOString().slice(0,7)); setStatusFilter('ALL'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
           ].map(tile => (
             <div key={tile.label} onClick={tile.action}
-              style={{ flex: 1, padding: '10px 14px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFFBF5' : 'transparent', cursor: 'pointer', transition: 'background 0.15s' }}
-              onMouseEnter={e => e.currentTarget.style.background = tile.alert ? '#FEF3E2' : '#F8F9FA'}
-              onMouseLeave={e => e.currentTarget.style.background = tile.alert ? '#FFFBF5' : 'transparent'}>
+              style={{ flex: 1, minWidth: 100, padding: '10px 14px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.bg || (tile.alert ? '#FFFBF5' : 'transparent'), cursor: 'pointer', transition: 'background 0.15s' }}
+              onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
+              onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
               <div style={{ fontSize: 9, color: 'var(--gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{tile.label}</div>
               <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 2 }}>{tile.val}</div>
               <div style={{ fontSize: 10, color: tile.alert ? tile.color : 'var(--gray)', marginTop: 1, fontWeight: tile.alert ? 600 : 400 }}>{tile.sub}</div>
               <div style={{ fontSize: 9, color: tile.color, marginTop: 3, opacity: 0.6 }}>click to filter ↓</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Patient Classification Banner */}
+        <div style={{ display: 'flex', gap: 0, background: '#F8FAFF', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          {[
+            { label: '🆕 New Patient', count: stats.newPatients.length, accepted: stats.newPatients.filter(r=>r.referral_status==='Accepted').length, color: '#1565C0', bg: '#EFF6FF', type: 'New Patient' },
+            { label: '🔄 Resumption / Existing', count: stats.existingPatients.length, accepted: stats.existingPatients.filter(r=>r.referral_status==='Accepted').length, color: '#065F46', bg: '#ECFDF5', type: 'Existing Patient' },
+            { label: '🔀 Insurance Change', count: stats.insuranceChange.length, accepted: stats.insuranceChange.filter(r=>r.referral_status==='Accepted').length, color: '#7C3AED', bg: '#F5F3FF', type: 'Patient Switched Insurance' },
+            { label: '❌ Non-Admit', count: records.filter(r=>r.referral_type==='Non Admit').length, accepted: 0, color: '#DC2626', bg: '#FEF2F2', type: 'Non Admit' },
+          ].map(item => (
+            <div key={item.label} onClick={() => { setTypeFilter(typeFilter===item.type?'ALL':item.type); setActiveTab('patients'); }}
+              style={{ flex: 1, padding: '8px 16px', background: typeFilter===item.type ? item.bg : 'transparent', borderRight: '1px solid var(--border)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: item.color }}>{item.label}</div>
+                <div style={{ fontSize: 9, color: 'var(--gray)', marginTop: 1 }}>{item.accepted} accepted</div>
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: item.color }}>{item.count}</div>
             </div>
           ))}
         </div>

@@ -153,6 +153,13 @@ function UploadCard(props) {
 
           // Count totals in DB now
           var { count } = await supabase.from('visit_schedule_data').select('*', { count: 'exact', head: true });
+          await supabase.from('data_freshness').upsert({
+            data_type: 'visit_schedule',
+            last_upload: now,
+            last_batch_id: batchId,
+            record_count: rows.length,
+            updated_at: now,
+          }, { onConflict: 'data_type' });
           setMessage('✓ Visits saved. ' + rows.length + ' in this upload · ' + (count || '?') + ' total in history.');
           setCount(rows.length);
         }
@@ -241,8 +248,46 @@ function UploadCard(props) {
             }
           }
 
+          // ── SYNC PATIENT MASTER ──────────────────────────────────────
+          setMessage('Updating patient master registry...');
+          for (var pm of upsertRows) {
+            var pmKey = pm.patient_name ? pm.patient_name.toLowerCase().trim() : '';
+            var prevPm = prevMap[pmKey];
+            var isActive = /active/i.test(pm.status || '');
+            var isDischarged = /discharge/i.test(pm.status || '');
+            var masterPayload = {
+              patient_name: pm.patient_name,
+              patient_key: pmKey,
+              region: pm.region,
+              insurance: pm.insurance,
+              current_status: pm.status,
+              previous_status: prevPm ? prevPm.status : null,
+              status_changed_at: (prevPm && prevPm.status !== pm.status) ? now : undefined,
+              first_seen_date: pm.first_seen_date || today,
+              is_new_patient: !prevPm,
+              has_been_active: isActive || (prevPm ? /active/i.test(prevPm.status || '') : false),
+              has_been_discharged: isDischarged,
+              last_discharge_date: isDischarged ? today : undefined,
+              last_active_date: isActive ? today : undefined,
+              last_upload_batch: batchId,
+              updated_at: now,
+            };
+            if (!prevPm) masterPayload.first_upload_batch = batchId;
+            await supabase.from('patient_master').upsert(masterPayload, { onConflict: 'patient_name', ignoreDuplicates: false });
+          }
+
+          // ── UPDATE DATA FRESHNESS ─────────────────────────────────────
+          await supabase.from('data_freshness').upsert({
+            data_type: 'census',
+            last_upload: now,
+            last_batch_id: batchId,
+            record_count: data.length,
+            updated_at: now,
+          }, { onConflict: 'data_type' });
+
           var { count: totalCensus } = await supabase.from('census_data').select('*', { count: 'exact', head: true });
-          var msg = '✓ Census updated. ' + newCount + ' new · ' + updatedCount + ' changed · ' + unchangedCount + ' unchanged · ' + (totalCensus || '?') + ' total patients on file.';
+          var { count: masterCount } = await supabase.from('patient_master').select('*', { count: 'exact', head: true });
+          var msg = '✓ Census updated. ' + newCount + ' new · ' + updatedCount + ' changed · ' + unchangedCount + ' unchanged · ' + (totalCensus || '?') + ' current · ' + (masterCount || '?') + ' total historical patients.';
           if (newHospitalizations.length > 0) msg += ' ⚠ ' + newHospitalizations.length + ' new hospitalization(s) auto-logged.';
           if (statusChanges.length > 0) msg += ' ' + statusChanges.length + ' status change(s) recorded.';
           setMessage(msg);

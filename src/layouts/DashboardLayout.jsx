@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import Sidebar from '../components/Sidebar';
 
-export default function DashboardLayout({ activePage, onNavigate, children }) {
+export default function DashboardLayout({ activePage, onNavigate, children, alertBadges = {} }) {
   const [collapsed, setCollapsed] = useState(false);
   const sidebarWidth = collapsed ? 64 : 220;
 
@@ -12,6 +12,7 @@ export default function DashboardLayout({ activePage, onNavigate, children }) {
         onNavigate={onNavigate}
         collapsed={collapsed}
         onToggle={() => setCollapsed(c => !c)}
+        alertBadges={alertBadges}
       />
       <main style={{
         ...styles.main,
