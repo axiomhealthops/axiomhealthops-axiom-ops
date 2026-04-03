@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
@@ -86,14 +87,18 @@ export default function MissedCancelledReportPage() {
   const [searchQ, setSearchQ] = useState('');
   const [sortField, setSortField] = useState('visit_date');
   const [sortDir, setSortDir] = useState('desc');
+  const { profile } = useAuth();
 
   useEffect(() => {
-    supabase.from('visit_schedule_data')
+    const isRM = profile?.role === 'regional_manager';
+    const myRegions = isRM ? (profile?.regions || []) : null;
+    let query = supabase.from('visit_schedule_data')
       .select('*')
       .or('status.ilike.%miss%,event_type.ilike.%cancel%')
-      .order('visit_date', { ascending: false })
-      .then(({ data }) => { setVisits(data || []); setLoading(false); });
-  }, []);
+      .order('visit_date', { ascending: false });
+    if (myRegions && myRegions.length > 0) query = query.in('region', myRegions);
+    query.then(({ data }) => { setVisits(data || []); setLoading(false); });
+  }, [profile]);
 
   // Derived filter options
   const clinicians = useMemo(() =>

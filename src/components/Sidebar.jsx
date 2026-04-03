@@ -47,7 +47,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
       if (role === 'super_admin') return p.super_admin;
       if (role === 'ceo') return p.super_admin;
       if (role === 'admin') return p.admin;
-      if (role === 'regional_manager') return p.pod_leader; // same access level as pod_leader
+      if (role === 'regional_manager') return p.regional_manager; // RM has own restricted pages
       if (role === 'pod_leader') return p.pod_leader;
       if (role === 'team_member') return p.team_member;
       return false;

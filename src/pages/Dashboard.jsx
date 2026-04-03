@@ -78,8 +78,9 @@ function ComingSoon({ page }) {
 }
 
 export default function Dashboard() {
-  const [activePage, setActivePage] = useState('overview');
-  const { canAccess } = useAuth();
+  const { canAccess, profile } = useAuth();
+  const defaultPage = profile?.role === 'regional_manager' ? 'my-region' : 'overview';
+  const [activePage, setActivePage] = useState(defaultPage);
 
   const PageComponent = PAGE_COMPONENTS[activePage];
 
