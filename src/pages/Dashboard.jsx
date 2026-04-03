@@ -31,6 +31,7 @@ import MyRegionPage from './dashboard/MyRegionPage';
 import MedicareTrackerPage from './dashboard/MedicareTrackerPage';
 import MarketingCRMPage from './dashboard/MarketingCRMPage';
 import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
+import WaitlistPage from './dashboard/WaitlistPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -62,6 +63,7 @@ const PAGE_COMPONENTS = {
   'medicare-tracker':       MedicareTrackerPage,
   'marketing-crm':          MarketingCRMPage,
   'clinical-progression':   ClinicalProgressionPage,
+  'waitlist':                WaitlistPage,
 };
 
 function AccessDenied() {

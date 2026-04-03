@@ -22,7 +22,7 @@ const PAGE_ICONS = {
   auth: '🔐',
   'coordinator-portal': '👩‍💼',
   productivity: '📊', revenue: '💰', growth: '📈', scorecard: '🎯',
-  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺', 'medicare-tracker': '🏥', 'marketing-crm': '📣',
+  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺', 'medicare-tracker': '🏥', 'marketing-crm': '📣', 'waitlist': '⏳',
   users: '👥', uploads: '↑', settings: '⚙',
 };
 
