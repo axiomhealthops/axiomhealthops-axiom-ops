@@ -3,223 +3,203 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
-// Florida ZIP → approximate lat/lng for distance estimation
-// We use zip prefix matching for proximity since clinicians have no stored coords
-function zipRegion(zip) {
-  if (!zip) return null;
-  const z = String(zip).slice(0, 3);
-  const map = {
-    '320':'Orlando','321':'Orlando','322':'Jacksonville','323':'Tallahassee',
-    '324':'Tallahassee','325':'Gainesville','326':'Gainesville','327':'Daytona',
-    '328':'Daytona','329':'Melbourne','330':'Miami','331':'Miami','332':'Miami',
-    '333':'Fort Lauderdale','334':'West Palm','335':'Tampa','336':'Tampa',
-    '337':'Tampa','338':'Lakeland','339':'Fort Myers','340':'Fort Myers',
-    '341':'Naples','342':'Sarasota','344':'Gainesville','346':'Tampa',
-    '347':'Orlando','349':'Fort Pierce',
-  };
-  return map[z] || null;
-}
-
-// Rough proximity: same zip prefix (first 3 digits) = same metro area
-function proximityScore(clinicianRegion, patientRegion, patientZip, clinicianZip) {
-  if (clinicianRegion === patientRegion) return 3; // same region = closest
-  if (clinicianRegion === 'All') return 1; // flex clinician
-  // Adjacent regions (hand-coded Florida geography)
-  const adjacent = {
-    A: ['B','C'], B: ['A','C','G'], C: ['A','B','G'],
-    G: ['B','C','H','J'], H: ['G','J','M'], J: ['G','H','N'],
-    M: ['H','T','N'], N: ['H','J','M'], T: ['M','V'], V: ['T'],
-  };
-  if ((adjacent[patientRegion] || []).includes(clinicianRegion)) return 2;
-  return 0;
-}
-
-const PRIORITY_CONFIG = {
-  urgent: { label:'🔴 Urgent', color:'#DC2626', bg:'#FEF2F2', border:'#FECACA' },
-  high:   { label:'🟠 High',   color:'#D97706', bg:'#FEF3C7', border:'#FCD34D' },
-  normal: { label:'🟢 Normal', color:'#059669', bg:'#ECFDF5', border:'#A7F3D0' },
-  low:    { label:'⬇ Low',    color:'#6B7280', bg:'#F3F4F6', border:'#E5E7EB' },
+// Florida ZIP prefix → region mapping (covers major AxiomHealth service areas)
+const ZIP_REGION_MAP = {
+  '327': 'A', '328': 'A', '329': 'A', // Orlando / Seminole / Orange
+  '347': 'B', '346': 'B',              // Hillsborough / Tampa
+  '326': 'C', '344': 'C',              // Gainesville / Ocala
+  '346': 'G', '349': 'G',              // Manatee / Sarasota
+  '336': 'H', '337': 'H', '338': 'H', // Pinellas / Hillsborough North
+  '325': 'J',                          // Tallahassee
+  '320': 'M', '321': 'M',             // Jacksonville
+  '322': 'N', '323': 'N',             // Lake City / NE FL
+  '335': 'T', '336': 'T',             // Tampa South
+  '339': 'V', '341': 'V',             // Lee / Collier / SW FL
 };
 
-const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
-const RM = { A:'Uma Jacobs',B:'Lia Davis',C:'Earl Dimaano',G:'Samantha Faliks',H:'Kaylee Ramsey',J:'Hollie Fincher',M:'Ariel Maboudi',N:'Ariel Maboudi',T:'Samantha Faliks',V:'Samantha Faliks' };
+const PRIORITIES = [
+  { key: 'urgent', label: '🔴 Urgent',  color: '#DC2626', bg: '#FEF2F2' },
+  { key: 'high',   label: '🟠 High',    color: '#D97706', bg: '#FEF3C7' },
+  { key: 'normal', label: '🟡 Normal',  color: '#059669', bg: '#ECFDF5' },
+  { key: 'low',    label: '⬇ Low',     color: '#6B7280', bg: '#F3F4F6' },
+];
+
+const STATUSES = [
+  { key: 'pending',   label: 'Pending',   color: '#D97706', bg: '#FEF3C7' },
+  { key: 'assigned',  label: 'Assigned',  color: '#1565C0', bg: '#EFF6FF' },
+  { key: 'scheduled', label: 'Scheduled', color: '#7C3AED', bg: '#F5F3FF' },
+  { key: 'converted', label: 'Converted ✅', color: '#065F46', bg: '#ECFDF5' },
+  { key: 'removed',   label: 'Removed',   color: '#6B7280', bg: '#F3F4F6' },
+];
+
+function prioConfig(key) { return PRIORITIES.find(p => p.key === key) || PRIORITIES[2]; }
+function statusConfig(key) { return STATUSES.find(s => s.key === key) || STATUSES[0]; }
+
+function daysAgo(dateStr) {
+  if (!dateStr) return null;
+  return Math.floor((new Date() - new Date(dateStr + 'T00:00:00')) / 86400000);
+}
 
 function fmtDate(d) {
   if (!d) return '—';
-  return new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-}
-
-function daysAgo(dateStr) {
-  if (!dateStr) return 0;
-  return Math.floor((new Date() - new Date(dateStr+'T00:00:00')) / 86400000);
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function urgencyColor(days) {
-  if (days >= 14) return { color:'#DC2626', bg:'#FEF2F2' };
-  if (days >= 7)  return { color:'#D97706', bg:'#FEF3C7' };
-  return { color:'#065F46', bg:'#ECFDF5' };
+  if (days === null) return '#6B7280';
+  if (days >= 30) return '#DC2626';
+  if (days >= 14) return '#D97706';
+  if (days >= 7)  return '#059669';
+  return '#1565C0';
 }
 
-// ── Assignment Modal ─────────────────────────────────────────────────────────
+// ── Assignment Modal ──────────────────────────────────────────────────────────
 function AssignModal({ patient, clinicians, onClose, onSaved, profile }) {
-  const [selectedClinician, setSelectedClinician] = useState(patient.assigned_clinician || '');
-  const [notes, setNotes] = useState(patient.assignment_notes || '');
-  const [priority, setPriority] = useState(patient.priority || 'normal');
-  const [contactDate, setContactDate] = useState(patient.last_contact_date || '');
-  const [contactNotes, setContactNotes] = useState(patient.contact_notes || '');
-  const [followup, setFollowup] = useState(patient.next_followup_date || '');
+  const [form, setForm] = useState({
+    assigned_clinician: patient.assigned_clinician || '',
+    assignment_status: patient.assignment_status || 'pending',
+    priority: patient.priority || 'normal',
+    priority_reason: patient.priority_reason || '',
+    outreach_notes: patient.outreach_notes || '',
+    target_start_date: patient.target_start_date || '',
+    removal_reason: patient.removal_reason || '',
+  });
   const [saving, setSaving] = useState(false);
 
-  // Score clinicians by proximity to this patient
-  const scoredClinicians = useMemo(() => {
-    return clinicians
-      .filter(c => c.discipline === 'PTA' || c.discipline === 'PT')
-      .map(c => ({
-        ...c,
-        score: proximityScore(c.region, patient.region, patient.zip_code, null),
-        currentLoad: c.current_load || 0,
-        capacity: Math.max(0, (c.weekly_visit_target || 20) - (c.current_load || 0)),
-      }))
-      .sort((a, b) => b.score - a.score || b.capacity - a.capacity);
-  }, [clinicians, patient]);
-
-  const grouped = useMemo(() => ({
-    same: scoredClinicians.filter(c => c.score === 3),
-    adjacent: scoredClinicians.filter(c => c.score === 2),
-    flex: scoredClinicians.filter(c => c.score === 1),
-    other: scoredClinicians.filter(c => c.score === 0),
-  }), [scoredClinicians]);
+  // Filter clinicians to same region as patient
+  const regionClinicians = clinicians.filter(c =>
+    c.region === patient.region || c.region === 'All'
+  ).sort((a, b) => (b.capacity || 0) - (a.capacity || 0));
 
   async function save() {
     setSaving(true);
-    await supabase.from('waitlist_tracker').update({
-      assigned_clinician: selectedClinician || null,
-      assignment_notes: notes || null,
-      priority,
-      last_contact_date: contactDate || null,
-      contact_notes: contactNotes || null,
-      next_followup_date: followup || null,
-      assigned_by: profile?.full_name || profile?.email || 'Unknown',
-      assigned_at: selectedClinician ? new Date().toISOString() : null,
+    const now = new Date().toISOString();
+    const payload = {
+      ...form,
+      assigned_by: profile?.full_name || profile?.email,
+      assigned_at: form.assigned_clinician ? now : null,
+      updated_at: now,
+    };
+    await supabase.from('waitlist_assignments').update(payload).eq('patient_name', patient.patient_name);
+    setSaving(false);
+    onSaved();
+  }
+
+  async function logOutreach() {
+    setSaving(true);
+    await supabase.from('waitlist_assignments').update({
+      outreach_count: (patient.outreach_count || 0) + 1,
+      last_outreach_date: new Date().toISOString().slice(0,10),
+      last_outreach_by: profile?.full_name || profile?.email,
+      outreach_notes: form.outreach_notes,
       updated_at: new Date().toISOString(),
     }).eq('patient_name', patient.patient_name);
     setSaving(false);
     onSaved();
   }
 
-  const ClinGroup = ({ title, list, color }) => {
-    if (!list.length) return null;
-    return (
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{title}</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {list.map(c => {
-            const sel = selectedClinician === c.full_name;
-            return (
-              <button key={c.full_name} onClick={() => setSelectedClinician(sel ? '' : c.full_name)}
-                style={{ padding: '6px 12px', borderRadius: 7, border: `2px solid ${sel ? color : 'var(--border)'}`,
-                  background: sel ? color + '20' : 'var(--card-bg)', cursor: 'pointer', textAlign: 'left', minWidth: 140 }}>
-                <div style={{ fontSize: 12, fontWeight: sel ? 700 : 500, color: sel ? color : 'var(--black)' }}>{c.full_name}</div>
-                <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 2 }}>
-                  {c.discipline} · Rgn {c.region} · {c.weekly_visit_target} visits/wk
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:20, overflowY:'auto' }}>
-      <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:680, maxHeight:'92vh', overflow:'auto', boxShadow:'0 24px 60px rgba(0,0,0,0.35)' }}>
-        {/* Header */}
-        <div style={{ padding:'16px 22px', background:'#1565C0', borderRadius:'14px 14px 0 0', position:'sticky', top:0, zIndex:1 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-            <div>
-              <div style={{ fontSize:16, fontWeight:700, color:'#fff' }}>{patient.patient_name}</div>
-              <div style={{ fontSize:12, color:'rgba(255,255,255,0.75)', marginTop:3 }}>
-                Region {patient.region} · {patient.city}{patient.zip_code ? ` ${patient.zip_code}` : ''} · {patient.county || 'FL'} · {patient.insurance}
-              </div>
-              <div style={{ fontSize:11, color:'rgba(255,255,255,0.7)', marginTop:2 }}>
-                📅 On waitlist {daysAgo(patient.waitlist_since)} days (since {fmtDate(patient.waitlist_since)}) · {patient.diagnosis}
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24, overflowY:'auto' }}>
+      <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:560, boxShadow:'0 24px 60px rgba(0,0,0,0.35)' }}>
+        <div style={{ padding:'16px 22px', background:'#0F1117', borderRadius:'14px 14px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div>
+            <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>{patient.patient_name}</div>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.6)', marginTop:2 }}>
+              Region {patient.region} · {patient.city || '?'}{patient.zip_code ? `, ${patient.zip_code}` : ''} · {patient.insurance}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'rgba(255,255,255,0.6)' }}>×</button>
+        </div>
+
+        <div style={{ padding:22, display:'flex', flexDirection:'column', gap:16 }}>
+          {/* Time on waitlist alert */}
+          {patient.daysOnWaitlist >= 14 && (
+            <div style={{ background:patient.daysOnWaitlist>=30?'#FEF2F2':'#FEF3C7', border:`1px solid ${patient.daysOnWaitlist>=30?'#FECACA':'#FCD34D'}`, borderRadius:8, padding:'10px 14px' }}>
+              <div style={{ fontSize:12, fontWeight:700, color:patient.daysOnWaitlist>=30?'#DC2626':'#92400E' }}>
+                ⚠ {patient.daysOnWaitlist} days on waitlist{patient.daysOnWaitlist>=30?' — OVERDUE for action':''}
               </div>
             </div>
-            <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'rgba(255,255,255,0.7)' }}>×</button>
-          </div>
-        </div>
+          )}
 
-        <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 18 }}>
           {/* Priority */}
           <div>
-            <label style={{ fontSize:12, fontWeight:700, color:'var(--black)', display:'block', marginBottom:8 }}>Priority</label>
+            <label style={{ fontSize:11, fontWeight:700, color:'var(--black)', display:'block', marginBottom:8 }}>Priority</label>
             <div style={{ display:'flex', gap:8 }}>
-              {Object.entries(PRIORITY_CONFIG).map(([k, v]) => (
-                <button key={k} onClick={() => setPriority(k)}
-                  style={{ flex:1, padding:'8px 10px', borderRadius:7, border:`2px solid ${priority===k?v.color:'var(--border)'}`,
-                    background:priority===k?v.bg:'var(--card-bg)', cursor:'pointer' }}>
-                  <div style={{ fontSize:12, fontWeight:700, color:priority===k?v.color:'var(--gray)' }}>{v.label}</div>
+              {PRIORITIES.map(p => (
+                <button key={p.key} onClick={() => setForm(f=>({...f, priority:p.key}))}
+                  style={{ flex:1, padding:'7px 8px', borderRadius:7, border:`2px solid ${form.priority===p.key?p.color:'var(--border)'}`, background:form.priority===p.key?p.bg:'var(--card-bg)', cursor:'pointer', fontSize:11, fontWeight:form.priority===p.key?700:400, color:form.priority===p.key?p.color:'var(--gray)' }}>
+                  {p.label}
                 </button>
               ))}
             </div>
+            {(form.priority === 'urgent' || form.priority === 'high') && (
+              <input value={form.priority_reason} onChange={e => setForm(f=>({...f,priority_reason:e.target.value}))}
+                placeholder="Reason for elevated priority…"
+                style={{ marginTop:6, width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
+            )}
           </div>
 
-          {/* Clinician assignment */}
+          {/* Clinician Assignment */}
           <div>
-            <label style={{ fontSize:12, fontWeight:700, color:'var(--black)', display:'block', marginBottom:8 }}>
+            <label style={{ fontSize:11, fontWeight:700, color:'var(--black)', display:'block', marginBottom:8 }}>
               Assign Clinician
-              <span style={{ fontSize:10, fontWeight:400, color:'var(--gray)', marginLeft:8 }}>Sorted by proximity to patient's region</span>
+              <span style={{ fontSize:10, fontWeight:400, color:'var(--gray)', marginLeft:8 }}>Sorted by available capacity</span>
             </label>
-            <ClinGroup title={`Same Region (${patient.region}) — Closest match`} list={grouped.same} color="#1565C0" />
-            <ClinGroup title="Adjacent Region — Near match" list={grouped.adjacent} color="#059669" />
-            <ClinGroup title="Flex Clinicians — Cover all regions" list={grouped.flex} color="#7C3AED" />
-            {grouped.other.length > 0 && (
-              <details style={{ marginTop: 4 }}>
-                <summary style={{ fontSize: 11, color: 'var(--gray)', cursor: 'pointer' }}>Show {grouped.other.length} other clinicians (farther regions)</summary>
-                <div style={{ marginTop: 8 }}>
-                  <ClinGroup title="Other Regions" list={grouped.other} color="#6B7280" />
-                </div>
-              </details>
-            )}
-            {selectedClinician && (
-              <div style={{ marginTop:8, fontSize:11, fontWeight:600, color:'#1565C0', background:'#EFF6FF', padding:'6px 10px', borderRadius:6 }}>
-                ✓ Assigned to: {selectedClinician}
-              </div>
-            )}
-            <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Assignment notes…"
-              style={{ marginTop:8, width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:52, background:'var(--card-bg)' }} />
+            <select value={form.assigned_clinician} onChange={e => setForm(f=>({...f, assigned_clinician:e.target.value, assignment_status:e.target.value?'assigned':'pending'}))}
+              style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
+              <option value="">— Unassigned —</option>
+              {regionClinicians.map(c => (
+                <option key={c.full_name} value={c.full_name}>
+                  {c.full_name} ({c.discipline}) · Region {c.region} · {c.capacity > 0 ? `${c.capacity} visits available` : 'Near capacity'}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* Contact log */}
+          {/* Status */}
           <div>
-            <label style={{ fontSize:12, fontWeight:700, color:'var(--black)', display:'block', marginBottom:8 }}>Contact Log</label>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-              <div>
-                <label style={{ fontSize:10, color:'var(--gray)', fontWeight:600, display:'block', marginBottom:3 }}>Last Contact Date</label>
-                <input type="date" value={contactDate} onChange={e => setContactDate(e.target.value)}
-                  style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
-              </div>
-              <div>
-                <label style={{ fontSize:10, color:'var(--gray)', fontWeight:600, display:'block', marginBottom:3 }}>Next Follow-Up Date</label>
-                <input type="date" value={followup} onChange={e => setFollowup(e.target.value)}
-                  style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
-              </div>
+            <label style={{ fontSize:11, fontWeight:700, color:'var(--black)', display:'block', marginBottom:8 }}>Status</label>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {STATUSES.map(s => (
+                <button key={s.key} onClick={() => setForm(f=>({...f, assignment_status:s.key}))}
+                  style={{ padding:'5px 12px', borderRadius:6, border:`2px solid ${form.assignment_status===s.key?s.color:'var(--border)'}`, background:form.assignment_status===s.key?s.bg:'var(--card-bg)', cursor:'pointer', fontSize:11, fontWeight:form.assignment_status===s.key?700:400, color:form.assignment_status===s.key?s.color:'var(--gray)' }}>
+                  {s.label}
+                </button>
+              ))}
             </div>
-            <textarea value={contactNotes} onChange={e => setContactNotes(e.target.value)} placeholder="Contact notes — spoke with patient, left voicemail, patient confirmed interest…"
-              style={{ marginTop:8, width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:52, background:'var(--card-bg)' }} />
+            {form.assignment_status === 'removed' && (
+              <input value={form.removal_reason} onChange={e => setForm(f=>({...f,removal_reason:e.target.value}))}
+                placeholder="Removal reason (declined, unreachable, moved, etc.)…"
+                style={{ marginTop:6, width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
+            )}
+          </div>
+
+          {/* Target start date */}
+          <div>
+            <label style={{ fontSize:11, fontWeight:700, color:'var(--black)', display:'block', marginBottom:4 }}>Target Start Date</label>
+            <input type="date" value={form.target_start_date} onChange={e => setForm(f=>({...f,target_start_date:e.target.value}))}
+              style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }} />
+          </div>
+
+          {/* Outreach notes */}
+          <div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+              <label style={{ fontSize:11, fontWeight:700, color:'var(--black)' }}>Outreach Notes</label>
+              <span style={{ fontSize:10, color:'var(--gray)' }}>
+                {patient.outreach_count || 0} contact{(patient.outreach_count||0)!==1?'s':''} made
+                {patient.last_outreach_date ? ` · last ${fmtDate(patient.last_outreach_date)}` : ''}
+              </span>
+            </div>
+            <textarea value={form.outreach_notes} onChange={e => setForm(f=>({...f,outreach_notes:e.target.value}))}
+              placeholder="Call notes, patient availability, barriers to starting, etc."
+              style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:72, background:'var(--card-bg)' }} />
           </div>
         </div>
 
-        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--bg)' }}>
-          <button onClick={async () => {
-              await supabase.from('waitlist_tracker').update({
-                resolved: true, resolved_at: new Date().toISOString(), resolution: 'activated', updated_at: new Date().toISOString(),
-              }).eq('patient_name', patient.patient_name);
-              onSaved();
-            }}
-            style={{ padding:'8px 16px', background:'#065F46', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer' }}>
-            ✅ Mark Activated
+        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'space-between', gap:8, background:'var(--bg)' }}>
+          <button onClick={logOutreach} disabled={saving}
+            style={{ padding:'8px 14px', border:'1px solid var(--border)', borderRadius:7, fontSize:12, background:'var(--card-bg)', cursor:'pointer', color:'var(--black)' }}>
+            📞 Log Outreach Contact
           </button>
           <div style={{ display:'flex', gap:8 }}>
             <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
@@ -234,115 +214,145 @@ function AssignModal({ patient, clinicians, onClose, onSaved, profile }) {
   );
 }
 
-// ── Main Page ────────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 export default function WaitlistPage() {
   const { profile } = useAuth();
-  const [patients, setPatients] = useState([]);
+  const [waitlist, setWaitlist] = useState([]);
   const [clinicians, setClinicians] = useState([]);
+  const [intake, setIntake] = useState([]);
+  const [visits, setVisits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [filterPriority, setFilterPriority] = useState('ALL');
-  const [filterAssigned, setFilterAssigned] = useState('ALL'); // ALL | assigned | unassigned
+  const [filterStatus, setFilterStatus] = useState('pending');
   const [search, setSearch] = useState('');
-  const [sortField, setSortField] = useState('days');
+  const [sortField, setSortField] = useState('daysOnWaitlist');
   const [sortDir, setSortDir] = useState('desc');
-  const [activeModal, setActiveModal] = useState(null);
-  const [showResolved, setShowResolved] = useState(false);
+  const [editModal, setEditModal] = useState(null);
 
-  const loadAll = useCallback(async () => {
-    const [{ data: w }, { data: c }] = await Promise.all([
-      supabase.from('waitlist_tracker').select('*').order('waitlist_since'),
-      supabase.from('clinicians').select('*').eq('is_active', true),
+  const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
+
+  const load = useCallback(async () => {
+    const [wl, cl, ir, vs] = await Promise.all([
+      supabase.from('waitlist_assignments').select('*'),
+      supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,zip,lat,lng').eq('is_active', true),
+      supabase.from('intake_referrals').select('patient_name,city,zip_code,county,diagnosis,contact_number,pcp_name,location').order('date_received', { ascending: false }),
+      supabase.from('visit_schedule_data').select('staff_name,visit_date,status').gte('visit_date', new Date(Date.now()-7*86400000).toISOString().slice(0,10)),
     ]);
-    setPatients(w || []);
-    setClinicians(c || []);
+    setWaitlist(wl.data || []);
+    setClinicians(cl.data || []);
+    setIntake(ir.data || []);
+    setVisits(vs.data || []);
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { load(); }, [load]);
 
-  // Sync any new waitlist patients from census on page load
-  useEffect(() => {
-    async function syncFromCensus() {
-      const { data: censusWaitlist } = await supabase
-        .from('census_data').select('patient_name,region,insurance,first_seen_date')
-        .ilike('status', '%waitlist%');
-      if (!censusWaitlist?.length) return;
-      for (const p of censusWaitlist) {
-        await supabase.from('waitlist_tracker').upsert({
-          patient_name: p.patient_name,
-          region: p.region,
-          insurance: p.insurance,
-          waitlist_since: p.first_seen_date || new Date().toISOString().slice(0,10),
-        }, { onConflict: 'patient_name', ignoreDuplicates: true });
+  // Build enriched patient list
+  const patients = useMemo(() => {
+    // Build intake lookup (most recent referral per patient)
+    const intakeMap = {};
+    intake.forEach(r => {
+      const key = r.patient_name?.toLowerCase().trim();
+      if (key && !intakeMap[key]) intakeMap[key] = r;
+    });
+
+    // Build clinician capacity map
+    const visitCount = {};
+    visits.forEach(v => {
+      if (v.staff_name && /completed/i.test(v.status||'')) {
+        visitCount[v.staff_name] = (visitCount[v.staff_name] || 0) + 1;
       }
-      loadAll();
-    }
-    syncFromCensus();
-  }, [loadAll]);
+    });
 
-  const enriched = useMemo(() => patients.map(p => ({
-    ...p,
-    days: daysAgo(p.waitlist_since),
-    followupOverdue: p.next_followup_date && p.next_followup_date <= new Date().toISOString().slice(0,10) && !p.resolved,
-    // Find best clinician match
-    bestClinician: (() => {
-      const regionClinicians = clinicians.filter(c =>
-        (c.region === p.region || c.region === 'All') &&
-        (c.discipline === 'PT' || c.discipline === 'PTA') &&
-        c.is_active
-      );
-      return regionClinicians[0]?.full_name || null;
-    })(),
-    regionCliniciansCount: clinicians.filter(c =>
-      (c.region === p.region || c.region === 'All') && c.is_active
-    ).length,
-  })), [patients, clinicians]);
+    const enrichedClinicians = clinicians.map(c => ({
+      ...c,
+      visitsThisWeek: visitCount[c.full_name] || 0,
+      capacity: Math.max(0, (c.weekly_visit_target || 0) - (visitCount[c.full_name] || 0)),
+    }));
+
+    return waitlist.map(w => {
+      const iKey = w.patient_name?.toLowerCase().trim();
+      const ir = intakeMap[iKey] || {};
+      const daysOnWaitlist = w.waitlisted_since ? daysAgo(w.waitlisted_since) : null;
+
+      // Find best matched clinician candidates (same region, has capacity)
+      const regionClinicians = enrichedClinicians
+        .filter(c => (c.region === w.region || c.region === 'All') && c.capacity > 0)
+        .sort((a, b) => b.capacity - a.capacity);
+
+      return {
+        ...w,
+        city: ir.city || null,
+        zip_code: ir.zip_code || null,
+        county: ir.county || null,
+        diagnosis: ir.diagnosis || null,
+        contact_number: ir.contact_number || null,
+        pcp_name: ir.pcp_name || null,
+        daysOnWaitlist,
+        regionClinicians,
+        topClinician: regionClinicians[0] || null,
+        availableClinicianCount: regionClinicians.length,
+      };
+    });
+  }, [waitlist, clinicians, intake, visits]);
+
+  // Enriched clinicians for modal
+  const enrichedClinicians = useMemo(() => {
+    const visitCount = {};
+    visits.forEach(v => {
+      if (v.staff_name && /completed/i.test(v.status||'')) {
+        visitCount[v.staff_name] = (visitCount[v.staff_name] || 0) + 1;
+      }
+    });
+    return clinicians.map(c => ({
+      ...c,
+      visitsThisWeek: visitCount[c.full_name] || 0,
+      capacity: Math.max(0, (c.weekly_visit_target || 0) - (visitCount[c.full_name] || 0)),
+    }));
+  }, [clinicians, visits]);
 
   const filtered = useMemo(() => {
-    return enriched
-      .filter(p => {
-        if (!showResolved && p.resolved) return false;
-        if (showResolved && !p.resolved) return false;
-        if (filterRegion !== 'ALL' && p.region !== filterRegion) return false;
-        if (filterPriority !== 'ALL' && p.priority !== filterPriority) return false;
-        if (filterAssigned === 'assigned' && !p.assigned_clinician) return false;
-        if (filterAssigned === 'unassigned' && p.assigned_clinician) return false;
-        if (search) {
-          const q = search.toLowerCase();
-          if (!`${p.patient_name} ${p.city} ${p.county} ${p.assigned_clinician}`.toLowerCase().includes(q)) return false;
-        }
-        return true;
-      })
-      .sort((a, b) => {
-        if (sortField === 'days') return sortDir === 'desc' ? b.days - a.days : a.days - b.days;
-        if (sortField === 'name') return sortDir === 'asc' ? a.patient_name.localeCompare(b.patient_name) : b.patient_name.localeCompare(a.patient_name);
-        if (sortField === 'region') return sortDir === 'asc' ? (a.region||'').localeCompare(b.region||'') : (b.region||'').localeCompare(a.region||'');
-        return 0;
-      });
-  }, [enriched, filterRegion, filterPriority, filterAssigned, search, sortField, sortDir, showResolved]);
+    return patients.filter(p => {
+      if (filterRegion !== 'ALL' && p.region !== filterRegion) return false;
+      if (filterPriority !== 'ALL' && p.priority !== filterPriority) return false;
+      if (filterStatus !== 'ALL' && p.assignment_status !== filterStatus) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        if (!`${p.patient_name} ${p.city} ${p.county} ${p.insurance} ${p.assigned_clinician}`.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    }).sort((a, b) => {
+      let av = a[sortField], bv = b[sortField];
+      if (av == null) av = sortDir === 'asc' ? Infinity : -Infinity;
+      if (bv == null) bv = sortDir === 'asc' ? Infinity : -Infinity;
+      if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+      return sortDir === 'asc' ? av - bv : bv - av;
+    });
+  }, [patients, filterRegion, filterPriority, filterStatus, search, sortField, sortDir]);
 
   const stats = useMemo(() => {
-    const active = enriched.filter(p => !p.resolved);
+    const active = patients.filter(p => !['converted','removed'].includes(p.assignment_status));
     return {
       total: active.length,
-      urgent: active.filter(p => p.days >= 14).length,
+      urgent: active.filter(p => p.priority === 'urgent' || p.daysOnWaitlist >= 30).length,
       unassigned: active.filter(p => !p.assigned_clinician).length,
-      followupDue: active.filter(p => p.followupOverdue).length,
-      avgDays: active.length ? Math.round(active.reduce((s,p) => s+p.days, 0) / active.length) : 0,
-      byRegion: REGIONS.reduce((acc,r) => ({ ...acc, [r]: active.filter(p=>p.region===r).length }), {}),
+      over14days: active.filter(p => p.daysOnWaitlist >= 14).length,
+      over30days: active.filter(p => p.daysOnWaitlist >= 30).length,
+      avgDays: active.length > 0 ? Math.round(active.reduce((s,p) => s + (p.daysOnWaitlist||0), 0) / active.length) : 0,
+      byRegion: REGIONS.reduce((acc, r) => ({ ...acc, [r]: active.filter(p=>p.region===r).length }), {}),
     };
-  }, [enriched]);
+  }, [patients]);
 
-  function toggleSort(f) {
-    if (sortField === f) setSortDir(d => d==='asc'?'desc':'asc');
-    else { setSortField(f); setSortDir('desc'); }
+  function toggleSort(field) {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir('desc'); }
   }
 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Waitlist Management" subtitle="Loading…" />
-      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading…</div>
+      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading waitlist data…</div>
     </div>
   );
 
@@ -350,34 +360,50 @@ export default function WaitlistPage() {
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
         title="Waitlist Management"
-        subtitle={`${stats.total} patients waiting · ${stats.unassigned} unassigned · avg ${stats.avgDays} days on waitlist`}
+        subtitle={`${stats.total} active · ${stats.unassigned} unassigned · ${stats.over14days} waiting 14+ days`}
       />
       <div style={{ flex:1 }}>
+
+        {/* Urgent alert bar */}
+        {stats.over30days > 0 && (
+          <div style={{ background:'#FEF2F2', borderBottom:'2px solid #FECACA', padding:'8px 20px', display:'flex', alignItems:'center', gap:12 }}>
+            <span style={{ fontSize:16 }}>🚨</span>
+            <span style={{ fontSize:12, fontWeight:700, color:'#DC2626' }}>
+              {stats.over30days} patient{stats.over30days>1?'s':''} have been on the waitlist 30+ days — immediate action needed
+            </span>
+            <button onClick={() => { setSortField('daysOnWaitlist'); setSortDir('desc'); setFilterStatus('pending'); }}
+              style={{ marginLeft:'auto', fontSize:11, fontWeight:600, color:'#DC2626', background:'white', border:'1px solid #FECACA', borderRadius:5, padding:'3px 10px', cursor:'pointer' }}>
+              Show Oldest First
+            </button>
+          </div>
+        )}
 
         {/* Filter bar */}
         <div style={{ padding:'10px 20px', borderBottom:'1px solid var(--border)', background:'var(--card-bg)', display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
           <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:7, overflow:'hidden' }}>
-            {[['ALL','All'],['unassigned','⚠ Unassigned'],['assigned','✓ Assigned']].map(([k,l]) => (
-              <button key={k} onClick={() => setFilterAssigned(k)}
-                style={{ padding:'5px 10px', border:'none', fontSize:11, fontWeight:filterAssigned===k?700:400, cursor:'pointer', background:filterAssigned===k?'#0F1117':'var(--card-bg)', color:filterAssigned===k?'#fff':'var(--gray)' }}>{l}</button>
+            {[['ALL','All'],['pending','⏳ Pending'],['assigned','👤 Assigned'],['scheduled','📅 Scheduled'],['converted','✅ Converted'],['removed','❌ Removed']].map(([k,l]) => (
+              <button key={k} onClick={() => setFilterStatus(k)}
+                style={{ padding:'5px 10px', border:'none', fontSize:11, fontWeight:filterStatus===k?700:400, cursor:'pointer', background:filterStatus===k?'#0F1117':'var(--card-bg)', color:filterStatus===k?'#fff':'var(--gray)' }}>
+                {l}
+              </button>
             ))}
           </div>
           <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
             style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)' }}>
             <option value="ALL">All Regions</option>
-            {REGIONS.map(r => <option key={r} value={r}>Region {r} — {RM[r]}</option>)}
+            {REGIONS.map(r => <option key={r} value={r}>Region {r} ({stats.byRegion[r] || 0})</option>)}
           </select>
           <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
             style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)' }}>
             <option value="ALL">All Priorities</option>
-            {Object.entries(PRIORITY_CONFIG).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
+            {PRIORITIES.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
           </select>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patient, city…"
-            style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)', width:160 }} />
-          <button onClick={() => setShowResolved(s => !s)}
-            style={{ padding:'5px 10px', border:`1px solid ${showResolved?'#1565C0':'var(--border)'}`, borderRadius:6, fontSize:11, background:showResolved?'#EFF6FF':'var(--card-bg)', color:showResolved?'#1565C0':'var(--gray)', cursor:'pointer' }}>
-            {showResolved ? '← Active' : 'View Resolved'}
-          </button>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patient, city, clinician…"
+            style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)', width:180 }} />
+          {(filterRegion!=='ALL'||filterPriority!=='ALL'||search) && (
+            <button onClick={() => { setFilterRegion('ALL'); setFilterPriority('ALL'); setSearch(''); }}
+              style={{ fontSize:10, color:'var(--gray)', background:'none', border:'1px solid var(--border)', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>Clear</button>
+          )}
           <div style={{ marginLeft:'auto', fontSize:11, color:'var(--gray)' }}>{filtered.length} shown</div>
         </div>
 
@@ -386,13 +412,13 @@ export default function WaitlistPage() {
           {/* KPI Cards */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:12 }}>
             {[
-              { label:'On Waitlist', val:stats.total, color:'var(--black)', bg:'var(--card-bg)', sub:'active patients' },
-              { label:'⏰ 14+ Days', val:stats.urgent, color:'#DC2626', bg:'#FEF2F2', sub:'need immediate action', border:'#FECACA' },
-              { label:'⚠ Unassigned', val:stats.unassigned, color:'#D97706', bg:'#FEF3C7', sub:'no clinician assigned', border:'#FCD34D' },
-              { label:'📆 Follow-Up Due', val:stats.followupDue, color:'#7C3AED', bg:'#F5F3FF', sub:'overdue contact', border:'#DDD6FE' },
-              { label:'Avg Wait', val:`${stats.avgDays}d`, color:'#1565C0', bg:'#EFF6FF', sub:'average days waiting', border:'#BFDBFE' },
+              { label:'Active Waitlist', val:stats.total, color:'var(--black)', bg:'var(--card-bg)', sub:'Total patients waiting' },
+              { label:'🚨 30+ Days', val:stats.over30days, color:'#DC2626', bg:stats.over30days>0?'#FEF2F2':'var(--card-bg)', sub:'Critical — overdue action' },
+              { label:'⚠ 14+ Days', val:stats.over14days, color:'#D97706', bg:'#FEF3C7', sub:'Need assignment soon' },
+              { label:'👤 Unassigned', val:stats.unassigned, color:'#7C3AED', bg:'#F5F3FF', sub:'No clinician assigned' },
+              { label:'📊 Avg Wait', val:stats.avgDays + 'd', color:'#1565C0', bg:'#EFF6FF', sub:'Average days on waitlist' },
             ].map(c => (
-              <div key={c.label} style={{ background:c.bg, border:`1px solid ${c.border||'var(--border)'}`, borderRadius:10, padding:'12px 14px' }}>
+              <div key={c.label} style={{ background:c.bg, border:'1px solid var(--border)', borderRadius:10, padding:'12px 14px' }}>
                 <div style={{ fontSize:10, fontWeight:700, color:c.color, textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
                 <div style={{ fontSize:26, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:4 }}>{c.val}</div>
                 <div style={{ fontSize:10, color:'var(--gray)', marginTop:2 }}>{c.sub}</div>
@@ -400,109 +426,166 @@ export default function WaitlistPage() {
             ))}
           </div>
 
-          {/* Region distribution */}
+          {/* Region distribution bar */}
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:16 }}>
             <div style={{ fontSize:13, fontWeight:700, marginBottom:12 }}>Waitlist by Region</div>
-            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
               {REGIONS.map(r => {
                 const cnt = stats.byRegion[r] || 0;
                 if (!cnt) return null;
-                const clinCount = clinicians.filter(c => (c.region===r||c.region==='All') && c.is_active).length;
-                const ratio = clinCount ? (cnt / clinCount).toFixed(1) : '—';
                 return (
                   <div key={r} onClick={() => setFilterRegion(filterRegion===r?'ALL':r)}
-                    style={{ minWidth:100, background:filterRegion===r?'#1565C0':'var(--bg)', border:`2px solid ${filterRegion===r?'#1565C0':'var(--border)'}`, borderRadius:8, padding:'10px 14px', cursor:'pointer', textAlign:'center' }}>
+                    style={{ padding:'8px 14px', borderRadius:8, background:filterRegion===r?'#0F1117':'#F3F4F6', border:`2px solid ${filterRegion===r?'#0F1117':'transparent'}`, cursor:'pointer', textAlign:'center', minWidth:60 }}>
                     <div style={{ fontSize:11, fontWeight:700, color:filterRegion===r?'#fff':'var(--gray)' }}>Region {r}</div>
-                    <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', color:filterRegion===r?'#fff':'#1565C0' }}>{cnt}</div>
-                    <div style={{ fontSize:9, color:filterRegion===r?'rgba(255,255,255,0.7)':'var(--gray)', marginTop:2 }}>{clinCount} clinicians · {ratio}:1 ratio</div>
-                    <div style={{ fontSize:9, color:filterRegion===r?'rgba(255,255,255,0.6)':'var(--gray)' }}>{RM[r]}</div>
+                    <div style={{ fontSize:20, fontWeight:900, fontFamily:'DM Mono, monospace', color:filterRegion===r?'#fff':'var(--black)' }}>{cnt}</div>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Patient table */}
+          {/* Main patient table */}
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
             <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontSize:14, fontWeight:700 }}>{showResolved ? 'Resolved Patients' : 'Active Waitlist'}</div>
-              <div style={{ fontSize:11, color:'var(--gray)' }}>{filtered.length} patients · click to manage</div>
+              <div style={{ fontSize:14, fontWeight:700 }}>Waitlist Patients</div>
+              <div style={{ fontSize:11, color:'var(--gray)' }}>{filtered.length} patients · click row to manage</div>
             </div>
 
-            {/* Header */}
-            <div style={{ display:'grid', gridTemplateColumns:'1.6fr 0.4fr 0.8fr 0.6fr 0.8fr 1fr 1fr 0.7fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
-              <div style={{ cursor:'pointer' }} onClick={() => toggleSort('name')}>Patient {sortField==='name'&&(sortDir==='asc'?'↑':'↓')}</div>
-              <div style={{ cursor:'pointer' }} onClick={() => toggleSort('region')}>Rgn {sortField==='region'&&(sortDir==='asc'?'↑':'↓')}</div>
-              <div>Location</div>
-              <div>Insurance</div>
-              <div style={{ cursor:'pointer' }} onClick={() => toggleSort('days')}>Days Waiting {sortField==='days'&&(sortDir==='desc'?'↓':'↑')}</div>
-              <div>Closest Clinician</div>
-              <div>Assigned To</div>
-              <div>Priority</div>
+            {/* Table header */}
+            <div style={{ display:'grid', gridTemplateColumns:'1.6fr 0.4fr 0.7fr 0.7fr 0.7fr 0.9fr 1.1fr 0.9fr 0.8fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
+              {[['Patient','patient_name'],['Rgn','region'],['Days','daysOnWaitlist'],['Priority','priority'],['Status','assignment_status'],['Location','city'],['Assigned To','assigned_clinician'],['Available','availableClinicianCount'],['Last Contact','']].map(([l,f]) => (
+                <div key={l} style={{ cursor:f?'pointer':'default' }} onClick={() => f && toggleSort(f)}>
+                  {l}{f && <span style={{ fontSize:9, color:sortField===f?'#1565C0':'#ccc', marginLeft:2 }}>{sortField===f?(sortDir==='asc'?'↑':'↓'):'↕'}</span>}
+                </div>
+              ))}
             </div>
 
             {filtered.length === 0 ? (
-              <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
-                {showResolved ? 'No resolved patients.' : 'No waitlist patients match current filters.'}
+              <div style={{ padding:48, textAlign:'center', color:'var(--gray)' }}>
+                {patients.length === 0 ? 'No waitlist patients found.' : 'No patients match current filters.'}
               </div>
             ) : filtered.map((p, i) => {
-              const u = urgencyColor(p.days);
-              const pc = PRIORITY_CONFIG[p.priority] || PRIORITY_CONFIG.normal;
-              const followupDue = p.followupOverdue;
-              const rowBg = p.days >= 14 ? '#FFF5F5' : followupDue ? '#FFFBEB' : i%2===0 ? 'var(--card-bg)' : 'var(--bg)';
+              const pc = prioConfig(p.priority);
+              const sc = statusConfig(p.assignment_status);
+              const dColor = urgencyColor(p.daysOnWaitlist);
+              const rowBg = p.daysOnWaitlist >= 30 ? '#FFF5F5' : p.daysOnWaitlist >= 14 ? '#FFFBEB' : i%2===0 ? 'var(--card-bg)' : 'var(--bg)';
               return (
-                <div key={p.patient_name} style={{ display:'grid', gridTemplateColumns:'1.6fr 0.4fr 0.8fr 0.6fr 0.8fr 1fr 1fr 0.7fr', padding:'11px 20px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8, cursor:'pointer' }}
-                  onClick={() => setActiveModal(p)}
+                <div key={p.id || p.patient_name}
+                  onClick={() => setEditModal(p)}
+                  style={{ display:'grid', gridTemplateColumns:'1.6fr 0.4fr 0.7fr 0.7fr 0.7fr 0.9fr 1.1fr 0.9fr 0.8fr', padding:'11px 20px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8, cursor:'pointer' }}
                   onMouseEnter={e => e.currentTarget.style.background='#EFF6FF'}
                   onMouseLeave={e => e.currentTarget.style.background=rowBg}>
+
                   <div>
                     <div style={{ fontSize:12, fontWeight:600 }}>{p.patient_name}</div>
-                    <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>{p.diagnosis || 'Lymphedema'}</div>
-                    {followupDue && <div style={{ fontSize:9, fontWeight:700, color:'#D97706' }}>📆 Follow-up overdue</div>}
+                    <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>{p.insurance} · {p.diagnosis?.replace('I89.0 ','') || '—'}</div>
                   </div>
+
                   <span style={{ fontSize:12, fontWeight:700, color:'var(--gray)' }}>{p.region}</span>
+
+                  <div>
+                    <div style={{ fontSize:16, fontWeight:900, fontFamily:'DM Mono, monospace', color:dColor }}>
+                      {p.daysOnWaitlist !== null ? p.daysOnWaitlist : '—'}
+                    </div>
+                    <div style={{ fontSize:9, color:dColor }}>{p.daysOnWaitlist !== null ? 'days' : ''}</div>
+                  </div>
+
+                  <span style={{ fontSize:10, fontWeight:700, color:pc.color, background:pc.bg, padding:'2px 8px', borderRadius:999 }}>
+                    {pc.label}
+                  </span>
+
+                  <span style={{ fontSize:10, fontWeight:700, color:sc.color, background:sc.bg, padding:'2px 8px', borderRadius:999 }}>
+                    {sc.label}
+                  </span>
+
                   <div>
                     <div style={{ fontSize:11, fontWeight:600 }}>{p.city || '—'}</div>
                     {p.zip_code && <div style={{ fontSize:10, color:'var(--gray)' }}>{p.zip_code}</div>}
                   </div>
-                  <span style={{ fontSize:10, color:'var(--gray)' }}>{p.insurance || '—'}</span>
-                  <div>
-                    <span style={{ fontSize:14, fontWeight:900, fontFamily:'DM Mono, monospace', color:u.color }}>{p.days}</span>
-                    <span style={{ fontSize:10, color:'var(--gray)' }}> days</span>
-                    <div style={{ fontSize:9, color:'var(--gray)', marginTop:1 }}>since {fmtDate(p.waitlist_since)}</div>
-                  </div>
-                  <div>
-                    {p.bestClinician ? (
-                      <>
-                        <div style={{ fontSize:11, fontWeight:600 }}>{p.bestClinician}</div>
-                        <div style={{ fontSize:9, color:'var(--gray)' }}>{p.regionCliniciansCount} in region</div>
-                      </>
-                    ) : <span style={{ fontSize:10, color:'#DC2626' }}>No clinicians in region</span>}
-                  </div>
+
                   <div>
                     {p.assigned_clinician ? (
-                      <>
-                        <div style={{ fontSize:11, fontWeight:600, color:'#065F46' }}>✓ {p.assigned_clinician}</div>
-                        {p.last_contact_date && <div style={{ fontSize:9, color:'var(--gray)' }}>Last contact: {fmtDate(p.last_contact_date)}</div>}
-                      </>
-                    ) : <span style={{ fontSize:10, fontWeight:700, color:'#D97706', background:'#FEF3C7', padding:'2px 7px', borderRadius:999 }}>⚠ Unassigned</span>}
+                      <div>
+                        <div style={{ fontSize:11, fontWeight:600, color:'#1565C0' }}>{p.assigned_clinician.split(',')[0] || p.assigned_clinician}</div>
+                        {p.target_start_date && <div style={{ fontSize:10, color:'var(--gray)' }}>Start: {fmtDate(p.target_start_date)}</div>}
+                      </div>
+                    ) : (
+                      <span style={{ fontSize:10, color:'#9CA3AF', fontStyle:'italic' }}>Unassigned</span>
+                    )}
                   </div>
-                  <span style={{ fontSize:9, fontWeight:700, color:pc.color, background:pc.bg, padding:'3px 8px', borderRadius:999, border:`1px solid ${pc.border}` }}>
-                    {pc.label}
-                  </span>
+
+                  <div>
+                    {p.availableClinicianCount > 0 ? (
+                      <div>
+                        <div style={{ fontSize:12, fontWeight:700, color:'#065F46' }}>{p.availableClinicianCount}</div>
+                        <div style={{ fontSize:9, color:'#065F46' }}>with capacity</div>
+                        {p.topClinician && <div style={{ fontSize:9, color:'var(--gray)', marginTop:1 }}>Best: {p.topClinician.full_name.split(' ').slice(-1)[0]}</div>}
+                      </div>
+                    ) : (
+                      <span style={{ fontSize:10, color:'#DC2626', fontWeight:600 }}>None available</span>
+                    )}
+                  </div>
+
+                  <div>
+                    {p.last_outreach_date ? (
+                      <div>
+                        <div style={{ fontSize:11 }}>{fmtDate(p.last_outreach_date)}</div>
+                        <div style={{ fontSize:9, color:'var(--gray)' }}>{p.outreach_count} contact{p.outreach_count!==1?'s':''}</div>
+                      </div>
+                    ) : (
+                      <span style={{ fontSize:10, color:'#DC2626', fontWeight:600 }}>No contact</span>
+                    )}
+                  </div>
                 </div>
               );
             })}
           </div>
+
+          {/* Clinician capacity reference panel */}
+          <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
+            <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)', fontSize:14, fontWeight:700 }}>
+              Clinician Capacity — This Week
+              <span style={{ fontSize:11, fontWeight:400, color:'var(--gray)', marginLeft:8 }}>PT/PTA/OT with open slots for new patients</span>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:0 }}>
+              {['A','B','C','G','H','J','M','N','T','V'].map(region => {
+                const regionClinicians = enrichedClinicians
+                  .filter(c => c.region === region || c.region === 'All')
+                  .sort((a,b) => b.capacity - a.capacity)
+                  .slice(0, 4);
+                if (regionClinicians.length === 0) return null;
+                return (
+                  <div key={region} style={{ padding:'12px 14px', borderRight:'1px solid var(--border)', borderBottom:'1px solid var(--border)' }}>
+                    <div style={{ fontSize:11, fontWeight:800, color:'var(--gray)', marginBottom:8 }}>Region {region}</div>
+                    {regionClinicians.map(c => (
+                      <div key={c.full_name} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:5 }}>
+                        <div>
+                          <div style={{ fontSize:11, fontWeight:600 }}>{c.full_name.split(' ').slice(-1)[0]}, {c.full_name.split(' ')[0][0]}.</div>
+                          <div style={{ fontSize:9, color:'var(--gray)' }}>{c.discipline}</div>
+                        </div>
+                        <div style={{ textAlign:'right' }}>
+                          <div style={{ fontSize:12, fontWeight:700, color:c.capacity>5?'#065F46':c.capacity>0?'#D97706':'#DC2626' }}>
+                            {c.capacity > 0 ? `+${c.capacity}` : 'Full'}
+                          </div>
+                          <div style={{ fontSize:9, color:'var(--gray)' }}>{c.visitsThisWeek}/{c.weekly_visit_target}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
         </div>
       </div>
 
-      {activeModal && (
+      {editModal && (
         <AssignModal
-          patient={activeModal}
-          clinicians={clinicians}
-          onClose={() => setActiveModal(null)}
-          onSaved={() => { setActiveModal(null); loadAll(); }}
+          patient={editModal}
+          clinicians={enrichedClinicians}
+          onClose={() => setEditModal(null)}
+          onSaved={() => { setEditModal(null); load(); }}
           profile={profile}
         />
       )}
