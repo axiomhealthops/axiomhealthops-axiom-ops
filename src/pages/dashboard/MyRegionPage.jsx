@@ -242,7 +242,7 @@ export default function MyRegionPage() {
   if (!profile) return null;
 
   if (myRegions.length === 0) return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
+    <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar title="My Region" subtitle="No regions assigned" />
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:12, color:'var(--gray)' }}>
         <div style={{ fontSize:32 }}>🗺</div>
@@ -253,22 +253,22 @@ export default function MyRegionPage() {
   );
 
   if (loading) return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
+    <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar title="My Region" subtitle="Loading…" />
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading your regional data…</div>
     </div>
   );
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
+    <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
         title={isAdmin ? `Regional View${myRegions.length<10?' — '+regionLabel:''}` : `My Region — ${regionLabel}`}
         subtitle={`${managerName} · ${activePatients.length} active patients · ${clinicians.length} clinicians`}
       />
-      <div style={{ flex:1, overflow:'auto' }}>
+      <div style={{ flex:1 }}>
 
         {/* Tab bar */}
-        <div style={{ display:'flex', gap:0, borderBottom:'1px solid var(--border)', background:'var(--card-bg)', padding:'0 20px' }}>
+        <div style={{ display:'flex', gap:0, borderBottom:'1px solid var(--border)', background:'var(--card-bg)', padding:'0 20px', position:'sticky', top:0, zIndex:10 }}>
           {[['alerts','🔔 Alerts'],['overview','📊 Overview'],['productivity','👤 Clinician Productivity'],['patients','🧑 My Patients'],['auth','🔑 Authorizations'],['onhold','⏸ On Hold']].map(([k,l]) => (
             <button key={k} onClick={() => setActiveTab(k)}
               style={{ padding:'12px 16px', border:'none', borderBottom:`2px solid ${activeTab===k?'#DC2626':'transparent'}`, background:'none', fontSize:12, fontWeight:activeTab===k?700:400, color:activeTab===k?'#DC2626':'var(--gray)', cursor:'pointer', whiteSpace:'nowrap' }}>
@@ -285,7 +285,7 @@ export default function MyRegionPage() {
           </div>
         </div>
 
-        <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ padding:20, paddingBottom:40, display:'flex', flexDirection:'column', gap:16 }}>
 
           {/* ── ALERTS TAB ───────────────────────────────────────────── */}
           {activeTab === 'alerts' && (
@@ -541,7 +541,7 @@ export default function MyRegionPage() {
                 <span>Patient</span><span>Rgn</span><span>Status</span><span>Insurance</span><span>Last Visit</span><span>Next Visit</span><span>Missed</span><span>Auth</span>
               </div>
 
-              <div style={{ maxHeight:500, overflowY:'auto' }}>
+              <div>
                 {patientList.length === 0 ? (
                   <div style={{ padding:32, textAlign:'center', color:'var(--gray)' }}>No patients found.</div>
                 ) : patientList.map((p, i) => {
@@ -595,7 +595,7 @@ export default function MyRegionPage() {
                 <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.5fr 0.8fr 0.7fr 0.7fr 0.7fr 0.8fr 0.8fr 0.7fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
                   <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Auth #</span><span>Status</span><span>Visits Auth</span><span>Visits Used</span><span>Expiry</span><span>Days Left</span>
                 </div>
-                <div style={{ maxHeight:500, overflowY:'auto' }}>
+                <div>
                   {authData.length === 0 ? (
                     <div style={{ padding:32, textAlign:'center', color:'var(--gray)' }}>No authorization records.</div>
                   ) : authData.sort((a,b) => {
@@ -640,7 +640,7 @@ export default function MyRegionPage() {
               <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.5fr 1fr 0.8fr 0.8fr 0.8fr 1fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
                 <span>Patient</span><span>Rgn</span><span>Hold Type</span><span>Days on Hold</span><span>On Hold Since</span><span>Last Contact</span><span>Exp. Return</span>
               </div>
-              <div style={{ maxHeight:500, overflowY:'auto' }}>
+              <div>
                 {onHold.length === 0 ? (
                   <div style={{ padding:32, textAlign:'center', color:'var(--gray)' }}>✅ No patients currently on hold in your region{myRegions.length>1?'s':''}.</div>
                 ) : onHold.sort((a,b) => (b.days_on_hold||0)-(a.days_on_hold||0)).map((p,i) => {
