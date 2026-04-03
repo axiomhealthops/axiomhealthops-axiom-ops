@@ -41,6 +41,8 @@ export default function MyRegionPage() {
   const [activeTab, setActiveTab] = useState('alerts');
   const [searchPatient, setSearchPatient] = useState('');
   const [filterClinician, setFilterClinician] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterInsurance, setFilterInsurance] = useState('ALL');
 
   // Determine which regions this user manages
   const myRegions = useMemo(() => {
@@ -126,6 +128,8 @@ export default function MyRegionPage() {
     return census
       .filter(p => {
         if (searchPatient && !p.patient_name?.toLowerCase().includes(searchPatient.toLowerCase())) return false;
+        if (filterStatus !== 'ALL' && p.status !== filterStatus) return false;
+        if (filterInsurance !== 'ALL' && (p.insurance||'').toLowerCase() !== filterInsurance.toLowerCase()) return false;
         return true;
       })
       .map(p => {
@@ -140,7 +144,11 @@ export default function MyRegionPage() {
         return { ...p, auth, lastVisit, nextVisit, missedCount, currentLevel };
       })
       .sort((a,b) => (a.patient_name||'').localeCompare(b.patient_name||''));
-  }, [census, authData, visits, searchPatient]);
+  }, [census, authData, visits, searchPatient, filterStatus, filterInsurance]);
+
+  // Derived filter options for patients tab
+  const patientStatuses = useMemo(() => [...new Set(census.map(p => p.status).filter(Boolean))].sort(), [census]);
+  const patientInsurances = useMemo(() => [...new Set(census.map(p => p.insurance).filter(Boolean))].sort(), [census]);
 
   // Auth tracker — expiring / low visits
   const expiringAuth = authData.filter(a => {
@@ -527,14 +535,34 @@ export default function MyRegionPage() {
           {/* ── PATIENTS TAB ─────────────────────────────────────── */}
           {activeTab === 'patients' && (
             <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-              <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:10 }}>
-                <div>
-                  <div style={{ fontSize:15, fontWeight:700 }}>Patients in My Region{myRegions.length>1?'s':''}</div>
-                  <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>{census.length} total · {activePatients.length} active</div>
+              <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+                  <div>
+                    <div style={{ fontSize:15, fontWeight:700 }}>Patients in My Region{myRegions.length>1?'s':''}</div>
+                    <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>{patientList.length} shown · {census.length} total · {activePatients.length} active</div>
+                  </div>
+                  {(filterStatus !== 'ALL' || filterInsurance !== 'ALL' || searchPatient) && (
+                    <button onClick={() => { setFilterStatus('ALL'); setFilterInsurance('ALL'); setSearchPatient(''); }}
+                      style={{ fontSize:11, color:'var(--gray)', background:'none', border:'1px solid var(--border)', borderRadius:5, padding:'4px 10px', cursor:'pointer' }}>
+                      Clear Filters
+                    </button>
+                  )}
                 </div>
-                <input value={searchPatient} onChange={e => setSearchPatient(e.target.value)}
-                  placeholder="Search patient name…"
-                  style={{ padding:'7px 12px', border:'1px solid var(--border)', borderRadius:7, fontSize:12, outline:'none', background:'var(--bg)', width:220 }} />
+                <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                  <input value={searchPatient} onChange={e => setSearchPatient(e.target.value)}
+                    placeholder="Search patient name…"
+                    style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)', width:200 }} />
+                  <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+                    style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)', minWidth:160 }}>
+                    <option value="ALL">All Statuses</option>
+                    {patientStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <select value={filterInsurance} onChange={e => setFilterInsurance(e.target.value)}
+                    style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)', minWidth:160 }}>
+                    <option value="ALL">All Insurance</option>
+                    {patientInsurances.map(ins => <option key={ins} value={ins}>{ins}</option>)}
+                  </select>
+                </div>
               </div>
 
               <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.4fr 0.9fr 0.7fr 0.8fr 0.8fr 0.7fr 0.7fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
