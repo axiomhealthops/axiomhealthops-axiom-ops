@@ -27,6 +27,7 @@ import ReportsExportPage from './dashboard/ReportsExportPage';
 import RegionalManagerDashboard from './dashboard/RegionalManagerDashboard';
 import HospitalizationTrackerPage from './dashboard/HospitalizationTrackerPage';
 import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
+import MyRegionPage from './dashboard/MyRegionPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -54,6 +55,7 @@ const PAGE_COMPONENTS = {
   'rm-dashboard':       RegionalManagerDashboard,
   hospitalizations:     HospitalizationTrackerPage,
   'missed-cancelled':   MissedCancelledReportPage,
+  'my-region':          MyRegionPage,
 };
 
 function AccessDenied() {

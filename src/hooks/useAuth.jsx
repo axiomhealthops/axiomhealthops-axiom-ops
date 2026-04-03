@@ -68,6 +68,7 @@ export function AuthProvider({ children }) {
           if (role === 'super_admin') return p.super_admin;
           if (role === 'ceo') return p.super_admin; // CEO gets same access as super_admin
           if (role === 'admin') return p.admin;
+          if (role === 'regional_manager') return p.pod_leader; // RM gets pod_leader level access
           if (role === 'pod_leader') return p.pod_leader;
           if (role === 'team_member') return p.team_member;
           return false;

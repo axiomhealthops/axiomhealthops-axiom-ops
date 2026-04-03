@@ -22,7 +22,7 @@ const PAGE_ICONS = {
   auth: '🔐',
   'coordinator-portal': '👩‍💼',
   productivity: '📊', revenue: '💰', growth: '📈', scorecard: '🎯',
-  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥', 'missed-cancelled': '📉',
+  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺',
   users: '👥', uploads: '↑', settings: '⚙',
 };
 
@@ -45,8 +45,9 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
     const role = profile?.role;
     const accessible = pages.filter(p => {
       if (role === 'super_admin') return p.super_admin;
-      if (role === 'ceo') return p.super_admin; // CEO sees everything super_admin sees
+      if (role === 'ceo') return p.super_admin;
       if (role === 'admin') return p.admin;
+      if (role === 'regional_manager') return p.pod_leader; // same access level as pod_leader
       if (role === 'pod_leader') return p.pod_leader;
       if (role === 'team_member') return p.team_member;
       return false;
@@ -69,6 +70,8 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle })
   const roleLabel = {
     super_admin: 'Super Admin',
     ceo: 'CEO',
+    admin: 'Admin',
+    regional_manager: 'Regional Manager',
     admin: 'Admin',
     pod_leader: 'Pod Leader',
     team_member: 'Team Member',
