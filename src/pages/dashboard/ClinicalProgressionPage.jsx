@@ -2,15 +2,16 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 
-// Level definitions — maps Pariox event_type keywords to structured levels
+// Level definitions — Axiom hierarchy: L5 = most complex/intensive, L1 = simplest, Maintenance = lowest (tapering/dischargeable)
+// Progression direction: EVAL → L5 → L4 → L3 → L2 → L1 → MAINT (stepping DOWN in level = improving)
 const LEVELS = [
-  { key:'eval',  label:'Evaluation',  short:'EVAL', color:'#6B7280', bg:'#F3F4F6', visits:0,  freq:'Initial assessment',          desc:'New patient evaluation' },
-  { key:'1',     label:'Level 1',     short:'L1',   color:'#DC2626', bg:'#FEF2F2', visits:4,  freq:'4x/week × 4 weeks (4w4)',     desc:'Intensive daily treatment' },
-  { key:'2',     label:'Level 2',     short:'L2',   color:'#D97706', bg:'#FEF3C7', visits:4,  freq:'2x/week × 2 weeks (2w2)',     desc:'Reducing frequency' },
-  { key:'3',     label:'Level 3',     short:'L3',   color:'#059669', bg:'#ECFDF5', visits:4,  freq:'1x/week × 4 weeks (1w4)',     desc:'Weekly maintenance building' },
-  { key:'4',     label:'Level 4',     short:'L4',   color:'#1565C0', bg:'#EFF6FF', visits:4,  freq:'1x/2wks × 4 visits (1w4)',   desc:'Bi-weekly maintenance' },
-  { key:'5',     label:'Level 5',     short:'L5',   color:'#7C3AED', bg:'#F5F3FF', visits:4,  freq:'Monthly × 4 visits',          desc:'Monthly monitoring' },
-  { key:'maint', label:'Maintenance', short:'MAINT',color:'#065F46', bg:'#ECFDF5', visits:999,freq:'Ongoing maintenance',          desc:'Long-term management' },
+  { key:'eval',  label:'Evaluation',  short:'EVAL', color:'#6B7280', bg:'#F3F4F6', visits:0,  freq:'Initial assessment',            desc:'New patient evaluation', order:0 },
+  { key:'5',     label:'Level 5',     short:'L5',   color:'#DC2626', bg:'#FEF2F2', visits:4,  freq:'4x/week × 4 weeks (4w4)',       desc:'Most complex — intensive daily treatment', order:1 },
+  { key:'4',     label:'Level 4',     short:'L4',   color:'#D97706', bg:'#FEF3C7', visits:4,  freq:'2x/week × 2 weeks (2w2)',       desc:'High complexity — reducing frequency', order:2 },
+  { key:'3',     label:'Level 3',     short:'L3',   color:'#059669', bg:'#ECFDF5', visits:4,  freq:'1x/week × 4 weeks (1w4)',       desc:'Moderate — weekly treatment', order:3 },
+  { key:'2',     label:'Level 2',     short:'L2',   color:'#1565C0', bg:'#EFF6FF', visits:4,  freq:'1x/2wks × 4 visits (bi-weekly)',desc:'Low complexity — bi-weekly visits', order:4 },
+  { key:'1',     label:'Level 1',     short:'L1',   color:'#7C3AED', bg:'#F5F3FF', visits:4,  freq:'Monthly × 4 visits',            desc:'Simplest — monthly monitoring', order:5 },
+  { key:'maint', label:'Maintenance', short:'MAINT',color:'#065F46', bg:'#ECFDF5', visits:999, freq:'Ongoing maintenance',           desc:'Lowest — long-term management / tapering', order:6 },
 ];
 
 function getLevel(eventType) {
@@ -199,13 +200,13 @@ export default function ClinicalProgressionPage() {
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar
         title="Clinical Frequency Progression"
-        subtitle={`${stats.total} active patients · ${stats.readyForStepDown} ready for step-down · ${stats.reassessmentDue} reassessment due`}
+        subtitle={`${stats.total} active patients · ${stats.readyForStepDown} ready to step down · ${stats.reassessmentDue} reassessment due`}
       />
       <div style={{ flex:1, overflow:'auto' }}>
         {/* Filter bar */}
         <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)', background:'var(--card-bg)', display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
           <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:7, overflow:'hidden' }}>
-            {[['ALL','All Patients'],['ready','⬆ Ready for Step-Down'],['due','📋 Reassessment Due'],['overdue','⚠ Visit Overdue']].map(([k,l]) => (
+            {[['ALL','All Patients'],['ready','↓ Ready for Step-Down'],['due','📋 Reassessment Due'],['overdue','⚠ Visit Overdue']].map(([k,l]) => (
               <button key={k} onClick={() => setFilterFlag(k)}
                 style={{ padding:'6px 12px', border:'none', fontSize:11, fontWeight:filterFlag===k?700:400, cursor:'pointer',
                   background:filterFlag===k?'#0F1117':'var(--card-bg)', color:filterFlag===k?'#fff':'var(--gray)' }}>
@@ -246,7 +247,7 @@ export default function ClinicalProgressionPage() {
           {/* Summary KPI cards */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 }}>
             <div style={{ background:'#EFF6FF', border:'1px solid #BFDBFE', borderRadius:10, padding:'14px 16px' }}>
-              <div style={{ fontSize:11, fontWeight:700, color:'#1565C0', textTransform:'uppercase', letterSpacing:'0.05em' }}>⬆ Ready for Step-Down</div>
+              <div style={{ fontSize:11, fontWeight:700, color:'#1565C0', textTransform:'uppercase', letterSpacing:'0.05em' }}>↓ Ready for Step-Down</div>
               <div style={{ fontSize:28, fontWeight:900, fontFamily:'DM Mono, monospace', color:'#1565C0', marginTop:6 }}>{stats.readyForStepDown}</div>
               <div style={{ fontSize:11, color:'#1E40AF', marginTop:2 }}>Completed visits at current level</div>
             </div>
@@ -350,7 +351,7 @@ export default function ClinicalProgressionPage() {
                     <div>
                       {p.isComplete && p.nextLevel && (
                         <span style={{ fontSize:9, fontWeight:700, color:'#065F46', background:'#ECFDF5', padding:'2px 7px', borderRadius:999, border:'1px solid #A7F3D0' }}>
-                          ⬆ STEP TO {levelConfig(p.nextLevel).short}
+                          ↓ STEP TO {levelConfig(p.nextLevel).short}
                         </span>
                       )}
                       {p.isOverdue && !p.isComplete && (
@@ -423,7 +424,7 @@ export default function ClinicalProgressionPage() {
                 <div style={{ marginTop:14, background:'#ECFDF5', border:'2px solid #A7F3D0', borderRadius:8, padding:'12px 16px', display:'flex', alignItems:'center', gap:12 }}>
                   <span style={{ fontSize:24 }}>⬆</span>
                   <div>
-                    <div style={{ fontSize:13, fontWeight:700, color:'#065F46' }}>Ready for Step-Down to {levelConfig(selected.nextLevel).label}</div>
+                    <div style={{ fontSize:13, fontWeight:700, color:'#065F46' }}>Ready to Progress to {levelConfig(selected.nextLevel).label}</div>
                     <div style={{ fontSize:11, color:'#047857' }}>Patient has completed {selected.visitsAtCurrentLevel} visits at {selected.cfg?.label}. Next protocol: {levelConfig(selected.nextLevel).freq}</div>
                   </div>
                 </div>
