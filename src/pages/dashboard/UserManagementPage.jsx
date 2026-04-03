@@ -3,10 +3,10 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
-const ROLES = ['super_admin','ceo','admin','pod_leader','team_member'];
-const ROLE_LABELS = { super_admin:'Super Admin', ceo:'CEO', admin:'Admin', pod_leader:'Pod Leader', team_member:'Team Member' };
-const ROLE_COLORS = { super_admin:'#DC2626', ceo:'#7C2D12', admin:'#7C3AED', pod_leader:'#1565C0', team_member:'#065F46' };
-const ROLE_BGS   = { super_admin:'#FEF2F2', ceo:'#FFF7ED', admin:'#F5F3FF', pod_leader:'#EFF6FF', team_member:'#ECFDF5' };
+const ROLES = ['super_admin','ceo','admin','regional_manager','pod_leader','team_member'];
+const ROLE_LABELS = { super_admin:'Super Admin', ceo:'CEO', admin:'Admin', regional_manager:'Regional Manager', pod_leader:'Pod Leader', team_member:'Team Member' };
+const ROLE_COLORS = { super_admin:'#DC2626', ceo:'#7C2D12', admin:'#7C3AED', regional_manager:'#0E7490', pod_leader:'#1565C0', team_member:'#065F46' };
+const ROLE_BGS   = { super_admin:'#FEF2F2', ceo:'#FFF7ED', admin:'#F5F3FF', regional_manager:'#ECFEFF', pod_leader:'#EFF6FF', team_member:'#ECFDF5' };
 const ALL_REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
 
 function genPassword() {
