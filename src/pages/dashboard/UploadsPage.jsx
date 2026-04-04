@@ -248,6 +248,35 @@ function UploadCard(props) {
             }
           }
 
+          // ── SYNC LAST VISIT DATES from visit history ─────────────────
+          setMessage('Computing last visit dates...');
+          // Build last-visit map from all completed visits in DB
+          var { data: allVisits } = await supabase.from('visit_schedule_data')
+            .select('patient_name, visit_date, staff_name, event_type, status')
+            .ilike('status', '%completed%');
+          var lastVisitMap = {};
+          (allVisits || []).forEach(function(v) {
+            var key = (v.patient_name || '').toLowerCase().trim();
+            if (!lastVisitMap[key] || v.visit_date > lastVisitMap[key].visit_date) {
+              lastVisitMap[key] = v;
+            }
+          });
+          // Update census_data with computed last_visit_date
+          var today = new Date().toISOString().slice(0,10);
+          for (var pm of upsertRows) {
+            var pKey = (pm.patient_name || '').toLowerCase().trim();
+            var lv = lastVisitMap[pKey];
+            if (lv) {
+              var daysAgo = Math.floor((new Date() - new Date(lv.visit_date + 'T00:00:00')) / 86400000);
+              await supabase.from('census_data').update({
+                last_visit_date: lv.visit_date,
+                last_visit_clinician: lv.staff_name,
+                last_visit_type: lv.event_type,
+                days_since_last_visit: daysAgo,
+              }).eq('patient_name', pm.patient_name);
+            }
+          }
+
           // ── SYNC PATIENT MASTER ──────────────────────────────────────
           setMessage('Updating patient master registry...');
           for (var pm of upsertRows) {

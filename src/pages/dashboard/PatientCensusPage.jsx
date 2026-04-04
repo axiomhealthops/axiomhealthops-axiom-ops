@@ -509,15 +509,24 @@ export default function PatientCensusPage() {
             style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}>
             {['ALL','active','inactive','discharged'].map(s => <option key={s} value={s}>{s==='ALL'?'All Statuses':s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
           </select>
+          <select onChange={e => { /* last seen filter */ }} 
+            style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}
+            id="lastSeenFilter">
+            <option value="ALL">All Last Seen</option>
+            <option value="today">Seen Today</option>
+            <option value="week">Within 7 Days</option>
+            <option value="overdue">14+ Days (Overdue)</option>
+            <option value="none">No Visit Record</option>
+          </select>
           <div style={{ marginLeft:'auto', fontSize:12, color:'var(--gray)', alignSelf:'center' }}>
-            Click any patient to view full profile
+            Click any patient to view full profile · <span style={{ color:'#D97706' }}>🟠 = 7-14d</span> · <span style={{ color:'#DC2626' }}>🔴 = 14d+</span>
           </div>
         </div>
 
         {/* Table */}
         <div style={{ flex:1, overflow:'auto' }}>
-          <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 1.2fr 0.6fr 0.6fr 0.6fr 0.8fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', zIndex:1 }}>
-            <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Completed</span><span>Cancelled</span><span>Missed</span><span>Auth Remaining</span>
+          <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 1.2fr 0.7fr 0.6fr 0.6fr 0.6fr 0.8fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', zIndex:1 }}>
+            <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Last Seen</span><span>Completed</span><span>Cancelled</span><span>Missed</span><span>Auth Remaining</span>
           </div>
           {paged.map((patient, i) => {
             const k = (patient.patient_name||'').toLowerCase().trim();
@@ -526,7 +535,7 @@ export default function PatientCensusPage() {
             const remaining = auth ? (auth.visits_authorized||24)-(auth.visits_used||0) : null;
             return (
               <div key={patient.id||i} onClick={() => setSelected(patient)}
-                style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 1.2fr 0.6fr 0.6fr 0.6fr 0.8fr', padding:'10px 20px', borderBottom:'1px solid var(--border)', background:i%2===0?'var(--card-bg)':'var(--bg)', cursor:'pointer', alignItems:'center' }}
+                style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 1.2fr 0.7fr 0.6fr 0.6fr 0.6fr 0.8fr', padding:'10px 20px', borderBottom:'1px solid var(--border)', background: patient.last_visit_date && (new Date() - new Date(patient.last_visit_date+'T00:00:00'))/86400000 > 14 && patient.status?.toLowerCase().includes('active') ? '#FFF8F0' : i%2===0?'var(--card-bg)':'var(--bg)', cursor:'pointer', alignItems:'center' }}
                 onMouseEnter={e => e.currentTarget.style.background='#F0F7FF'}
                 onMouseLeave={e => e.currentTarget.style.background=i%2===0?'var(--card-bg)':'var(--bg)'}>
                 <div>
@@ -535,6 +544,18 @@ export default function PatientCensusPage() {
                 </div>
                 <span style={{ fontSize:13, fontWeight:700, color:'var(--gray)' }}>{patient.region||'—'}</span>
                 <span style={{ fontSize:12 }}>{patient.insurance||'—'}</span>
+                <div>
+                  {patient.last_visit_date ? (() => {
+                    const days = Math.floor((new Date() - new Date(patient.last_visit_date+'T00:00:00')) / 86400000);
+                    const color = days > 14 ? '#DC2626' : days > 7 ? '#D97706' : '#065F46';
+                    return (
+                      <div>
+                        <div style={{ fontSize:11, fontWeight:700, color }}>{days === 0 ? 'Today' : days === 1 ? 'Yesterday' : `${days}d ago`}</div>
+                        <div style={{ fontSize:9, color:'var(--gray)', marginTop:1 }}>{new Date(patient.last_visit_date+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>
+                      </div>
+                    );
+                  })() : <span style={{ fontSize:11, color:'#9CA3AF', fontStyle:'italic' }}>No visits</span>}
+                </div>
                 <span style={{ fontSize:13, fontWeight:700, color:'#065F46' }}>{vs.completed}</span>
                 <span style={{ fontSize:13, fontWeight:vs.cancelled>0?700:400, color:vs.cancelled>0?'#DC2626':'var(--gray)' }}>{vs.cancelled}</span>
                 <span style={{ fontSize:13, fontWeight:vs.missed>0?700:400, color:vs.missed>0?'#D97706':'var(--gray)' }}>{vs.missed}</span>
