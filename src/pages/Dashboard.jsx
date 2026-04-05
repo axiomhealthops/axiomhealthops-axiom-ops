@@ -107,7 +107,16 @@ function ComingSoon({ page }) {
 
 export default function Dashboard() {
   const { canAccess, profile } = useAuth();
-  const defaultPage = profile?.role === 'regional_manager' ? 'my-region' : 'overview';
+  const defaultPage = (() => {
+    const r = profile?.role;
+    if (r === 'regional_manager')   return 'rm-daily';
+    if (r === 'auth_coordinator')   return 'auth-coordinator';
+    if (r === 'intake_coordinator') return 'intake-queue';
+    if (r === 'care_coordinator')   return 'care-coord-patients';
+    if (r === 'clinician')          return 'visits';
+    if (r === 'super_admin')        return 'director';
+    return 'overview';
+  })();
   const [activePage, setActivePage] = useState(defaultPage);
 
   const PageComponent = PAGE_COMPONENTS[activePage];

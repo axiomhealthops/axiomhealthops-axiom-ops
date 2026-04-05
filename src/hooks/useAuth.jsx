@@ -66,11 +66,15 @@ export function AuthProvider({ children }) {
           if (overrideMap[p.page_key] === true) return true;
           if (overrideMap[p.page_key] === false) return false;
           if (role === 'super_admin') return p.super_admin;
-          if (role === 'ceo') return p.super_admin;
-          if (role === 'admin') return p.admin;
+          if (role === 'ceo')        return p.super_admin;  // legacy
+          if (role === 'admin')      return p.admin;
+          if (role === 'auth_coordinator')   return p.auth_coordinator;
+          if (role === 'intake_coordinator') return p.intake_coordinator;
+          if (role === 'care_coordinator')   return p.care_coordinator;
+          if (role === 'clinician')          return p.clinician;
           if (role === 'regional_manager') return p.regional_manager; // RM has own restricted column
-          if (role === 'pod_leader') return p.pod_leader;
-          if (role === 'team_member') return p.team_member;
+          if (role === 'pod_leader')  return p.pod_leader;   // legacy
+          if (role === 'team_member') return p.team_member;  // legacy
           return false;
         })
         .map(p => p.page_key);
@@ -84,7 +88,7 @@ export function AuthProvider({ children }) {
 
   function canAccess(pageKey) {
     if (!profile) return false;
-    if (profile.role === 'super_admin' || profile.role === 'ceo') return true;
+    if (['super_admin','ceo','admin'].includes(profile.role)) return true;
     return permissions.includes(pageKey);
   }
 

@@ -596,6 +596,21 @@ export default function SwiftTeamDashboard() {
     </div>
   );
 
+  // SWIFT access: super_admin and admin always have access; others need is_swift_team flag
+  const hasSWIFTAccess = ['super_admin','admin'].includes(profile?.role) || profile?.is_swift_team === true;
+  if (!hasSWIFTAccess) return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <TopBar title="SWIFT Team" subtitle="Access Restricted" />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, textAlign: 'center' }}>
+        <div>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>SWIFT Team Access Required</div>
+          <div style={{ fontSize: 13, color: 'var(--gray)' }}>The SWIFT Team dashboard is available to credentialed wound care members only. Contact your administrator to request access.</div>
+        </div>
+      </div>
+    </div>
+  );
+
   const selectedAssessments = selected ? (assessmentMap[selected.id] || []) : [];
 
   return (

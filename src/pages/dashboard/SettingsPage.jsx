@@ -3,8 +3,8 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
-const ROLES = ['super_admin','admin','pod_leader','team_member'];
-const ROLE_LABELS = { super_admin:'Super Admin', admin:'Admin', pod_leader:'Pod Leader', team_member:'Team Member' };
+const ROLES = ['super_admin','admin','regional_manager','auth_coordinator','intake_coordinator','care_coordinator','clinician'];
+const ROLE_LABELS = { super_admin:'Super Admin', admin:'Director / Admin', regional_manager:'Regional Manager', auth_coordinator:'Auth Coordinator', intake_coordinator:'Intake Coordinator', care_coordinator:'Care Coordinator', clinician:'Clinician' };
 
 export default function SettingsPage() {
   const { profile, refreshPermissions } = useAuth();

@@ -3,10 +3,10 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
-const ROLES = ['super_admin','ceo','admin','regional_manager','pod_leader','team_member'];
-const ROLE_LABELS = { super_admin:'Super Admin', ceo:'CEO', admin:'Admin', regional_manager:'Regional Manager', pod_leader:'Pod Leader', team_member:'Team Member' };
-const ROLE_COLORS = { super_admin:'#DC2626', ceo:'#7C2D12', admin:'#7C3AED', regional_manager:'#0E7490', pod_leader:'#1565C0', team_member:'#065F46' };
-const ROLE_BGS   = { super_admin:'#FEF2F2', ceo:'#FFF7ED', admin:'#F5F3FF', regional_manager:'#ECFEFF', pod_leader:'#EFF6FF', team_member:'#ECFDF5' };
+const ROLES = ['super_admin','admin','regional_manager','auth_coordinator','intake_coordinator','care_coordinator','clinician'];
+const ROLE_LABELS = { super_admin:'Super Admin', admin:'Director / Admin', regional_manager:'Regional Manager', auth_coordinator:'Auth Coordinator', intake_coordinator:'Intake Coordinator', care_coordinator:'Care Coordinator', clinician:'Clinician' };
+const ROLE_COLORS = { super_admin:'#DC2626', admin:'#7C3AED', regional_manager:'#0E7490', auth_coordinator:'#1565C0', intake_coordinator:'#065F46', care_coordinator:'#D97706', clinician:'#059669' };
+const ROLE_BGS   = { super_admin:'#FEF2F2', admin:'#F5F3FF', regional_manager:'#ECFEFF', auth_coordinator:'#EFF6FF', intake_coordinator:'#ECFDF5', care_coordinator:'#FEF3C7', clinician:'#F0FFF4' };
 const ALL_REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
 
 function genPassword() {
@@ -265,7 +265,7 @@ export default function UserManagementPage() {
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
-  const [newUser, setNewUser] = useState({ full_name:'', email:'', role:'team_member', regions:[], team:'', password:'' });
+  const [newUser, setNewUser] = useState({ full_name:'', email:'', role:'care_coordinator', regions:[], job_title:'', is_swift_team:false, password:'' });
 
   const isSuperAdmin = profile?.role === 'super_admin';
   const isAdmin = profile?.role === 'admin' || isSuperAdmin;
@@ -301,8 +301,15 @@ export default function UserManagementPage() {
       p_role: newUser.role,
       p_password: newUser.password || null,
       p_regions: newUser.regions,
-      p_team: newUser.team || null,
+      p_team: newUser.job_title || null,
     });
+    // After creation, update job_title and is_swift_team
+    if (data?.success) {
+      await supabase.from('coordinators').update({
+        job_title: newUser.job_title || null,
+        is_swift_team: newUser.is_swift_team || false,
+      }).eq('email', newUser.email.toLowerCase());
+    }
 
     if (error) {
       setMsg('Error: ' + error.message);
@@ -317,7 +324,7 @@ export default function UserManagementPage() {
 
     const pwdNote = newUser.password ? ' Password set as specified.' : ' Use Manage → Password to set their password.';
     setMsg('✓ Account created successfully.' + pwdNote);
-    setNewUser({ full_name:'', email:'', role:'team_member', regions:[], team:'', password:'' });
+    setNewUser({ full_name:'', email:'', role:'care_coordinator', regions:[], job_title:'', is_swift_team:false, password:'' });
     setShowAdd(false);
     setSaving(false);
     await loadData();

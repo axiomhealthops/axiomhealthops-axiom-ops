@@ -17,6 +17,10 @@ export const B = {
 export const ROLES = {
   SUPER_ADMIN: 'super_admin',
   CEO: 'ceo',
+  AUTH_COORDINATOR:    'auth_coordinator',
+  INTAKE_COORDINATOR:  'intake_coordinator',
+  CARE_COORDINATOR:    'care_coordinator',
+  CLINICIAN:           'clinician',
   DIRECTOR: 'director',
   REGIONAL_MGR: 'regional_mgr',
   ADMIN: 'admin',
@@ -26,8 +30,8 @@ export const ROLES = {
   COORDINATOR: 'coordinator',
 };
 
-export const DIRECTOR_ROLES = ['super_admin', 'ceo', 'director', 'regional_mgr', 'admin'];
-export const MISSION_ROLES = ['pod_leader', 'team_leader', 'team_member'];
+export const DIRECTOR_ROLES = ['super_admin', 'ceo', 'admin'];
+export const MISSION_ROLES = ['auth_coordinator', 'intake_coordinator', 'care_coordinator', 'clinician', 'pod_leader', 'team_leader', 'team_member'];
 export const COORDINATOR_ROLES = ['coordinator'];
 
 export const METRICS = {

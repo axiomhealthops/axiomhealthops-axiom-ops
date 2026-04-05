@@ -45,10 +45,14 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
     const role = profile?.role;
     const accessible = pages.filter(p => {
       if (role === 'super_admin') return p.super_admin;
-      if (role === 'ceo') return p.super_admin;
-      if (role === 'admin') return p.admin;
+      if (role === 'ceo')        return p.super_admin;
+      if (role === 'admin')      return p.admin;
+      if (role === 'auth_coordinator')   return p.auth_coordinator;
+      if (role === 'intake_coordinator') return p.intake_coordinator;
+      if (role === 'care_coordinator')   return p.care_coordinator;
+      if (role === 'clinician')          return p.clinician;
       if (role === 'regional_manager') return p.regional_manager; // RM has own restricted pages
-      if (role === 'pod_leader') return p.pod_leader;
+      if (role === 'pod_leader')  return p.pod_leader;
       if (role === 'team_member') return p.team_member;
       return false;
     });
@@ -73,8 +77,12 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
     admin: 'Admin',
     regional_manager: 'Regional Manager',
     admin: 'Admin',
-    pod_leader: 'Pod Leader',
-    team_member: 'Team Member',
+    pod_leader:          'Pod Leader',
+    team_member:         'Team Member',
+    auth_coordinator:    'Auth Coordinator',
+    intake_coordinator:  'Intake Coordinator',
+    care_coordinator:    'Care Coordinator',
+    clinician:           'Clinician',
   }[profile?.role] || '';
 
   return (
