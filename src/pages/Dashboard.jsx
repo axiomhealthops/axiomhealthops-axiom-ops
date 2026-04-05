@@ -35,6 +35,10 @@ import AuthRenewalsPage from './dashboard/AuthRenewalsPage';
 import DirectorDashboard from './dashboard/DirectorDashboard';
 import ClinicianAccountabilityPage from './dashboard/ClinicianAccountabilityPage';
 import PipelineTrackerPage from './dashboard/PipelineTrackerPage';
+import AuthCoordDashboard from './dashboard/AuthCoordDashboard';
+import CareCoordMyPatients from './dashboard/CareCoordMyPatients';
+import IntakeCoordQueue from './dashboard/IntakeCoordQueue';
+import RMDailyDashboard from './dashboard/RMDailyDashboard';
 import DischargeTrackerPage from './dashboard/DischargeTrackerPage';
 import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
 
@@ -71,6 +75,10 @@ const PAGE_COMPONENTS = {
   'director':                DirectorDashboard,
   'clinician-accountability': ClinicianAccountabilityPage,
   'pipeline':                PipelineTrackerPage,
+  'auth-coordinator':        AuthCoordDashboard,
+  'care-coord-patients':     CareCoordMyPatients,
+  'intake-queue':            IntakeCoordQueue,
+  'rm-daily':                RMDailyDashboard,
   'auth-renewals':           AuthRenewalsPage,
   'discharges':              DischargeTrackerPage,
   'clinical-progression':   ClinicalProgressionPage,
