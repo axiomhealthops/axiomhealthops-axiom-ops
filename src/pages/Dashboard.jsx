@@ -33,6 +33,8 @@ import MarketingCRMPage from './dashboard/MarketingCRMPage';
 import WaitlistPage from './dashboard/WaitlistPage';
 import AuthRenewalsPage from './dashboard/AuthRenewalsPage';
 import DirectorDashboard from './dashboard/DirectorDashboard';
+import ClinicianAccountabilityPage from './dashboard/ClinicianAccountabilityPage';
+import PipelineTrackerPage from './dashboard/PipelineTrackerPage';
 import DischargeTrackerPage from './dashboard/DischargeTrackerPage';
 import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
 
@@ -67,6 +69,8 @@ const PAGE_COMPONENTS = {
   'marketing-crm':          MarketingCRMPage,
   'waitlist':                WaitlistPage,
   'director':                DirectorDashboard,
+  'clinician-accountability': ClinicianAccountabilityPage,
+  'pipeline':                PipelineTrackerPage,
   'auth-renewals':           AuthRenewalsPage,
   'discharges':              DischargeTrackerPage,
   'clinical-progression':   ClinicalProgressionPage,
