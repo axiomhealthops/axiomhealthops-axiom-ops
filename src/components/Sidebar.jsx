@@ -22,7 +22,7 @@ const PAGE_ICONS = {
   auth: '🔐',
   'coordinator-portal': '👩‍💼',
   productivity: '📊', revenue: '💰', growth: '📈', scorecard: '🎯',
-  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺', 'medicare-tracker': '🏥', 'marketing-crm': '📣', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'auth-renewals': '🔄', 'discharges': '📤', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'auth-renewals': '🔄', 'discharges': '📤',
+  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺', 'medicare-tracker': '🏥', 'marketing-crm': '📣', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'swift-team': '🩹', 'auth-renewals': '🔄', 'discharges': '📤', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'swift-team': '🩹', 'auth-renewals': '🔄', 'discharges': '📤',
   users: '👥', uploads: '↑', settings: '⚙',
 };
 
