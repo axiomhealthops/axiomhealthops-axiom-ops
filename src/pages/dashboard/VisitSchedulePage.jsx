@@ -276,7 +276,7 @@ export default function VisitSchedulePage() {
   if (!visits.length) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <TopBar title="Visit Schedule" subtitle="Day \u00b7 Week \u00b7 Month" />
+        <TopBar title="Visit Schedule" subtitle="Day · Week · Month" />
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>&#128197;</div>
           <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--black)', marginBottom: 8 }}>No visit data</div>
@@ -288,7 +288,7 @@ export default function VisitSchedulePage() {
  
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <TopBar title="Visit Schedule" subtitle={filtered.length + ' visits \u00b7 ' + completedCount + ' completed \u00b7 ' + scheduledCount + ' scheduled'} />
+      <TopBar title="Visit Schedule" subtitle={`${filtered.length} visits · ${completedCount} completed · ${scheduledCount} scheduled`} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
  
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0, flexWrap: 'wrap', gap: 10 }}>
@@ -364,11 +364,11 @@ export default function VisitSchedulePage() {
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                               <div>
                                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{v.patient_name}</div>
-                                <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>{v.staff_name} \u00b7 {v.discipline} \u00b7 {v.event_type}</div>
+                                <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>{v.staff_name} · {v.discipline} · {v.event_type}</div>
                               </div>
                               <div style={{ textAlign: 'right' }}>
                                 <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: st.bg, color: st.color, border: '1px solid ' + st.border }}>{v.status}</span>
-                                <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 4 }}>Region {v.region} \u00b7 {v.visit_time || '\u2014'}</div>
+                                <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 4 }}>Region {v.region} · {v.visit_time || '—'}</div>
                               </div>
                             </div>
                           </div>
@@ -411,7 +411,7 @@ export default function VisitSchedulePage() {
                               {dv.length > 3 && <div style={{ fontSize: 10, color: 'var(--gray)' }}>+{dv.length - 3} more</div>}
                             </div>
                           </div>
-                        ) : <div style={{ fontSize: 11, color: 'var(--border)', marginTop: 8 }}>\u2014</div>}
+                        ) : <div style={{ fontSize: 11, color: 'var(--border)', marginTop: 8 }}>—</div>}
                       </div>
                     );
                   })}
@@ -470,7 +470,7 @@ export default function VisitSchedulePage() {
                   return (
                     <div key={i} style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', borderLeft: '3px solid ' + st.border }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{v.patient_name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 3 }}>{v.staff_name} \u00b7 {v.discipline}</div>
+                      <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 3 }}>{v.staff_name} · {v.discipline}</div>
                       <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
                         <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: st.bg, color: st.color, border: '1px solid ' + st.border }}>{v.status}</span>
                         <span style={{ fontSize: 11, color: 'var(--gray)' }}>Region {v.region}</span>

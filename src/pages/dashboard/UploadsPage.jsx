@@ -23,6 +23,17 @@ function parseCSVLine(line) {
   return cols;
 }
  
+function normalizeParioxName(parioxName) {
+  // Convert "LastName, FirstName" → "FirstName LastName"
+  if (!parioxName) return '';
+  const trimmed = parioxName.trim();
+  if (!trimmed.includes(',')) return trimmed; // Already "FirstName LastName"
+  const parts = trimmed.split(',');
+  const lastName  = (parts[0] || '').trim();
+  const firstName = (parts[1] || '').trim();
+  return firstName + ' ' + lastName;
+}
+
 function normalizeStatus(raw) {
   if (!raw) return '';
   var lower = raw.trim().toLowerCase();
@@ -61,6 +72,7 @@ function parseVisitCSV(csv) {
       region: extractRegion(c[3]),
       discipline: (c[4] || '').trim(),
       staff_name: (c[5] || '').trim(),
+      staff_name_normalized: normalizeParioxName((c[5] || '').trim()),
       event_type: (c[6] || '').trim(),
       raw_date: rawDate,
       visit_date: visitDate,
@@ -270,7 +282,7 @@ function UploadCard(props) {
               var daysAgo = Math.floor((new Date() - new Date(lv.visit_date + 'T00:00:00')) / 86400000);
               await supabase.from('census_data').update({
                 last_visit_date: lv.visit_date,
-                last_visit_clinician: lv.staff_name,
+                last_visit_clinician: lv.staff_name_normalized || lv.staff_name,
                 last_visit_type: lv.event_type,
                 days_since_last_visit: daysAgo,
               }).eq('patient_name', pm.patient_name);

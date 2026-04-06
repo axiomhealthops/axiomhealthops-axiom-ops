@@ -38,7 +38,7 @@ function CliniciansTab({ clinicians, visits, census }) {
     const weekVisits = visits.filter(v => v.visit_date >= weekStart);
     const visitMap = {};
     weekVisits.forEach(v => {
-      const key = (v.staff_name || '').toLowerCase().trim();
+      const key = (v.staff_name_normalized || v.staff_name || '').toLowerCase().trim();
       if (!visitMap[key]) visitMap[key] = { completed: 0, cancelled: 0, missed: 0, patients: new Set() };
       if (/completed/i.test(v.status || '')) { visitMap[key].completed++; visitMap[key].patients.add(v.patient_name); }
       else if (/cancel/i.test(v.status || '') || /cancel/i.test(v.event_type || '')) visitMap[key].cancelled++;
@@ -48,7 +48,12 @@ function CliniciansTab({ clinicians, visits, census }) {
     // Build inactive patient map: which clinician last saw each inactive active patient
     const inactiveMap = {};
     census.filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 14).forEach(p => {
-      const lastClinician = (p.last_visit_clinician || '').toLowerCase().trim();
+      // Normalize the clinician name for matching
+      const rawClinician = p.last_visit_clinician || '';
+      const normalizedClinician = rawClinician.includes(',') 
+        ? rawClinician.split(',').map(s=>s.trim()).reverse().join(' ')
+        : rawClinician;
+      const lastClinician = normalizedClinician.toLowerCase().trim();
       if (lastClinician) {
         if (!inactiveMap[lastClinician]) inactiveMap[lastClinician] = [];
         inactiveMap[lastClinician].push(p);
@@ -362,7 +367,7 @@ export default function ClinicianAccountabilityPage() {
     const [cl, v, c] = await Promise.all([
       supabase.from('clinicians').select('*').eq('is_active', true),
       supabase.from('visit_schedule_data')
-        .select('patient_name,staff_name,visit_date,status,event_type,region')
+        .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region')
         .gte('visit_date', new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10)),
       supabase.from('census_data')
         .select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,last_visit_type'),

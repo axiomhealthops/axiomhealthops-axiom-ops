@@ -64,7 +64,7 @@ export default function RMDailyDashboard() {
     // Clinician stats
     const visitMap = {};
     completed.forEach(v => {
-      const k = (v.staff_name||'').toLowerCase().trim();
+      const k = (v.staff_name_normalized || v.staff_name||'').toLowerCase().trim();
       visitMap[k] = (visitMap[k]||0)+1;
     });
     const clinicianStats = clinicians.map(cl => {
