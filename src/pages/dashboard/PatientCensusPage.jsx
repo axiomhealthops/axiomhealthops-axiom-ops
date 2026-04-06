@@ -22,6 +22,10 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
     i.patient_name?.toLowerCase().trim() === patient.patient_name?.toLowerCase().trim()
   );
 
+  const latestAuthRecord = authData.filter(a =>
+    a.patient_name?.toLowerCase().trim() === patient.patient_name?.toLowerCase().trim()
+  ).sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''))[0];
+
   const [editForm, setEditForm] = useState({
     patient_name: patient.patient_name || '',
     region: patient.region || '',
@@ -35,13 +39,35 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
     zip_code: patIntakeRecord?.zip_code || '',
     county: patIntakeRecord?.county || '',
     diagnosis: patIntakeRecord?.diagnosis || '',
-    pcp_name: patIntakeRecord?.pcp_name || '',
-    pcp_phone: patIntakeRecord?.pcp_phone || '',
-    pcp_fax: patIntakeRecord?.pcp_fax || '',
+    pcp_name: patIntakeRecord?.pcp_name || latestAuthRecord?.pcp_name || '',
+    pcp_phone: patIntakeRecord?.pcp_phone || latestAuthRecord?.pcp_phone || '',
+    pcp_fax: patIntakeRecord?.pcp_fax || latestAuthRecord?.pcp_fax || '',
+    pcp_facility: latestAuthRecord?.pcp_facility || '',
     referral_source: patIntakeRecord?.referral_source || '',
     referral_status: patIntakeRecord?.referral_status || '',
     chart_status: patIntakeRecord?.chart_status || '',
     notes: patIntakeRecord?.notes || '',
+    // Auth fields (from latest auth record)
+    member_id: latestAuthRecord?.member_id || '',
+    auth_number: latestAuthRecord?.auth_number || '',
+    auth_status: latestAuthRecord?.auth_status || '',
+    insurance_type: latestAuthRecord?.insurance_type || '',
+    therapy_type: latestAuthRecord?.therapy_type || 'Lymphedema',
+    request_type: latestAuthRecord?.request_type || 'Initial',
+    frequency: latestAuthRecord?.frequency || '',
+    visits_authorized: latestAuthRecord?.visits_authorized || '',
+    visits_used: latestAuthRecord?.visits_used || '',
+    evals_authorized: latestAuthRecord?.evals_authorized || '',
+    evals_used: latestAuthRecord?.evals_used || '',
+    reassessments_authorized: latestAuthRecord?.reassessments_authorized || '',
+    reassessments_used: latestAuthRecord?.reassessments_used || '',
+    soc_date: latestAuthRecord?.soc_date || '',
+    auth_submitted_date: latestAuthRecord?.auth_submitted_date || '',
+    auth_needed_by: latestAuthRecord?.auth_needed_by || '',
+    auth_approved_date: latestAuthRecord?.auth_approved_date || '',
+    auth_expiry_date: latestAuthRecord?.auth_expiry_date || '',
+    denial_reason: latestAuthRecord?.denial_reason || '',
+    auth_notes: latestAuthRecord?.notes || '',
   });
 
   async function handleSave() {
@@ -79,6 +105,75 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
           chart_status: editForm.chart_status,
           notes: editForm.notes,
         }).eq('id', patIntakeRecord.id);
+      }
+
+      // Update or create auth record
+      if (latestAuthRecord?.id) {
+        const { error: authError } = await supabase.from('auth_tracker').update({
+          member_id: editForm.member_id || null,
+          auth_number: editForm.auth_number || null,
+          auth_status: editForm.auth_status || null,
+          insurance: editForm.insurance,
+          insurance_type: editForm.insurance_type || null,
+          therapy_type: editForm.therapy_type || null,
+          request_type: editForm.request_type || null,
+          frequency: editForm.frequency || null,
+          visits_authorized: editForm.visits_authorized ? parseInt(editForm.visits_authorized) : null,
+          visits_used: editForm.visits_used ? parseInt(editForm.visits_used) : null,
+          evals_authorized: editForm.evals_authorized ? parseInt(editForm.evals_authorized) : null,
+          evals_used: editForm.evals_used ? parseInt(editForm.evals_used) : null,
+          reassessments_authorized: editForm.reassessments_authorized ? parseInt(editForm.reassessments_authorized) : null,
+          reassessments_used: editForm.reassessments_used ? parseInt(editForm.reassessments_used) : null,
+          soc_date: editForm.soc_date || null,
+          auth_submitted_date: editForm.auth_submitted_date || null,
+          auth_needed_by: editForm.auth_needed_by || null,
+          auth_approved_date: editForm.auth_approved_date || null,
+          auth_expiry_date: editForm.auth_expiry_date || null,
+          pcp_name: editForm.pcp_name || null,
+          pcp_phone: editForm.pcp_phone || null,
+          pcp_fax: editForm.pcp_fax || null,
+          pcp_facility: editForm.pcp_facility || null,
+          denial_reason: editForm.denial_reason || null,
+          notes: editForm.auth_notes || null,
+          region: editForm.region,
+          updated_at: new Date().toISOString(),
+        }).eq('id', latestAuthRecord.id);
+        if (authError) throw authError;
+      } else if (editForm.auth_status || editForm.auth_number || editForm.member_id) {
+        // Create a new auth record if key fields are filled
+        const { error: authError } = await supabase.from('auth_tracker').insert({
+          patient_name: editForm.patient_name,
+          region: editForm.region,
+          insurance: editForm.insurance,
+          member_id: editForm.member_id || null,
+          auth_number: editForm.auth_number || null,
+          auth_status: editForm.auth_status || 'pending',
+          insurance_type: editForm.insurance_type || null,
+          therapy_type: editForm.therapy_type || 'Lymphedema',
+          request_type: editForm.request_type || 'Initial',
+          frequency: editForm.frequency || null,
+          visits_authorized: editForm.visits_authorized ? parseInt(editForm.visits_authorized) : null,
+          visits_used: editForm.visits_used ? parseInt(editForm.visits_used) : 0,
+          evals_authorized: editForm.evals_authorized ? parseInt(editForm.evals_authorized) : null,
+          evals_used: editForm.evals_used ? parseInt(editForm.evals_used) : 0,
+          reassessments_authorized: editForm.reassessments_authorized ? parseInt(editForm.reassessments_authorized) : null,
+          reassessments_used: editForm.reassessments_used ? parseInt(editForm.reassessments_used) : 0,
+          soc_date: editForm.soc_date || null,
+          auth_submitted_date: editForm.auth_submitted_date || null,
+          auth_needed_by: editForm.auth_needed_by || null,
+          auth_approved_date: editForm.auth_approved_date || null,
+          auth_expiry_date: editForm.auth_expiry_date || null,
+          pcp_name: editForm.pcp_name || null,
+          pcp_phone: editForm.pcp_phone || null,
+          pcp_fax: editForm.pcp_fax || null,
+          pcp_facility: editForm.pcp_facility || null,
+          denial_reason: editForm.denial_reason || null,
+          notes: editForm.auth_notes || null,
+          dob: editForm.dob || null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        if (authError) throw authError;
       }
 
       setSaveMsg('✓ Saved successfully');
@@ -207,6 +302,71 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
                   style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:50, background:'var(--card-bg)' }} />
               </div>
             </div>
+
+            {/* ── AUTHORIZATION SECTION ── */}
+            <div style={{ borderTop:'2px solid #1565C0', paddingTop:14, marginBottom:10 }}>
+              <div style={{ fontSize:12, fontWeight:800, color:'#1565C0', marginBottom:12, textTransform:'uppercase', letterSpacing:'0.06em' }}>
+                🔐 Authorization
+                {!latestAuthRecord && <span style={{ fontSize:10, fontWeight:400, color:'var(--gray)', marginLeft:8, textTransform:'none', letterSpacing:0 }}>No existing auth — fill in fields to create a new record</span>}
+                {latestAuthRecord && <span style={{ fontSize:10, fontWeight:400, color:'var(--gray)', marginLeft:8, textTransform:'none', letterSpacing:0 }}>Editing most recent auth record</span>}
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:10 }}>
+                <E label="Member ID" name="member_id" />
+                <E label="Auth Number" name="auth_number" />
+                <E label="Auth Status" name="auth_status" opts={['active','pending','approved','denied','expired','cancelled']} />
+                <E label="Insurance Type" name="insurance_type" opts={['Standard (24 visits)','HMO','PPO','Medicare Advantage','Medicare Part B','Other']} />
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:10 }}>
+                <E label="Therapy Type" name="therapy_type" opts={['Lymphedema','Physical Therapy','Occupational Therapy','Speech Therapy','Cardiac','Other']} />
+                <E label="Request Type" name="request_type" opts={['Initial','Renewal','Concurrent Review','Retrospective']} />
+                <E label="Frequency" name="frequency" />
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:10 }}>
+                <div>
+                  <div style={{ fontSize:10, fontWeight:700, color:'var(--gray)', marginBottom:3 }}>VISIT TRACKING</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                    <E label="Visits Auth." name="visits_authorized" type="number" />
+                    <E label="Visits Used" name="visits_used" type="number" />
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize:10, fontWeight:700, color:'var(--gray)', marginBottom:3 }}>EVALS</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                    <E label="Auth." name="evals_authorized" type="number" />
+                    <E label="Used" name="evals_used" type="number" />
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize:10, fontWeight:700, color:'var(--gray)', marginBottom:3 }}>REASSESSMENTS</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                    <E label="Auth." name="reassessments_authorized" type="number" />
+                    <E label="Used" name="reassessments_used" type="number" />
+                  </div>
+                </div>
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10, marginBottom:10 }}>
+                <E label="SOC Date" name="soc_date" type="date" />
+                <E label="Auth Submitted" name="auth_submitted_date" type="date" />
+                <E label="Needed By" name="auth_needed_by" type="date" />
+                <E label="Auth Approved" name="auth_approved_date" type="date" />
+                <E label="Auth Expiry" name="auth_expiry_date" type="date" />
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:10 }}>
+                <E label="PCP Name" name="pcp_name" />
+                <E label="PCP Facility" name="pcp_facility" />
+                <E label="PCP Phone" name="pcp_phone" />
+                <E label="PCP Fax" name="pcp_fax" />
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:4 }}>
+                <E label="Denial Reason (if denied)" name="denial_reason" />
+                <div>
+                  <div style={{ fontSize:10, fontWeight:600, color:'var(--gray)', marginBottom:3 }}>Auth Notes</div>
+                  <textarea value={editForm.auth_notes||''} onChange={e => setEditForm(p=>({...p,auth_notes:e.target.value}))}
+                    style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:44, background:'var(--card-bg)' }} />
+                </div>
+              </div>
+            </div>
+
             <div style={{ display:'flex', gap:8 }}>
               <button onClick={handleSave} disabled={saving}
                 style={{ padding:'8px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>

@@ -406,11 +406,20 @@ export default function AuthTrackerPage() {
   var [expandedId, setExpandedId] = useState(null);
   var [activeTab, setActiveTab] = useState('all');
   var [showAIExtractor, setShowAIExtractor] = useState(false);
+  var [censusPatients, setCensusPatients] = useState([]);
  
   function fetchRecords() {
     setLoading(true);
-    supabase.from('auth_tracker').select('*').order('created_at', { ascending: false }).limit(600)
-      .then(function(res) { setRecords(res.data || []); setLoading(false); });
+    Promise.all([
+      supabase.from('auth_tracker').select('*').order('created_at', { ascending: false }).limit(800),
+      supabase.from('census_data').select('patient_name,region,insurance,status').order('patient_name'),
+    ]).then(function(results) {
+      var authData = results[0].data || [];
+      var census = results[1].data || [];
+      setRecords(authData);
+      setCensusPatients(census);
+      setLoading(false);
+    });
   }
  
   useEffect(function() { fetchRecords(); }, []);
@@ -469,6 +478,7 @@ export default function AuthTrackerPage() {
   var SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
   var tabs = [
     { key: 'all',      label: 'All',                count: records.length },
+    { key: 'no_auth',  label: '⚠ No Auth on File',  count: censusPatients.filter(function(c) { return !records.some(function(r) { return r.patient_name?.toLowerCase().trim() === c.patient_name?.toLowerCase().trim(); }); }).length },
     { key: 'critical', label: 'Critical',           count: critical,   color: '#DC2626' },
     { key: 'pending',  label: 'Pending / Submitted',count: pending,    color: '#92400E' },
     { key: 'expiring', label: 'Expiring (30 days)', count: expiring30, color: '#F59E0B' },
@@ -480,7 +490,7 @@ export default function AuthTrackerPage() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar
         title="Authorization Tracker"
-        subtitle={records.length + ' patients · ' + active + ' active · ' + critical + ' critical'}
+        subtitle={censusPatients.length + ' total patients · ' + records.length + ' with auth · ' + active + ' active auth · ' + critical + ' critical'}
         actions={
           <div style={{ display:'flex', gap:8 }}>
             <button onClick={function() { setShowAIExtractor(true); }}
@@ -499,7 +509,7 @@ export default function AuthTrackerPage() {
         {/* Summary */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
-            { label: 'Total Patients',     val: records.length, color: 'var(--black)', sub: 'in tracker' },
+            { label: 'Census Patients',  val: censusPatients.length, color: 'var(--black)', sub: records.length + ' have auth records' },
             { label: 'Active Auths',       val: active,         color: 'var(--green)', sub: 'currently authorized' },
             { label: 'Critical',           val: critical,       color: '#DC2626',      sub: '\u22647 visits or denied',   alert: critical > 0 },
             { label: 'Auth Pending',       val: pending,        color: '#92400E',      sub: 'awaiting approval',          alert: pending > 0 },
