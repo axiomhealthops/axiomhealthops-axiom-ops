@@ -16,7 +16,7 @@ function genPassword() {
 
 function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUpdate, onDeactivate, onToggleOverride, onSendReset, onSetPassword }) {
   const [isEditing, setIsEditing] = useState(false);
-  const [editForm, setEditForm] = useState({ role:user.role, regions:user.regions||[], team:user.team||'', email:user.email||'' });
+  const [editForm, setEditForm] = useState({ role:user.role, regions:user.regions||[], job_title:user.job_title||'', is_swift_team:user.is_swift_team||false, email:user.email||'' });
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState('details'); // details | access | password
   const [newPwd, setNewPwd] = useState('');
@@ -35,7 +35,7 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
     if (editForm.email !== user.email && user.user_id) {
       await supabase.rpc('admin_update_user', { target_user_id: user.user_id, new_email: editForm.email });
     }
-    await onUpdate(user.id, { role:editForm.role, regions:editForm.regions, team:editForm.team, email:editForm.email });
+    await onUpdate(user.id, { role:editForm.role, regions:editForm.regions, job_title:editForm.job_title, is_swift_team:editForm.is_swift_team, email:editForm.email });
     setSaving(false);
     setIsEditing(false);
   }
@@ -121,6 +121,12 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
               style={{ padding:'5px 12px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, background:'var(--bg)', cursor:'pointer', color:user.is_active===false?'#065F46':'#DC2626', fontWeight:500 }}>
               {user.is_active === false ? 'Activate' : 'Deactivate'}
             </button>
+            {isSuperAdmin && (
+              <button onClick={() => onDelete(user.id, user.user_id)}
+                style={{ padding:'5px 12px', border:'1px solid #FECACA', borderRadius:6, fontSize:12, background:'#FEF2F2', cursor:'pointer', color:'#DC2626', fontWeight:700 }}>
+                🗑 Delete
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -167,6 +173,27 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
                         </button>
                       ))}
                     </div>
+                  </div>
+                </div>
+                {/* Job Title + SWIFT Team flag */}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:12, marginBottom:16, alignItems:'start' }}>
+                  <div>
+                    <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>Job Title</div>
+                    <input value={editForm.job_title} onChange={e => setEditForm(p=>({...p,job_title:e.target.value}))}
+                      placeholder="e.g. Director of Clinical Operations, Auth Team Lead..."
+                      style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)' }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>SWIFT Team</div>
+                    <div
+                      onClick={() => setEditForm(p=>({...p, is_swift_team:!p.is_swift_team}))}
+                      style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 14px', borderRadius:8, border:`2px solid ${editForm.is_swift_team?'#7C3AED':'var(--border)'}`, background:editForm.is_swift_team?'#F5F3FF':'var(--card-bg)', cursor:'pointer', userSelect:'none', whiteSpace:'nowrap' }}>
+                      <div style={{ width:18, height:18, borderRadius:4, border:`2px solid ${editForm.is_swift_team?'#7C3AED':'#D1D5DB'}`, background:editForm.is_swift_team?'#7C3AED':'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                        {editForm.is_swift_team && <span style={{ color:'#fff', fontSize:12, fontWeight:700, lineHeight:1 }}>✓</span>}
+                      </div>
+                      <span style={{ fontSize:12, fontWeight:700, color:editForm.is_swift_team?'#7C3AED':'var(--gray)' }}>🩹 SWIFT Member</span>
+                    </div>
+                    <div style={{ fontSize:9, color:'var(--gray)', marginTop:3 }}>Grants wound care dashboard access</div>
                   </div>
                 </div>
                 <div style={{ display:'flex', gap:8 }}>
@@ -335,6 +362,17 @@ export default function UserManagementPage() {
     await loadData();
   }
 
+  async function deleteUser(coordinatorId, authUserId) {
+    if (!window.confirm('Permanently delete this account? This cannot be undone.')) return;
+    // Delete auth account via RPC if it exists
+    if (authUserId) {
+      await supabase.rpc('admin_delete_user', { target_user_id: authUserId }).catch(() => {});
+    }
+    // Remove coordinator record
+    await supabase.from('coordinators').delete().eq('id', coordinatorId);
+    await loadData();
+  }
+
   async function deactivateUser(userId, isActive) {
     await supabase.from('coordinators').update({ is_active: !isActive }).eq('id', userId);
     await loadData();
@@ -427,7 +465,7 @@ export default function UserManagementPage() {
         {filtered.map(user => (
           <UserCard key={user.id} user={user} profile={profile} pages={pages} overrides={overrides}
             isSuperAdmin={isSuperAdmin} isAdmin={isAdmin}
-            onUpdate={updateUser} onDeactivate={deactivateUser} onToggleOverride={toggleOverride} />
+            onUpdate={updateUser} onDeactivate={deactivateUser} onDelete={deleteUser} onToggleOverride={toggleOverride} />
         ))}
       </div>
     </div>
