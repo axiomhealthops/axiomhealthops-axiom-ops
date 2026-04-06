@@ -12,24 +12,31 @@ function daysAgo(d) {
   return Math.floor((new Date() - new Date(d+'T00:00:00')) / 86400000);
 }
 
-function ReferralModal({ referral, onClose, onSaved }) {
+function ReferralModal({ referral, onClose, onSaved, profile }) {
   const [chartStatus, setChartStatus] = useState(referral.chart_status || '');
   const [censusStatus, setCensusStatus] = useState(referral.census_status || '');
   const [welcomeCall, setWelcomeCall] = useState(referral.welcome_call || '');
   const [firstAppt, setFirstAppt] = useState(referral.first_appt || '');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   async function save() {
     setSaving(true);
-    await supabase.from('intake_referrals').update({
-      chart_status: chartStatus,
-      census_status: censusStatus,
-      welcome_call: welcomeCall,
+    setSaveError('');
+    const { error } = await supabase.from('intake_referrals').update({
+      chart_status: chartStatus || null,
+      census_status: censusStatus || null,
+      welcome_call: welcomeCall || null,
       first_appt: firstAppt || null,
       updated_at: new Date().toISOString(),
+      updated_by: profile?.full_name || profile?.email || null,
     }).eq('id', referral.id);
     setSaving(false);
+    if (error) {
+      setSaveError('Save failed: ' + error.message);
+      return;
+    }
     onSaved();
   }
 
@@ -87,6 +94,11 @@ function ReferralModal({ referral, onClose, onSaved }) {
               style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }} />
           </div>
         </div>
+        {saveError && (
+          <div style={{ padding:'8px 22px', background:'#FEF2F2', borderTop:'1px solid #FECACA' }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#DC2626' }}>⚠ {saveError}</div>
+          </div>
+        )}
         <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
           <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, cursor:'pointer', background:'var(--card-bg)' }}>Cancel</button>
           <button onClick={save} disabled={saving}
@@ -264,7 +276,7 @@ export default function IntakeCoordQueue() {
       </div>
 
       {selected && (
-        <ReferralModal referral={selected} onClose={() => setSelected(null)} onSaved={() => { setSelected(null); load(); }} />
+        <ReferralModal referral={selected} profile={profile} onClose={() => setSelected(null)} onSaved={() => { setSelected(null); load(); }} />
       )}
     </div>
   );
