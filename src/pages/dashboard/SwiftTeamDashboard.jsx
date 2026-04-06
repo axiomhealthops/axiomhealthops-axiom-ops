@@ -597,7 +597,7 @@ export default function SwiftTeamDashboard() {
   );
 
   // SWIFT access: super_admin and admin always have access; others need is_swift_team flag
-  const hasSWIFTAccess = ['super_admin','admin'].includes(profile?.role) || profile?.is_swift_team === true;
+  const hasSWIFTAccess = ['super_admin','admin','assoc_director'].includes(profile?.role) || profile?.is_swift_team === true || profile?.role === 'telehealth';
   if (!hasSWIFTAccess) return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="SWIFT Team" subtitle="Access Restricted" />

@@ -74,6 +74,7 @@ export function AuthProvider({ children }) {
           if (role === 'clinician')          return p.clinician;
           if (role === 'regional_manager') return p.regional_manager; // RM has own restricted column
           if (role === 'assoc_director') return p.assoc_director;
+          if (role === 'telehealth')      return p.telehealth;
           if (role === 'pod_leader')  return p.pod_leader;   // legacy
           if (role === 'team_member') return p.team_member;  // legacy
           return false;

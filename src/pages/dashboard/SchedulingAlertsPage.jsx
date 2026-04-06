@@ -160,7 +160,7 @@ export default function SchedulingAlertsPage() {
   // Scope to coordinator's regions if applicable
   const myRegions = useMemo(() => {
     const r = profile?.role;
-    if (['super_admin','admin','pod_leader'].includes(r)) return null; // sees all
+    if (['super_admin','admin','assoc_director','pod_leader','telehealth'].includes(r)) return null; // sees all regions
     return profile?.regions || null;
   }, [profile]);
 
