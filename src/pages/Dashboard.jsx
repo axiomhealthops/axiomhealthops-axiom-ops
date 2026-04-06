@@ -39,6 +39,7 @@ import AuthCoordDashboard from './dashboard/AuthCoordDashboard';
 import CareCoordMyPatients from './dashboard/CareCoordMyPatients';
 import IntakeCoordQueue from './dashboard/IntakeCoordQueue';
 import RMDailyDashboard from './dashboard/RMDailyDashboard';
+import SchedulingAlertsPage from './dashboard/SchedulingAlertsPage';
 import SwiftTeamDashboard from './dashboard/SwiftTeamDashboard';
 import DischargeTrackerPage from './dashboard/DischargeTrackerPage';
 import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
@@ -80,6 +81,7 @@ const PAGE_COMPONENTS = {
   'care-coord-patients':     CareCoordMyPatients,
   'intake-queue':            IntakeCoordQueue,
   'rm-daily':                RMDailyDashboard,
+  'scheduling-alerts':       SchedulingAlertsPage,
   'swift-team':              SwiftTeamDashboard,
   'auth-renewals':           AuthRenewalsPage,
   'discharges':              DischargeTrackerPage,
