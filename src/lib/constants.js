@@ -30,7 +30,7 @@ export const ROLES = {
   COORDINATOR: 'coordinator',
 };
 
-export const DIRECTOR_ROLES = ['super_admin', 'ceo', 'admin'];
+export const DIRECTOR_ROLES = ['super_admin', 'ceo', 'admin', 'assoc_director'];
 export const MISSION_ROLES = ['auth_coordinator', 'intake_coordinator', 'care_coordinator', 'clinician', 'pod_leader', 'team_leader', 'team_member'];
 export const COORDINATOR_ROLES = ['coordinator'];
 

@@ -115,6 +115,7 @@ export default function Dashboard() {
     if (r === 'auth_coordinator')   return 'auth-coordinator';
     if (r === 'intake_coordinator') return 'intake-queue';
     if (r === 'care_coordinator')   return 'care-coord-patients';
+    if (r === 'assoc_director')      return 'overview';
     if (r === 'pod_leader')         return 'intake-queue';
     if (r === 'clinician')          return 'visits';
     if (r === 'super_admin')        return 'director';

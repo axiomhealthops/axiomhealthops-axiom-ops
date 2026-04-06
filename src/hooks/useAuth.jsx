@@ -73,6 +73,7 @@ export function AuthProvider({ children }) {
           if (role === 'care_coordinator')   return p.care_coordinator;
           if (role === 'clinician')          return p.clinician;
           if (role === 'regional_manager') return p.regional_manager; // RM has own restricted column
+          if (role === 'assoc_director') return p.assoc_director;
           if (role === 'pod_leader')  return p.pod_leader;   // legacy
           if (role === 'team_member') return p.team_member;  // legacy
           return false;
@@ -88,7 +89,7 @@ export function AuthProvider({ children }) {
 
   function canAccess(pageKey) {
     if (!profile) return false;
-    if (['super_admin','ceo','admin'].includes(profile.role)) return true;
+    if (['super_admin','ceo','admin','assoc_director'].includes(profile.role)) return true;
     return permissions.includes(pageKey);
   }
 
