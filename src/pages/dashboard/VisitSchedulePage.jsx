@@ -318,7 +318,6 @@ export default function VisitSchedulePage() {
               <option value="ALL">All Clinicians</option>
               {allClinicians.map(function(c) { return React.createElement('option', { key: c, value: c }, c); })}
             </select>
-            </select>
             <select value={statusFilter} onChange={function(e) { setStatusFilter(e.target.value); }} style={SEL}>
               <option value="ALL">All Statuses</option>
               <option value="completed">Completed</option>

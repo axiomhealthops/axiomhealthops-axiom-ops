@@ -35,7 +35,6 @@ import AuthRenewalsPage from './dashboard/AuthRenewalsPage';
 import DirectorDashboard from './dashboard/DirectorDashboard';
 import ClinicianAccountabilityPage from './dashboard/ClinicianAccountabilityPage';
 import ClinicianAssignmentPage from './dashboard/ClinicianAssignmentPage';
-import ClinicianAssignmentPage from './dashboard/ClinicianAssignmentPage';
 import PipelineTrackerPage from './dashboard/PipelineTrackerPage';
 import AuthCoordDashboard from './dashboard/AuthCoordDashboard';
 import CareCoordMyPatients from './dashboard/CareCoordMyPatients';
