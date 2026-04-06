@@ -80,6 +80,7 @@ function DrillDown(props) {
   var allVisits = viewVisits.filter(function(v) { return v.status && v.status.toLowerCase().includes(props.statusKey); });
  
   var [search, setSearch] = useState('');
+  var [clinFilter, setClinFilter] = useState('ALL');
   var [sortBy, setSortBy] = useState('date');
   var [expandedRegions, setExpandedRegions] = useState({});
  
@@ -230,13 +231,23 @@ export default function VisitSchedulePage() {
     }).filter(function(v) { return v.pd; });
   }, [visits]);
  
+  var allClinicians = useMemo(function() {
+    var seen = new Set();
+    visits.forEach(function(v) { if (v.staff_name_normalized) seen.add(v.staff_name_normalized); else if (v.staff_name) seen.add(v.staff_name); });
+    return Array.from(seen).sort();
+  }, [visits]);
+
   var filtered = useMemo(function() {
     return withDates.filter(function(v) {
       if (regionFilter !== 'ALL' && v.region !== regionFilter) return false;
       if (statusFilter !== 'ALL' && v.status && !v.status.toLowerCase().includes(statusFilter)) return false;
+      if (clinFilter !== 'ALL') {
+        var vClin = v.staff_name_normalized || v.staff_name || '';
+        if (vClin !== clinFilter) return false;
+      }
       return true;
     });
-  }, [withDates, regionFilter, statusFilter]);
+  }, [withDates, regionFilter, statusFilter, clinFilter]);
  
   var byDate = useMemo(function() {
     var map = {};
@@ -299,9 +310,14 @@ export default function VisitSchedulePage() {
             <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--black)', marginLeft: 8 }}>{getViewLabel()}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <select value={regionFilter} onChange={function(e) { setRegionFilter(e.target.value); }} style={SEL}>
+            <select value={regionFilter} onChange={function(e) { setRegionFilter(e.target.value); setClinFilter('ALL'); }} style={SEL}>
               <option value="ALL">All Regions</option>
               {VALID.map(function(r) { return React.createElement('option', { key: r, value: r }, 'Region ' + r + ' \u2014 ' + (REGIONS[r] || '')); })}
+            </select>
+            <select value={clinFilter} onChange={function(e) { setClinFilter(e.target.value); }} style={{ ...SEL, maxWidth: 200 }}>
+              <option value="ALL">All Clinicians</option>
+              {allClinicians.map(function(c) { return React.createElement('option', { key: c, value: c }, c); })}
+            </select>
             </select>
             <select value={statusFilter} onChange={function(e) { setStatusFilter(e.target.value); }} style={SEL}>
               <option value="ALL">All Statuses</option>
