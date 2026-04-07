@@ -49,14 +49,25 @@ function fmtFileSize(bytes) {
 }
  
 function visitsRemaining(rec) {
+  // If predecessor not exhausted, effective visits = 0 (visits don't count yet)
+  if (rec.alert_predecessor_pending) return 0;
+  // Use DB-computed effective_visits_remaining if available
+  if (rec.effective_visits_remaining !== null && rec.effective_visits_remaining !== undefined) return rec.effective_visits_remaining;
+  return Math.max((rec.visits_authorized || 0) - (rec.visits_used || 0), 0);
+}
+
+function rawVisitsRemaining(rec) {
   return Math.max((rec.visits_authorized || 0) - (rec.visits_used || 0), 0);
 }
  
 function getUrgency(rec) {
   var remaining = visitsRemaining(rec);
+  var rawRemaining = rawVisitsRemaining(rec);
   var expDays = daysUntil(rec.auth_expiry_date);
   if (rec.auth_status === 'denied') return 'critical';
   if (rec.auth_status === 'renewal_needed') return 'critical';
+  // Predecessor not exhausted — flag as medium so it surfaces but doesn't false-alarm as critical
+  if (rec.alert_predecessor_pending) return 'medium';
   if (remaining <= 7 && rec.auth_status === 'active') return 'critical';
   if (remaining <= 10 && rec.auth_status === 'active') return 'high';
   if (expDays !== null && expDays <= 14 && expDays >= 0) return 'high';
@@ -87,6 +98,21 @@ function VisitsBar(props) {
   var remaining = Math.max(auth - used, 0);
   var pct = auth > 0 ? Math.min((used / auth) * 100, 100) : 0;
   var color = remaining <= 7 ? '#DC2626' : remaining <= 10 ? '#F59E0B' : '#10B981';
+
+  // Predecessor not exhausted — show locked state
+  if (rec.alert_predecessor_pending) {
+    return (
+      <div style={{ minWidth: 80 }}>
+        <div style={{ fontSize: 9, fontWeight: 700, color: '#7C3AED', background: '#F5F3FF', padding: '2px 6px', borderRadius: 4, marginBottom: 2 }}>
+          🔒 {auth} visits — predecessor active
+        </div>
+        <div style={{ height: 5, background: '#DDD6FE', borderRadius: 999 }}>
+          <div style={{ height: '100%', width: '0%', background: '#7C3AED', borderRadius: 999 }} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ minWidth: 80 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 3 }}>
@@ -255,6 +281,7 @@ function AddEditModal(props) {
     soc_date: '', auth_submitted_date: '', auth_needed_by: '', auth_approved_date: '', auth_expiry_date: '',
     auth_status: 'pending', pcp_name: '', pcp_phone: '', pcp_fax: '', pcp_facility: '',
     therapy_type: 'LYMPHEDEMA', frequency: '', assigned_to: '', notes: '', denial_reason: '',
+    request_category: 'initial', cpt_codes: '', diagnosis_code: '', requesting_provider: '', requesting_provider_npi: '',
   });
  
   function set(field, val) {
@@ -275,6 +302,10 @@ function AddEditModal(props) {
       ? await supabase.from('auth_tracker').update(data).eq('id', rec.id)
       : await supabase.from('auth_tracker').insert([data]);
     if (result.error) { alert('Error: ' + result.error.message); return; }
+    // Recompute auth sequence for this patient after any save
+    if (data.patient_name) {
+      await supabase.rpc('recompute_auth_sequence', { p_patient_name: data.patient_name });
+    }
     props.onSave();
   }
  
@@ -375,13 +406,45 @@ function AddEditModal(props) {
           </div>
  
           <div style={SEC}>Notes</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
             <div><label style={LBL}>Notes</label>
               <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.notes || ''} onChange={function(e){set('notes',e.target.value)}} /></div>
             <div><label style={LBL}>Denial Reason (if denied)</label>
               <textarea rows={3} style={Object.assign({},INP,{resize:'vertical',fontFamily:'DM Sans, sans-serif'})} value={form.denial_reason || ''} onChange={function(e){set('denial_reason',e.target.value)}} /></div>
           </div>
- 
+
+          <div style={SEC}>Authorization Sequencing & Clinical Details</div>
+          <div style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 8, padding: '12px 16px', marginBottom: 16 }}>
+            <div style={{ fontSize: 11, color: '#6D28D9', fontWeight: 700, marginBottom: 8 }}>
+              🔒 Auth Sequencing — if this is a renewal that overlaps an existing auth, visits will be locked until the predecessor is exhausted
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+              <div><label style={LBL}>Request Category</label>
+                <select style={INP} value={form.request_category || 'initial'} onChange={function(e){set('request_category',e.target.value)}}>
+                  <option value="initial">Initial</option>
+                  <option value="renewal">Renewal (continuation of care)</option>
+                  <option value="concurrent_review">Concurrent Review</option>
+                  <option value="resumption">Resumption</option>
+                  <option value="retrospective">Retrospective</option>
+                </select>
+              </div>
+              <div><label style={LBL}>Diagnosis Code</label>
+                <input style={INP} value={form.diagnosis_code || ''} placeholder="e.g. I890 - Lymphedema" onChange={function(e){set('diagnosis_code',e.target.value)}} />
+              </div>
+              <div><label style={LBL}>CPT Codes Authorized</label>
+                <input style={INP} value={form.cpt_codes || ''} placeholder="e.g. 97140 (24), 97164 (6)" onChange={function(e){set('cpt_codes',e.target.value)}} />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+              <div><label style={LBL}>Requesting Provider</label>
+                <input style={INP} value={form.requesting_provider || ''} placeholder="e.g. PHCA Medical Group" onChange={function(e){set('requesting_provider',e.target.value)}} />
+              </div>
+              <div><label style={LBL}>Requesting Provider NPI</label>
+                <input style={INP} value={form.requesting_provider_npi || ''} placeholder="10-digit NPI" onChange={function(e){set('requesting_provider_npi',e.target.value)}} />
+              </div>
+            </div>
+          </div>
+
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <button onClick={props.onClose} style={{ padding: '10px 20px', background: 'none', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--gray)', cursor: 'pointer' }}>Cancel</button>
             <button onClick={handleSave} style={{ padding: '10px 24px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Save Record</button>
@@ -437,6 +500,7 @@ export default function AuthTrackerPage() {
     if (activeTab === 'pending') list = list.filter(function(r) { return r.auth_status === 'pending' || r.auth_status === 'submitted'; });
     if (activeTab === 'expiring') list = list.filter(function(r) { var d = daysUntil(r.auth_expiry_date); return d !== null && d <= 30 && d >= 0; });
     if (activeTab === 'denied') list = list.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; });
+    if (activeTab === 'queued') list = list.filter(function(r) { return r.alert_predecessor_pending === true; });
     if (search) {
       var q = search.toLowerCase();
       list = list.filter(function(r) {
@@ -474,12 +538,14 @@ export default function AuthTrackerPage() {
   var expiring30 = records.filter(function(r) { var d = daysUntil(r.auth_expiry_date); return d !== null && d <= 30 && d >= 0; }).length;
   var denied     = records.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; }).length;
   var active     = records.filter(function(r) { return r.auth_status === 'active'; }).length;
+  var queued     = records.filter(function(r) { return r.alert_predecessor_pending === true; }).length;
  
   var SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
   var tabs = [
     { key: 'all',      label: 'All',                count: records.length },
     { key: 'no_auth',  label: '⚠ No Auth on File',  count: censusPatients.filter(function(c) { return !records.some(function(r) { return r.patient_name?.toLowerCase().trim() === c.patient_name?.toLowerCase().trim(); }); }).length },
     { key: 'critical', label: 'Critical',           count: critical,   color: '#DC2626' },
+    { key: 'queued',   label: '🔒 Queued Renewals', count: queued,     color: '#7C3AED' },
     { key: 'pending',  label: 'Pending / Submitted',count: pending,    color: '#92400E' },
     { key: 'expiring', label: 'Expiring (30 days)', count: expiring30, color: '#F59E0B' },
     { key: 'denied',   label: 'Denied / Appeal',    count: denied,     color: '#6D28D9' },
@@ -607,9 +673,21 @@ export default function AuthTrackerPage() {
                       <div style={{ display: 'flex', alignItems: 'center' }}>
                         <UrgencyDot urgency={urgency} />
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name}</div>
+                            {r.auth_sequence > 1 && (
+                              <span style={{ fontSize: 9, fontWeight: 700, color: '#7C3AED', background: '#F5F3FF', padding: '1px 5px', borderRadius: 4, whiteSpace: 'nowrap' }}>
+                                Auth {r.auth_sequence} of {r.auth_sequence}
+                              </span>
+                            )}
+                          </div>
                           {r.member_id && <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>{r.member_id}</div>}
                           {r.auth_number && <div style={{ fontSize: 10, color: '#1565C0', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>Auth #{r.auth_number}</div>}
+                          {r.alert_predecessor_pending && (
+                            <div style={{ fontSize: 9, fontWeight: 700, color: '#7C3AED', marginTop: 2 }}>
+                              🔒 Queued — predecessor not exhausted
+                            </div>
+                          )}
                         </div>
                       </div>
  
@@ -644,13 +722,28 @@ export default function AuthTrackerPage() {
                     {/* Expanded detail + documents */}
                     {isExpanded && (
                       <div style={{ padding: '16px 20px 20px 34px', background: '#FAFAFA', borderTop: '1px solid var(--border)' }}>
+                        {/* Predecessor warning banner */}
+                        {r.alert_predecessor_pending && (
+                          <div style={{ background: '#F5F3FF', border: '1px solid #C4B5FD', borderRadius: 8, padding: '10px 14px', marginBottom: 14, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                            <span style={{ fontSize: 18, flexShrink: 0 }}>🔒</span>
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>Queued Auth — Predecessor Must Be Exhausted First</div>
+                              <div style={{ fontSize: 11, color: '#6D28D9', marginTop: 3 }}>
+                                This is Auth #{r.auth_sequence} for this patient. The {r.auth_sequence - 1 === 1 ? 'first' : 'previous'} authorization's visits must be fully used before these {r.visits_authorized} visits begin counting.
+                                Visits on this auth are locked until the predecessor is exhausted.
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 4 }}>
                           <div>
                             <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Visit Details</div>
-                            <div style={{ fontSize: 12, color: 'var(--black)' }}>Visits: <strong>{r.visits_used}/{r.visits_authorized}</strong> ({visitsRemaining(r)} left)</div>
+                            <div style={{ fontSize: 12, color: 'var(--black)' }}>Visits: <strong>{r.visits_used}/{r.visits_authorized}</strong> ({rawVisitsRemaining(r)} remaining)</div>
+                            {r.alert_predecessor_pending && <div style={{ fontSize: 11, color: '#7C3AED', fontWeight: 700 }}>⟳ Effective visits: 0 (locked)</div>}
                             <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Evals: <strong>{r.evals_used}/{r.evals_authorized}</strong></div>
                             <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 3 }}>Reassessments: <strong>{r.reassessments_used}/{r.reassessments_authorized}</strong></div>
                             {r.frequency && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 3 }}>Frequency: {r.frequency}</div>}
+                            {r.cpt_codes && <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 4 }}>CPT: {r.cpt_codes}</div>}
                           </div>
                           <div>
                             <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Key Dates</div>
