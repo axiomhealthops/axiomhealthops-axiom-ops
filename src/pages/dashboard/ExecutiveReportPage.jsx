@@ -20,9 +20,11 @@ function getWeekRange(weeksAgo = 0) {
   monday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1) - weeksAgo * 7);
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
+  // Use local date strings — toISOString() converts to UTC and shifts the day at night
+  const toLocal = d => [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-');
   return {
-    start: monday.toISOString().slice(0, 10),
-    end: sunday.toISOString().slice(0, 10),
+    start: toLocal(monday),
+    end: toLocal(sunday),
     label: monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' – ' + sunday.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
   };
 }

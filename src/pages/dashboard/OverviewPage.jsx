@@ -12,10 +12,11 @@ function weekBounds() {
   const day = now.getDay();
   const mon = new Date(now);
   mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
-  mon.setHours(0,0,0,0);
   const sun = new Date(mon);
   sun.setDate(mon.getDate() + 6);
-  return [mon.toISOString().slice(0,10), sun.toISOString().slice(0,10)];
+  // Use local date strings — toISOString() converts to UTC and shifts the day at night
+  const toLocal = d => [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-');
+  return [toLocal(mon), toLocal(sun)];
 }
 
 function isEval(event_type) { return /eval/i.test(event_type || ''); }

@@ -125,13 +125,28 @@ export default function DirectorDashboard() {
   const [lastRefresh, setLastRefresh] = useState(null);
 
   const load = useCallback(async () => {
-    const weekStart = new Date();
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay() + (weekStart.getDay() === 0 ? -6 : 1));
-    const weekStartStr = weekStart.toISOString().slice(0, 10);
+    // Use local date (not UTC) for week start — avoids timezone shift at night
+    const now = new Date();
+    const localYear = now.getFullYear();
+    const localMonth = String(now.getMonth() + 1).padStart(2, '0');
+    const localDay = String(now.getDate()).padStart(2, '0');
+    const todayLocal = `${localYear}-${localMonth}-${localDay}`;
+
+    // Monday of current week in local time
+    const dow = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+    const daysFromMon = dow === 0 ? 6 : dow - 1;
+    const monDate = new Date(now);
+    monDate.setDate(now.getDate() - daysFromMon);
+    const weekStartStr = `${monDate.getFullYear()}-${String(monDate.getMonth()+1).padStart(2,'0')}-${String(monDate.getDate()).padStart(2,'0')}`;
+
+    // Sunday of current week
+    const sunDate = new Date(monDate);
+    sunDate.setDate(monDate.getDate() + 6);
+    const weekEndStr = `${sunDate.getFullYear()}-${String(sunDate.getMonth()+1).padStart(2,'0')}-${String(sunDate.getDate()).padStart(2,'0')}`;
 
     const [c, v, ar, oh, wl, cl, dc] = await Promise.all([
       supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date'),
-      supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', weekStartStr),
+      supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr).limit(2000),
       supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")'),
       supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold'),
       supabase.from('waitlist_assignments').select('patient_name,region,assignment_status,assigned_clinician,waitlisted_since,priority'),
