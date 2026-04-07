@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { supabase } from '../../lib/supabase';
 import TopBar from '../../components/TopBar';
 import { REGIONS } from '../../lib/constants';
 import { parseVisitDate, toDateStr, formatShortDate, getWeekDays, getMonthDays } from '../../lib/dateUtils';
@@ -213,22 +214,43 @@ var TH = { padding: '6px 16px', textAlign: 'left', fontSize: 10, fontWeight: 700
 var TD = { padding: '8px 16px', color: 'var(--gray)', borderRight: '1px solid var(--border)', fontSize: 12, whiteSpace: 'nowrap' };
  
 export default function VisitSchedulePage() {
-  var visits = useMemo(function() {
-    try { return JSON.parse(localStorage.getItem('axiom_pariox_data') || '[]'); }
-    catch (e) { return []; }
-  }, []);
- 
+  var [visits, setVisits] = useState([]);
+  var [loading, setLoading] = useState(true);
   var [view, setView] = useState('week');
   var [anchor, setAnchor] = useState(new Date());
   var [regionFilter, setRegionFilter] = useState('ALL');
   var [statusFilter, setStatusFilter] = useState('ALL');
   var [selectedDay, setSelectedDay] = useState(null);
   var [statusClick, setStatusClick] = useState(null);
- 
+  var [clinFilter, setClinFilter] = useState('ALL');
+
+  // Fetch visits from Supabase for a ±45-day window around the current anchor
+  var fetchVisits = useCallback(function(anchorDate) {
+    setLoading(true);
+    var d = anchorDate || new Date();
+    var from = new Date(d); from.setDate(d.getDate() - 45);
+    var to   = new Date(d); to.setDate(d.getDate() + 45);
+    var fromStr = from.toISOString().slice(0, 10);
+    var toStr   = to.toISOString().slice(0, 10);
+    supabase.from('visit_schedule_data')
+      .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region,discipline,insurance,visit_time')
+      .gte('visit_date', fromStr)
+      .lte('visit_date', toStr)
+      .limit(3000)
+      .then(function(res) {
+        setVisits(res.data || []);
+        setLoading(false);
+      });
+  }, []);
+
+  useEffect(function() { fetchVisits(anchor); }, []);
+
   var withDates = useMemo(function() {
     return visits.map(function(v) {
-      return Object.assign({}, v, { pd: parseVisitDate(v.raw_date) });
-    }).filter(function(v) { return v.pd; });
+      // visits from Supabase have visit_date as ISO string (YYYY-MM-DD)
+      var pd = v.visit_date ? new Date(v.visit_date + 'T00:00:00') : null;
+      return Object.assign({}, v, { pd: pd, raw_date: v.visit_date });
+    }).filter(function(v) { return v.pd && !isNaN(v.pd); });
   }, [visits]);
  
   var allClinicians = useMemo(function() {
@@ -267,6 +289,9 @@ export default function VisitSchedulePage() {
     setAnchor(d);
     setSelectedDay(null);
     setStatusClick(null);
+    // Refetch if navigating more than 30 days from current anchor
+    var daysDiff = Math.abs(d - new Date()) / 86400000;
+    if (daysDiff > 30) fetchVisits(d);
   }
  
   var todayStr = toDateStr(new Date());
@@ -284,6 +309,17 @@ export default function VisitSchedulePage() {
     return anchor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   }
  
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <TopBar title="Visit Schedule" subtitle="Loading..." />
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gray)', fontSize: 14 }}>
+          Loading visit schedule...
+        </div>
+      </div>
+    );
+  }
+
   if (!visits.length) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -305,7 +341,7 @@ export default function VisitSchedulePage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0, flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button onClick={function() { nav(-1); }} style={BTN}>&#8592;</button>
-            <button onClick={function() { setAnchor(new Date()); setSelectedDay(null); setStatusClick(null); }} style={BTN}>Today</button>
+            <button onClick={function() { var t = new Date(); setAnchor(t); setSelectedDay(null); setStatusClick(null); fetchVisits(t); }} style={BTN}>Today</button>
             <button onClick={function() { nav(1); }} style={BTN}>&#8594;</button>
             <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--black)', marginLeft: 8 }}>{getViewLabel()}</span>
           </div>
