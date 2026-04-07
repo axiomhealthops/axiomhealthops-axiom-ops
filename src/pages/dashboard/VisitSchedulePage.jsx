@@ -289,9 +289,7 @@ export default function VisitSchedulePage() {
     setAnchor(d);
     setSelectedDay(null);
     setStatusClick(null);
-    // Refetch if navigating more than 30 days from current anchor
-    var daysDiff = Math.abs(d - new Date()) / 86400000;
-    if (daysDiff > 30) fetchVisits(d);
+    fetchVisits(d);
   }
  
   var todayStr = toDateStr(new Date());
@@ -310,6 +308,17 @@ export default function VisitSchedulePage() {
   }
  
   if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <TopBar title="Visit Schedule" subtitle="Loading..." />
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gray)', fontSize: 14 }}>
+          Loading visit schedule...
+        </div>
+      </div>
+    );
+  }
+
+  if (loading && !visits.length) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <TopBar title="Visit Schedule" subtitle="Loading..." />
