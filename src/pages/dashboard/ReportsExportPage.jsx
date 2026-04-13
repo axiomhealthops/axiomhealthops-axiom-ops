@@ -2,19 +2,19 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import * as XLSX from 'xlsx';
-
+ 
 const RATE = 230;
 const REGIONAL_MANAGERS = {
   A:'Uma Jacobs', B:'Lia Davis', C:'Earl Dimaano', G:'Samantha Faliks',
   H:'Kaylee Ramsey', J:'Hollie Fincher', M:'Ariel Maboudi', N:'Ariel Maboudi',
   T:'Samantha Faliks', V:'Samantha Faliks',
 };
-
+ 
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
 function isCompleted(s) { return /completed/i.test(s||''); }
 function isEval(e) { return /eval/i.test(e||''); }
 function fmtDate(d) { return d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}) : '' ; }
-
+ 
 const REPORTS = [
   {
     id: 'kpi_summary',
@@ -88,8 +88,16 @@ const REPORTS = [
     formats: ['xlsx','csv'],
     category: 'Operations',
   },
+  {
+    id: 'patient_census',
+    icon: '🩺',
+    title: 'Patient Census Export',
+    desc: 'Current census snapshot — Summary, Full Census, Active Only, and a Status Drift audit (cases where census_data and patient_master disagree). Template is the blank Pariox-format upload sheet for audits and bulk re-imports.',
+    formats: ['xlsx','csv','template'],
+    category: 'Operations',
+  },
 ];
-
+ 
 export default function ReportsExportPage() {
   const [visits, setVisits] = useState([]);
   const [intake, setIntake] = useState([]);
@@ -103,7 +111,7 @@ export default function ReportsExportPage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
-
+ 
   useEffect(() => {
     Promise.all([
       supabase.from('visit_schedule_data').select('*'),
@@ -117,7 +125,7 @@ export default function ReportsExportPage() {
       setClinicians(cl.data||[]); setLoading(false);
     });
   }, []);
-
+ 
   function applyFilters(items, dateField='visit_date') {
     return items.filter(item => {
       const d = item[dateField];
@@ -127,7 +135,7 @@ export default function ReportsExportPage() {
       return true;
     });
   }
-
+ 
   function exportXLSX(data, sheetName, filename) {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(data);
@@ -137,7 +145,7 @@ export default function ReportsExportPage() {
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
     XLSX.writeFile(wb, filename + '.xlsx');
   }
-
+ 
   function exportCSV(data, filename) {
     if (!data.length) return;
     const headers = Object.keys(data[0]);
@@ -152,18 +160,18 @@ export default function ReportsExportPage() {
     a.href = url; a.download = filename + '.csv'; a.click();
     URL.revokeObjectURL(url);
   }
-
+ 
   async function generate(reportId, format) {
     setGenerating(reportId + '_' + format);
     setSuccess(null);
     await new Promise(r => setTimeout(r, 200));
-
+ 
     const today = new Date().toISOString().slice(0,10);
     const suffix = `_${today}`;
-
+ 
     try {
       switch (reportId) {
-
+ 
         case 'kpi_summary': {
           const fv = applyFilters(visits);
           const fi = applyFilters(intake, 'date_received');
@@ -202,7 +210,7 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'KPI Summary', 'KPI_Summary'+suffix) : exportCSV(data, 'KPI_Summary'+suffix);
           break;
         }
-
+ 
         case 'patient_performance': {
           const fv = applyFilters(visits);
           const patMap = {};
@@ -247,7 +255,7 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'Patient Performance', 'Patient_Performance'+suffix) : exportCSV(data, 'Patient_Performance'+suffix);
           break;
         }
-
+ 
         case 'non_compliance': {
           const fv = applyFilters(visits);
           const cancelMap = {};
@@ -278,7 +286,7 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'Non-Compliance', 'Non_Compliance_Report'+suffix) : exportCSV(data, 'Non_Compliance_Report'+suffix);
           break;
         }
-
+ 
         case 'intake_referrals': {
           const fi = applyFilters(intake, 'date_received');
           const data = fi.map(r => ({
@@ -304,7 +312,7 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'Intake Referrals', 'Intake_Referrals'+suffix) : exportCSV(data, 'Intake_Referrals'+suffix);
           break;
         }
-
+ 
         case 'auth_status': {
           const fa = applyFilters(auth, 'created_at');
           const data = fa.map(a => ({
@@ -328,7 +336,7 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'Auth Status', 'Auth_Status_Report'+suffix) : exportCSV(data, 'Auth_Status_Report'+suffix);
           break;
         }
-
+ 
         case 'revenue_by_region': {
           const fv = applyFilters(visits);
           const regionMap = {};
@@ -367,7 +375,7 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'Revenue by Region', 'Revenue_By_Region'+suffix) : exportCSV(data, 'Revenue_By_Region'+suffix);
           break;
         }
-
+ 
         case 'clinician_productivity': {
           const fv = applyFilters(visits);
           const clinMap = {};
@@ -403,7 +411,7 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'Clinician Productivity', 'Clinician_Productivity'+suffix) : exportCSV(data, 'Clinician_Productivity'+suffix);
           break;
         }
-
+ 
         case 'expiring_auths': {
           const today_d = new Date();
           const d30 = new Date(); d30.setDate(d30.getDate()+30);
@@ -437,7 +445,7 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'Expiring Auths', 'Expiring_Authorizations'+suffix) : exportCSV(data, 'Expiring_Authorizations'+suffix);
           break;
         }
-
+ 
         case 'regional_manager_summary': {
           const data = census
             .filter(c => regionFilter==='ALL' || c.region===regionFilter)
@@ -463,8 +471,154 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'RM Summary', 'Regional_Manager_Summary'+suffix) : exportCSV(data, 'Regional_Manager_Summary'+suffix);
           break;
         }
+ 
+        case 'patient_census': {
+          // Template download — blank Pariox-format upload sheet (matches UploadsPage parser exactly)
+          if (format === 'template') {
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet([
+              ['Patient Name','Address','Discipline','Ref Source','Region','SOC','Insurance','Status'],
+              ['Doe, Jane A','123 Main St, Orlando FL 32801','PT','Hospital ABC','A','2026-01-15','Medicare','Active'],
+              ['Smith, John B','456 Oak Ave, Tampa FL 33602','OT','Dr. Garcia','C','2026-02-20','Humana','SOC Pending'],
+            ]);
+            ws['!cols'] = [{wch:24},{wch:36},{wch:12},{wch:22},{wch:8},{wch:12},{wch:18},{wch:14}];
+            const inst = XLSX.utils.aoa_to_sheet([
+              ['Census Bulk Upload Template — Instructions'],
+              [''],
+              ['Column order MUST match the Pariox export format. The Census tab has the correct headers and 2 example rows.'],
+              ['Header row is required (row 1). Data starts on row 2.'],
+              [''],
+              ['Column','Field','Required','Notes'],
+              ['A','Patient Name','Yes','Format: "LastName, FirstName Middle"'],
+              ['B','Address','No','Free text'],
+              ['C','Discipline','No','PT / OT / ST / SN / etc.'],
+              ['D','Ref Source','No','Referring provider or facility'],
+              ['E','Region','Yes','Single letter (A, B, C, G, H, J, M, N, T, V)'],
+              ['F','SOC','No','Start of Care date — informational only, not parsed'],
+              ['G','Insurance','No','Payor name'],
+              ['H','Status','Yes','Active / SOC Pending / Eval Pending / On Hold / Discharge / Waitlist / Auth Pending'],
+              [''],
+              ['To upload: go to Uploads → Patient Census card → drop this file. The system will diff against the prior snapshot and log status changes automatically.'],
+            ]);
+            inst['!cols'] = [{wch:10},{wch:18},{wch:10},{wch:60}];
+            XLSX.utils.book_append_sheet(wb, inst, 'Instructions');
+            XLSX.utils.book_append_sheet(wb, ws, 'Census');
+            XLSX.writeFile(wb, 'Census_Upload_Template.xlsx');
+            break;
+          }
+ 
+          // Lazy-fetch patient_master for status drift detection
+          const { data: master } = await supabase.from('patient_master')
+            .select('patient_key, current_status, previous_status, status_changed_at, has_been_active, has_been_discharged, total_referrals, last_discharge_date')
+            .limit(3000);
+          const masterMap = {};
+          (master||[]).forEach(m => { if (m.patient_key) masterMap[m.patient_key] = m; });
+ 
+          const fc = census.filter(c => regionFilter==='ALL' || c.region===regionFilter);
+ 
+          const rows = fc.map(c => {
+            const m = masterMap[c.patient_key] || {};
+            return {
+              'Patient Name': c.patient_name || '',
+              'Patient Key': c.patient_key || '',
+              'Region': c.region || '',
+              'Regional Manager': REGIONAL_MANAGERS[c.region] || '—',
+              'Insurance': c.insurance || '',
+              'Status': c.status || '',
+              'Master Status': m.current_status || '',
+              'Previous Status': c.previous_status || m.previous_status || '',
+              'Status Changed': c.status_changed_at ? new Date(c.status_changed_at).toLocaleString() : '',
+              'Discipline': c.discipline || '',
+              'Referral Source': c.ref_source || '',
+              'Address': c.address || '',
+              'First Seen': fmtDate(c.first_seen_date),
+              'Last Seen': fmtDate(c.last_seen_date),
+              'Last Visit': fmtDate(c.last_visit_date),
+              'Last Visit Clinician': c.last_visit_clinician || '',
+              'Last Visit Type': c.last_visit_type || '',
+              'Days Since Last Visit': c.days_since_last_visit ?? '',
+              'Has Wound': c.has_wound ? 'Yes' : 'No',
+              'Wound Type': c.wound_type || '',
+              'Target Start': fmtDate(c.target_start_date),
+              'Pipeline Assigned To': c.pipeline_assigned_to || '',
+              'Pipeline Notes': c.pipeline_notes || '',
+              'Total Referrals': m.total_referrals ?? '',
+              'Ever Active': m.has_been_active ? 'Yes' : 'No',
+              'Ever Discharged': m.has_been_discharged ? 'Yes' : 'No',
+              'Last Discharge': fmtDate(m.last_discharge_date),
+              'Snapshot Uploaded': c.uploaded_at ? new Date(c.uploaded_at).toLocaleString() : '',
+            };
+          }).sort((a,b) => (a.Region||'').localeCompare(b.Region||'') || (a.Status||'').localeCompare(b.Status||'') || a['Patient Name'].localeCompare(b['Patient Name']));
+ 
+          if (format === 'csv') {
+            exportCSV(rows, 'Patient_Census'+suffix);
+            break;
+          }
+ 
+          // Multi-sheet XLSX
+          const wb = XLSX.utils.book_new();
+ 
+          // Summary sheet
+          const statusCounts = {};
+          const regionCounts = {};
+          rows.forEach(r => {
+            statusCounts[r.Status||'(blank)'] = (statusCounts[r.Status||'(blank)']||0) + 1;
+            regionCounts[r.Region||'(blank)'] = (regionCounts[r.Region||'(blank)']||0) + 1;
+          });
+          const driftRows = rows.filter(r => r['Master Status'] && (r.Status||'').toLowerCase() !== (r['Master Status']||'').toLowerCase());
+          const summary = [
+            ['AxiomHealth Patient Census Export'],
+            ['Generated', new Date().toLocaleString()],
+            ['Source', 'census_data (latest snapshot) joined to patient_master'],
+            ['Region Filter', regionFilter],
+            ['Total Patients', rows.length],
+            ['Active Patients', rows.filter(r => (r.Status||'').toLowerCase()==='active').length],
+            ['Status Drift Cases', driftRows.length],
+            [''],
+            ['By Status', 'Count'],
+            ...Object.entries(statusCounts).sort((a,b) => b[1]-a[1]).map(([s,n]) => [s,n]),
+            [''],
+            ['By Region','Count'],
+            ...Object.entries(regionCounts).sort().map(([r,n]) => [r,n]),
+          ];
+          const sumWs = XLSX.utils.aoa_to_sheet(summary);
+          sumWs['!cols'] = [{wch:32},{wch:14}];
+          XLSX.utils.book_append_sheet(wb, sumWs, 'Summary');
+ 
+          // Full Census
+          const fullWs = XLSX.utils.json_to_sheet(rows);
+          fullWs['!cols'] = Object.keys(rows[0]||{}).map(k => ({ wch: Math.max(k.length, 14) }));
+          XLSX.utils.book_append_sheet(wb, fullWs, 'Full Census');
+ 
+          // Active Only
+          const activeRows = rows.filter(r => (r.Status||'').toLowerCase()==='active');
+          if (activeRows.length) {
+            const actWs = XLSX.utils.json_to_sheet(activeRows);
+            actWs['!cols'] = Object.keys(activeRows[0]).map(k => ({ wch: Math.max(k.length, 14) }));
+            XLSX.utils.book_append_sheet(wb, actWs, 'Active Only');
+          }
+ 
+          // Status Drift Audit — patients where census snapshot and patient_master disagree
+          if (driftRows.length) {
+            const driftWs = XLSX.utils.json_to_sheet(driftRows.map(r => ({
+              'Patient Name': r['Patient Name'],
+              'Region': r.Region,
+              'Census Status': r.Status,
+              'Master Status': r['Master Status'],
+              'Previous Status': r['Previous Status'],
+              'Status Changed': r['Status Changed'],
+              'Last Visit': r['Last Visit'],
+              'Days Since Last Visit': r['Days Since Last Visit'],
+            })));
+            driftWs['!cols'] = [{wch:24},{wch:8},{wch:18},{wch:18},{wch:18},{wch:20},{wch:14},{wch:12}];
+            XLSX.utils.book_append_sheet(wb, driftWs, 'Status Drift Audit');
+          }
+ 
+          XLSX.writeFile(wb, 'Patient_Census'+suffix+'.xlsx');
+          break;
+        }
       }
-
+ 
       setSuccess(reportId + '_' + format);
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -472,22 +626,22 @@ export default function ReportsExportPage() {
     }
     setGenerating(null);
   }
-
+ 
   const categories = ['ALL', ...new Set(REPORTS.map(r => r.category))];
   const filtered = REPORTS.filter(r => categoryFilter === 'ALL' || r.category === categoryFilter);
-
+ 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Reports & Export" subtitle="Loading data…" />
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading…</div>
     </div>
   );
-
+ 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Reports & Export" subtitle="Extract data for presentations, reviews, and PCP sharing" />
       <div style={{ flex:1, overflow:'auto', padding:20, display:'flex', flexDirection:'column', gap:20 }}>
-
+ 
         {/* Filters */}
         <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:20 }}>
           <div style={{ fontSize:13, fontWeight:700, color:'var(--black)', marginBottom:12 }}>Report Filters <span style={{ fontWeight:400, color:'var(--gray)', fontSize:12 }}>— applies to all exports below</span></div>
@@ -529,7 +683,7 @@ export default function ReportsExportPage() {
             </div>
           )}
         </div>
-
+ 
         {/* Report cards */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(340px, 1fr))', gap:16 }}>
           {filtered.map(report => {
@@ -556,9 +710,11 @@ export default function ReportsExportPage() {
                   {report.formats.map(fmt => (
                     <button key={fmt} onClick={() => generate(report.id, fmt)}
                       disabled={!!generating}
-                      style={{ flex:1, padding:'8px 12px', background:fmt==='xlsx'?'#065F46':'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:generating?'wait':'pointer', opacity:generating?0.6:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+                      style={{ flex:1, padding:'8px 12px', background:fmt==='xlsx'?'#065F46':fmt==='template'?'#7C3AED':'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:generating?'wait':'pointer', opacity:generating?0.6:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
                       {isGen && generating?.endsWith(fmt) ? (
                         <><span style={{ display:'inline-block', width:12, height:12, border:'2px solid rgba(255,255,255,0.4)', borderTopColor:'#fff', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} /> Generating…</>
+                      ) : fmt === 'template' ? (
+                        <>📋 Template</>
                       ) : (
                         <>{fmt === 'xlsx' ? '📊' : '📄'} Export {fmt.toUpperCase()}</>
                       )}
