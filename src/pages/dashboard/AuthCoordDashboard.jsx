@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, safeUpdate } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
-
+ 
 function fmtDate(d) {
   if (!d) return '—';
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -18,7 +18,7 @@ function urgencyColor(days) {
   if (days <= 14) return '#D97706';
   return '#059669';
 }
-
+ 
 function AuthEditModal({ auth, onClose, onSaved, profileName }) {
   const [form, setForm] = useState({
     auth_status: auth.auth_status || 'pending',
@@ -33,22 +33,64 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
     assigned_to: auth.assigned_to || profileName || '',
   });
   const [saving, setSaving] = useState(false);
-
+  const [saveError, setSaveError] = useState(null);
+ 
   async function save() {
     setSaving(true);
-    await supabase.from('auth_tracker').update({
+    setSaveError(null);
+ 
+    // Client-side validation — catches the data integrity issues the audit surfaced
+    const va = form.visits_authorized ? parseInt(form.visits_authorized) : null;
+    const vu = form.visits_used ? parseInt(form.visits_used) : null;
+    if (va !== null && va < 0) { setSaveError('Visits authorized cannot be negative.'); setSaving(false); return; }
+    if (vu !== null && vu < 0) { setSaveError('Visits used cannot be negative.'); setSaving(false); return; }
+    if (va !== null && vu !== null && vu > va) {
+      setSaveError(`Visits used (${vu}) exceeds visits authorized (${va}). Correct before saving.`);
+      setSaving(false); return;
+    }
+    if (form.auth_approved_date && form.auth_expiry_date && form.auth_approved_date > form.auth_expiry_date) {
+      setSaveError('Auth approved date is after expiry date. Check for typos (e.g. year).');
+      setSaving(false); return;
+    }
+    if (form.auth_submitted_date && form.auth_approved_date && form.auth_submitted_date > form.auth_approved_date) {
+      setSaveError('Auth submitted date is after approved date. Check for typos.');
+      setSaving(false); return;
+    }
+    // Reject obviously bad year typos (e.g. 20226-03-31)
+    for (const f of ['auth_submitted_date','auth_approved_date','auth_expiry_date']) {
+      const v = form[f];
+      if (v && (v.length !== 10 || !/^\d{4}-\d{2}-\d{2}$/.test(v))) {
+        setSaveError(`Invalid date format on ${f.replace(/_/g,' ')}: "${v}". Use YYYY-MM-DD.`);
+        setSaving(false); return;
+      }
+    }
+ 
+    const { error, rowCount } = await safeUpdate('auth_tracker', {
       ...form,
-      visits_authorized: form.visits_authorized ? parseInt(form.visits_authorized) : null,
-      visits_used: form.visits_used ? parseInt(form.visits_used) : null,
+      visits_authorized: va,
+      visits_used: vu,
       auth_submitted_date: form.auth_submitted_date || null,
       auth_approved_date: form.auth_approved_date || null,
       auth_expiry_date: form.auth_expiry_date || null,
       updated_at: new Date().toISOString(),
-    }).eq('id', auth.id);
+    }, { id: auth.id });
+ 
+    if (error) {
+      setSaveError(error.message);
+      setSaving(false);
+      return;
+    }
+ 
+    // Recompute sequence so visits_used / status changes propagate to is_currently_active
+    if (auth.patient_name) {
+      const { error: rpcErr } = await supabase.rpc('recompute_auth_sequence', { p_patient_name: auth.patient_name });
+      if (rpcErr) console.warn('recompute_auth_sequence failed:', rpcErr.message);
+    }
+ 
     setSaving(false);
     onSaved();
   }
-
+ 
   const STATUSES = [
     { k: 'active',   l: 'Active',    c: '#059669', bg: '#ECFDF5' },
     { k: 'pending',  l: 'Pending',   c: '#D97706', bg: '#FEF3C7' },
@@ -56,7 +98,7 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
     { k: 'denied',   l: 'Denied',    c: '#DC2626', bg: '#FEF2F2' },
     { k: 'discharged',l:'Discharged',c: '#6B7280', bg: '#F3F4F6' },
   ];
-
+ 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24, overflowY:'auto' }}>
       <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:580, boxShadow:'0 24px 60px rgba(0,0,0,0.4)' }}>
@@ -69,7 +111,7 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
           </div>
           <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'rgba(255,255,255,0.5)' }}>×</button>
         </div>
-
+ 
         <div style={{ padding:22, display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
           <div style={{ gridColumn:'1/-1' }}>
             <label style={{ fontSize:11, fontWeight:700, display:'block', marginBottom:8 }}>Auth Status</label>
@@ -82,7 +124,7 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
               ))}
             </div>
           </div>
-
+ 
           {[
             { label:'Auth Number', field:'auth_number', type:'text', placeholder:'Auth #...' },
             { label:'Assigned To', field:'assigned_to', type:'text', placeholder:'Coordinator name...' },
@@ -100,7 +142,7 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
                 style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
             </div>
           ))}
-
+ 
           <div style={{ gridColumn:'1/-1' }}>
             <label style={{ fontSize:11, fontWeight:700, display:'block', marginBottom:4 }}>Notes</label>
             <textarea value={form.notes} onChange={e => setForm(p=>({...p, notes:e.target.value}))}
@@ -108,19 +150,26 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
               style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:80, background:'var(--card-bg)' }} />
           </div>
         </div>
-
-        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
-          <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, cursor:'pointer', background:'var(--card-bg)' }}>Cancel</button>
-          <button onClick={save} disabled={saving}
-            style={{ padding:'8px 22px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:'pointer' }}>
-            {saving ? 'Saving…' : 'Save Changes'}
-          </button>
+ 
+        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', flexDirection:'column', gap:8, background:'var(--bg)' }}>
+          {saveError && (
+            <div style={{ background:'#FEF2F2', border:'1px solid #FCA5A5', color:'#991B1B', padding:'8px 12px', borderRadius:6, fontSize:12, fontWeight:600 }}>
+              ⚠ {saveError}
+            </div>
+          )}
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
+            <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, cursor:'pointer', background:'var(--card-bg)' }}>Cancel</button>
+            <button onClick={save} disabled={saving}
+              style={{ padding:'8px 22px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:saving?'wait':'pointer', opacity:saving?0.7:1 }}>
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
-
+ 
 export default function AuthCoordDashboard() {
   const { profile } = useAuth();
   const [auths, setAuths] = useState([]);
@@ -131,7 +180,7 @@ export default function AuthCoordDashboard() {
   const [filterInsurance, setFilterInsurance] = useState('ALL');
   const [search, setSearch] = useState('');
   const [editAuth, setEditAuth] = useState(null);
-
+ 
   const load = useCallback(async () => {
     const [a, r] = await Promise.all([
       supabase.from('auth_tracker').select('*').order('auth_expiry_date', { ascending: true }),
@@ -141,16 +190,16 @@ export default function AuthCoordDashboard() {
     setRenewalTasks(r.data || []);
     setLoading(false);
   }, []);
-
+ 
   useEffect(() => { load(); }, [load]);
-
+ 
   const enriched = useMemo(() => auths.map(a => ({
     ...a,
     daysUntilExpiry: daysUntil(a.auth_expiry_date),
     visitsRemaining: Math.max(0, (a.visits_authorized || 0) - (a.visits_used || 0)),
     utilizationPct: a.visits_authorized > 0 ? Math.round((a.visits_used / a.visits_authorized) * 100) : 0,
   })), [auths]);
-
+ 
   const stats = useMemo(() => {
     const active = enriched.filter(a => a.auth_status === 'active');
     return {
@@ -163,7 +212,7 @@ export default function AuthCoordDashboard() {
       urgentRenewals: renewalTasks.filter(r => r.priority === 'urgent').length,
     };
   }, [enriched, renewalTasks]);
-
+ 
   const filtered = useMemo(() => {
     let list = enriched;
     if (activeTab === 'today')    list = list.filter(a => a.auth_status === 'active' && a.daysUntilExpiry !== null && a.daysUntilExpiry <= 7);
@@ -179,19 +228,19 @@ export default function AuthCoordDashboard() {
     }
     return list.sort((a, b) => (a.daysUntilExpiry ?? 999) - (b.daysUntilExpiry ?? 999));
   }, [enriched, activeTab, filterRegion, filterInsurance, search]);
-
+ 
   const uniqueInsurances = [...new Set(auths.map(a => a.insurance).filter(Boolean))].sort();
   const uniqueRegions = [...new Set(auths.map(a => a.region).filter(Boolean))].sort();
-
+ 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Auth Coordinator Dashboard" subtitle="Loading..." />
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading authorization data...</div>
     </div>
   );
-
+ 
   const today = new Date().toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
-
+ 
   return (
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
@@ -201,7 +250,7 @@ export default function AuthCoordDashboard() {
           <button onClick={load} style={{ padding:'6px 14px', background:'#0F1117', color:'#fff', border:'none', borderRadius:7, fontSize:11, fontWeight:700, cursor:'pointer' }}>↻ Refresh</button>
         }
       />
-
+ 
       {/* Urgent banner */}
       {(stats.expiringToday > 0 || stats.urgentRenewals > 0) && (
         <div style={{ background:'#FEF2F2', borderBottom:'2px solid #FECACA', padding:'8px 20px', display:'flex', alignItems:'center', gap:12 }}>
@@ -212,10 +261,10 @@ export default function AuthCoordDashboard() {
           </span>
         </div>
       )}
-
+ 
       <div style={{ flex:1, overflowY:'auto' }}>
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
-
+ 
           {/* KPI Strip */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:10 }}>
             {[
@@ -233,7 +282,7 @@ export default function AuthCoordDashboard() {
               </div>
             ))}
           </div>
-
+ 
           {/* Tabs + filters */}
           <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:8, overflow:'hidden', alignSelf:'flex-start' }}>
             {[
@@ -249,7 +298,7 @@ export default function AuthCoordDashboard() {
               </button>
             ))}
           </div>
-
+ 
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patient, insurance, auth #..."
               style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)', width:220 }} />
@@ -265,7 +314,7 @@ export default function AuthCoordDashboard() {
             </select>
             <div style={{ marginLeft:'auto', fontSize:11, color:'var(--gray)' }}>{filtered.length} records</div>
           </div>
-
+ 
           {/* Auth Table */}
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
             <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.4fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.7fr 1fr', padding:'8px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
@@ -310,7 +359,7 @@ export default function AuthCoordDashboard() {
               );
             })}
           </div>
-
+ 
           {/* Renewal Tasks panel */}
           {renewalTasks.length > 0 && (
             <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
@@ -335,7 +384,7 @@ export default function AuthCoordDashboard() {
           )}
         </div>
       </div>
-
+ 
       {editAuth && (
         <AuthEditModal
           auth={editAuth}
@@ -347,3 +396,4 @@ export default function AuthCoordDashboard() {
     </div>
   );
 }
+ 
