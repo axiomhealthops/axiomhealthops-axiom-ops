@@ -119,16 +119,29 @@ export async function checkProductivityAlerts(clinicians, visitsByClinician) {
 // Generate auth-based tasks for coordinators
 export async function runAuthAlertEngine() {
   var today = new Date(); today.setHours(0,0,0,0);
+  var todayStr = today.toISOString().split('T')[0];
  
-  var res = await supabase.from('auth_tracker')
-    .select('id, patient_name, insurance, region, auth_status, visits_authorized, visits_used, auth_expiry_date')
-    .in('auth_status', ['active', 'renewal_needed']);
+  // Run nightly cleanup: flip status='expired' and is_currently_active=false on any past-expiry auth.
+  // Returns affected patient list and re-sequences each. Safe to call on every run (idempotent).
+  var cleanup = await supabase.rpc('mark_expired_auths');
+  var newlyExpired = (cleanup && cleanup.data && cleanup.data[0]) ? (cleanup.data[0].affected_patients || []) : [];
  
-  if (res.error || !res.data) return;
+  // Pull both currently-active auths (for renewal/critical tasks) AND just-expired auths (for expired tasks)
+  var activeRes = await supabase.from('auth_tracker')
+    .select('id, patient_name, insurance, region, auth_status, visits_authorized, visits_used, auth_expiry_date, is_currently_active')
+    .in('auth_status', ['active', 'renewal_needed'])
+    .eq('is_currently_active', true);
+ 
+  var expiredRes = await supabase.from('auth_tracker')
+    .select('id, patient_name, insurance, region, auth_expiry_date')
+    .eq('auth_status', 'expired')
+    .gte('auth_expiry_date', new Date(today.getTime() - 30*86400000).toISOString().split('T')[0]); // expired within last 30d
+ 
+  if (activeRes.error) { console.warn('auth alert active fetch:', activeRes.error.message); return; }
  
   var tasksToInsert = [];
  
-  res.data.forEach(function(r) {
+  (activeRes.data || []).forEach(function(r) {
     var remaining = Math.max((r.visits_authorized || 0) - (r.visits_used || 0), 0);
     var expDays = r.auth_expiry_date ? Math.round((new Date(r.auth_expiry_date) - today) / (1000*60*60*24)) : null;
     var coord = REGION_COORD[r.region] || null;
@@ -141,7 +154,7 @@ export async function runAuthAlertEngine() {
         patient_name: r.patient_name, auth_tracker_id: r.id,
         coordinator_region: r.region, assigned_to: coord,
         status: 'open', auto_generated: true,
-        due_date: today.toISOString().split('T')[0],
+        due_date: todayStr,
       });
     } else if (remaining <= 10 && remaining > 7) {
       tasksToInsert.push({
@@ -168,16 +181,42 @@ export async function runAuthAlertEngine() {
     }
   });
  
-  if (tasksToInsert.length > 0) {
-    // Clear old auto auth tasks
-    await supabase.from('coordinator_tasks').delete()
-      .eq('auto_generated', true)
-      .in('task_type', ['auth_critical', 'auth_renewal', 'auth_expired'])
-      .in('status', ['open']);
+  // Generate auth_expired tasks for the recently-expired set (30-day window keeps the queue actionable, not a graveyard)
+  (expiredRes.data || []).forEach(function(r) {
+    var coord = REGION_COORD[r.region] || null;
+    tasksToInsert.push({
+      task_type: 'auth_expired', priority: 'critical',
+      title: 'Auth EXPIRED: ' + r.patient_name,
+      description: 'Auth expired ' + r.auth_expiry_date + ' (' + (r.insurance || '—') + '). Confirm successor auth is active or halt scheduling.',
+      patient_name: r.patient_name, auth_tracker_id: r.id,
+      coordinator_region: r.region, assigned_to: coord,
+      status: 'open', auto_generated: true,
+      due_date: todayStr,
+    });
+  });
  
-    await supabase.from('coordinator_tasks').insert(tasksToInsert);
+  // Use upsert pattern matching coordinator_tasks_auto_dedupe partial unique index
+  // (avoids the delete-then-insert race condition that conflicts with the dedupe pattern)
+  if (tasksToInsert.length > 0) {
+    var upsertRes = await supabase.from('coordinator_tasks').upsert(tasksToInsert, {
+      onConflict: 'auth_tracker_id,task_type',
+      ignoreDuplicates: false,
+    });
+    if (upsertRes.error) console.warn('coordinator_tasks upsert:', upsertRes.error.message);
   }
  
-  return { tasksCreated: tasksToInsert.length };
+  // Close out any open auto auth tasks whose underlying auth no longer warrants them
+  // (e.g., visits_used was corrected, expiry was extended)
+  var liveAuthIds = (activeRes.data || []).map(r => r.id).concat((expiredRes.data || []).map(r => r.id));
+  if (liveAuthIds.length > 0) {
+    await supabase.from('coordinator_tasks')
+      .update({ status: 'auto_closed', updated_at: new Date().toISOString() })
+      .eq('auto_generated', true)
+      .eq('status', 'open')
+      .in('task_type', ['auth_critical', 'auth_renewal', 'auth_expired'])
+      .not('auth_tracker_id', 'in', '(' + liveAuthIds.map(id => '"' + id + '"').join(',') + ')');
+  }
+ 
+  return { tasksCreated: tasksToInsert.length, newlyExpiredPatients: newlyExpired };
 }
  
