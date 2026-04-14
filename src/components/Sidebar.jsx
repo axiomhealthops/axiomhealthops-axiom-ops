@@ -22,7 +22,7 @@ const PAGE_ICONS = {
   auth: '🔐',
   'coordinator-portal': '👩‍💼',
   productivity: '📊', revenue: '💰', growth: '📈', scorecard: '🎯',
-  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺', 'medicare-tracker': '🏥', 'marketing-crm': '📣', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'clinician-assignment': '↔', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'scheduling-alerts': '📅', 'swift-team': '🩹', 'auth-renewals': '🔄', 'discharges': '📤', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'clinician-assignment': '↔', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'scheduling-alerts': '📅', 'swift-team': '🩹', 'auth-renewals': '🔄', 'discharges': '📤',
+  staff: '👤', regions: '🗺', 'daily-reports': '📋', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺', 'medicare-tracker': '🏥', 'marketing-crm': '📣', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'clinician-assignment': '↔', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'scheduling-alerts': '📅', 'swift-team': '🩹', 'auth-renewals': '🔄', 'discharges': '📤',
   users: '👥', uploads: '↑', settings: '⚙',
 };
 
@@ -78,7 +78,6 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
     ceo: 'CEO',
     admin: 'Admin',
     regional_manager: 'Regional Manager',
-    admin: 'Admin',
     assoc_director:      'Assoc. Director of Clinical Ops',
     telehealth:          'Telehealth PT/OT',
     pod_leader:          'Pod Leader',

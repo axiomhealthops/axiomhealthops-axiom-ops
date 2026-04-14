@@ -3,19 +3,12 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
-// Florida ZIP prefix → region mapping (covers major AxiomHealth service areas)
-const ZIP_REGION_MAP = {
-  '327': 'A', '328': 'A', '329': 'A', // Orlando / Seminole / Orange
-  '347': 'B', '346': 'B',              // Hillsborough / Tampa
-  '326': 'C', '344': 'C',              // Gainesville / Ocala
-  '346': 'G', '349': 'G',              // Manatee / Sarasota
-  '336': 'H', '337': 'H', '338': 'H', // Pinellas / Hillsborough North
-  '325': 'J',                          // Tallahassee
-  '320': 'M', '321': 'M',             // Jacksonville
-  '322': 'N', '323': 'N',             // Lake City / NE FL
-  '335': 'T', '336': 'T',             // Tampa South
-  '339': 'V', '341': 'V',             // Lee / Collier / SW FL
-};
+// NOTE: A ZIP_REGION_MAP constant previously lived here but was unused
+// throughout the codebase. It is removed to unblock the build (it had
+// duplicate object-literal keys for ZIP prefixes 346 and 336, which are
+// REAL multi-region overlaps in Florida — Hillsborough/Manatee for 346,
+// Pinellas/Tampa-South for 336). When waitlist auto-routing by ZIP is
+// implemented, restore this as a multi-value resolver, not a flat map.
 
 const PRIORITIES = [
   { key: 'urgent', label: '🔴 Urgent',  color: '#DC2626', bg: '#FEF2F2' },

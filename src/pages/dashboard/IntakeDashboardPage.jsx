@@ -842,7 +842,7 @@ export default function IntakeDashboardPage() {
                                 ].map(([label, val]) => val ? (
                                   <div key={label} style={{ display: 'flex', gap: 8, marginBottom: 6, fontSize: 12 }}>
                                     <span style={{ color: 'var(--gray)', fontWeight: 600, minWidth: 110, flexShrink: 0 }}>{label}:</span>
-                                    <span style={{ color: 'var(--black)', fontWeight: label === 'Denial Reason' ? 700 : 400, color: label === 'Denial Reason' ? '#DC2626' : 'var(--black)' }}>{val}</span>
+                                    <span style={{ fontWeight: label === 'Denial Reason' ? 700 : 400, color: label === 'Denial Reason' ? '#DC2626' : 'var(--black)' }}>{val}</span>
                                   </div>
                                 ) : null)}
                                 {/* Accepted matches for Inconsistent Decision */}
