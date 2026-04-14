@@ -544,10 +544,10 @@ export default function IntakeDashboardPage() {
                     const aH = maxMonthTotal > 0 ? (m.accepted / maxMonthTotal) * 110 : 0;
                     const dH = maxMonthTotal > 0 ? (m.denied / maxMonthTotal) * 110 : 0;
                     return (
-                      <div key={m.key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 1, height: 110 }}>
-                          <div title={`Accepted: ${m.accepted}`} style={{ width: '45%', height: aH, background: '#10B981', borderRadius: '3px 3px 0 0', minHeight: 2 }} />
-                          <div title={`Denied: ${m.denied}`} style={{ width: '45%', height: dH, background: '#DC2626', borderRadius: '3px 3px 0 0', minHeight: 2 }} />
+                      <div key={m.key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 2, height: 110, width: '100%' }}>
+                          <div title={`Accepted: ${m.accepted}`} style={{ flex: 1, maxWidth: 14, height: aH, background: '#10B981', borderRadius: '3px 3px 0 0', minHeight: m.accepted > 0 ? 2 : 0 }} />
+                          <div title={`Denied: ${m.denied}`} style={{ flex: 1, maxWidth: 14, height: dH, background: '#DC2626', borderRadius: '3px 3px 0 0', minHeight: m.denied > 0 ? 2 : 0 }} />
                         </div>
                         <div style={{ fontSize: 9, color: 'var(--gray)', textAlign: 'center' }}>{m.label}</div>
                         <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--black)' }}>{m.total}</div>
