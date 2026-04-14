@@ -8,15 +8,16 @@ const RATE = 230;
 const VALID_REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
 function weekBounds() {
+  // Work week is Sun -> Sat (per ops convention). Sunday = day 0.
   const now = new Date();
-  const day = now.getDay();
-  const mon = new Date(now);
-  mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
-  const sun = new Date(mon);
-  sun.setDate(mon.getDate() + 6);
+  const day = now.getDay();              // 0 = Sun ... 6 = Sat
+  const sun = new Date(now);
+  sun.setDate(now.getDate() - day);      // back up to this week's Sunday
+  const sat = new Date(sun);
+  sat.setDate(sun.getDate() + 6);
   // Use local date strings — toISOString() converts to UTC and shifts the day at night
   const toLocal = d => [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-');
-  return [toLocal(mon), toLocal(sun)];
+  return [toLocal(sun), toLocal(sat)];
 }
 
 function isEval(event_type) { return /eval/i.test(event_type || ''); }
@@ -47,9 +48,13 @@ export default function OverviewPage() {
   useEffect(() => {
     const [wStart, wEnd] = weekBounds();
     Promise.all([
+      // Filter (PDF) documentation rows server-side — they're Pariox docs, not real visits.
+      // .limit(3000) prevents the silent 1000-row PostgREST cap from truncating busy weeks.
       supabase.from('visit_schedule_data')
         .select('patient_name,visit_date,status,event_type,region,discipline,insurance')
-        .gte('visit_date', wStart).lte('visit_date', wEnd),
+        .gte('visit_date', wStart).lte('visit_date', wEnd)
+        .not('event_type', 'ilike', '%(PDF)%')
+        .limit(3000),
       supabase.from('auth_tracker')
         .select('insurance,auth_status,visits_authorized,visits_used,auth_expiry_date,region,patient_name'),
       supabase.from('census_data').select('insurance,region,status,patient_name'),
