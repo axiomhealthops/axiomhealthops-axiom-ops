@@ -254,6 +254,10 @@ export default function IntakeDashboardPage() {
   const [auditSelected, setAuditSelected] = useState(null); // selected patient for detail panel
   // Payor tab state (lifted)
   const [payorSearch, setPayorSearch] = useState('');
+  // Monthly Referral Volume chart: date range filter
+  const [trendRange, setTrendRange] = useState('last12'); // last6|last12|last24|ytd|prev_year|custom
+  const [trendFrom, setTrendFrom] = useState('');  // YYYY-MM, used when trendRange='custom'
+  const [trendTo, setTrendTo] = useState('');      // YYYY-MM
   const [payorIns, setPayorIns] = useState('ALL');
   const [payorDx, setPayorDx] = useState('ALL');
 
@@ -295,7 +299,8 @@ export default function IntakeDashboardPage() {
       if (r.referral_status === 'Accepted') monthMap[k].accepted++;
       else monthMap[k].denied++;
     });
-    const months = Object.keys(monthMap).sort().slice(-14).map(k => ({ key: k, label: fmtMonth(k), ...monthMap[k], total: monthMap[k].accepted + monthMap[k].denied }));
+    // Full history of months (no slice) — the chart applies its own date-range filter.
+    const months = Object.keys(monthMap).sort().map(k => ({ key: k, label: fmtMonth(k), ...monthMap[k], total: monthMap[k].accepted + monthMap[k].denied }));
 
     // By region
     const regionMap = {};
@@ -415,7 +420,39 @@ export default function IntakeDashboardPage() {
   const uniqueTypes = [...new Set(records.map(r => r.referral_type).filter(Boolean))].sort();
 
   const SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
-  const maxMonthTotal = stats.months.length > 0 ? Math.max(...stats.months.map(m => m.total)) : 1;
+
+  // ── Monthly trend: apply date range filter ──────────────────────────
+  // All months exist in stats.months; this filter selects which to show.
+  const filteredTrendMonths = useMemo(() => {
+    if (!stats.months.length) return [];
+    const now = new Date();
+    const yr = now.getFullYear();
+    const mo = now.getMonth() + 1; // 1-12
+    const mk = (y, m) => `${y}-${String(m).padStart(2, '0')}`;
+    let fromKey, toKey;
+    if (trendRange === 'last6' || trendRange === 'last12' || trendRange === 'last24') {
+      const n = trendRange === 'last6' ? 6 : trendRange === 'last12' ? 12 : 24;
+      toKey = mk(yr, mo);
+      const f = new Date(yr, mo - n, 1);  // mo-n works with 0/negative; Date normalizes
+      fromKey = mk(f.getFullYear(), f.getMonth() + 1);
+    } else if (trendRange === 'ytd') {
+      fromKey = mk(yr, 1);
+      toKey = mk(yr, mo);
+    } else if (trendRange === 'prev_year') {
+      fromKey = mk(yr - 1, 1);
+      toKey = mk(yr - 1, 12);
+    } else if (trendRange === 'custom' && trendFrom && trendTo) {
+      fromKey = trendFrom;
+      toKey = trendTo;
+    } else {
+      // custom selected but not fully filled → show everything
+      return stats.months;
+    }
+    if (fromKey > toKey) { const t = fromKey; fromKey = toKey; toKey = t; } // be forgiving
+    return stats.months.filter(m => m.key >= fromKey && m.key <= toKey);
+  }, [stats.months, trendRange, trendFrom, trendTo]);
+
+  const maxMonthTotal = filteredTrendMonths.length > 0 ? Math.max(...filteredTrendMonths.map(m => m.total)) : 1;
 
   const TABS = [
     { key: 'overview',  label: 'Overview' },
@@ -538,9 +575,33 @@ export default function IntakeDashboardPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
               {/* Monthly trend */}
               <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, gridColumn: '1 / -1' }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 16 }}>Monthly Referral Volume (Last 14 Months)</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)' }}>Monthly Referral Volume</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <select value={trendRange} onChange={e => setTrendRange(e.target.value)} style={SEL}>
+                      <option value="last6">Last 6 months</option>
+                      <option value="last12">Last 12 months</option>
+                      <option value="last24">Last 24 months</option>
+                      <option value="ytd">Year to date</option>
+                      <option value="prev_year">Previous year</option>
+                      <option value="custom">Custom range…</option>
+                    </select>
+                    {trendRange === 'custom' && (
+                      <>
+                        <input type="month" value={trendFrom} onChange={e => setTrendFrom(e.target.value)} style={SEL} placeholder="From" />
+                        <span style={{ fontSize: 11, color: 'var(--gray)' }}>to</span>
+                        <input type="month" value={trendTo} onChange={e => setTrendTo(e.target.value)} style={SEL} placeholder="To" />
+                      </>
+                    )}
+                  </div>
+                </div>
+                {filteredTrendMonths.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--gray)', padding: '30px 0', textAlign: 'center' }}>
+                    No referrals in the selected range.
+                  </div>
+                ) : (
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 120 }}>
-                  {stats.months.map(m => {
+                  {filteredTrendMonths.map(m => {
                     const aH = maxMonthTotal > 0 ? (m.accepted / maxMonthTotal) * 110 : 0;
                     const dH = maxMonthTotal > 0 ? (m.denied / maxMonthTotal) * 110 : 0;
                     return (
@@ -555,6 +616,7 @@ export default function IntakeDashboardPage() {
                     );
                   })}
                 </div>
+                )}
                 <div style={{ display: 'flex', gap: 16, marginTop: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
                     <div style={{ width: 10, height: 10, background: '#10B981', borderRadius: 2 }} /> Accepted
