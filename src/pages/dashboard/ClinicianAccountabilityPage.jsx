@@ -114,7 +114,7 @@ function CliniciansTab({ clinicians, visits, census }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 20 }}>
       {/* Summary KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
         {[
           { label: 'Avg Utilization', val: summary.avgUtilization + '%', color: pctColor(summary.avgUtilization), bg: pctBg(summary.avgUtilization), sub: 'across all clinicians' },
           { label: '🔴 Under 30%', val: summary.under30, color: '#DC2626', bg: '#FEF2F2', sub: 'critically underutilized' },

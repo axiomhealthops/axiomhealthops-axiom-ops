@@ -344,7 +344,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
                   </div>
                 </div>
               </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10, marginBottom:10 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10, marginBottom:10 }}>
                 <E label="SOC Date" name="soc_date" type="date" />
                 <E label="Auth Submitted" name="auth_submitted_date" type="date" />
                 <E label="Needed By" name="auth_needed_by" type="date" />

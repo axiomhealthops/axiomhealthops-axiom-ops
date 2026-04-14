@@ -403,7 +403,7 @@ export default function WaitlistPage() {
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
 
           {/* KPI Cards */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:12 }}>
             {[
               { label:'Active Waitlist', val:stats.total, color:'var(--black)', bg:'var(--card-bg)', sub:'Total patients waiting' },
               { label:'🚨 30+ Days', val:stats.over30days, color:'#DC2626', bg:stats.over30days>0?'#FEF2F2':'var(--card-bg)', sub:'Critical — overdue action' },

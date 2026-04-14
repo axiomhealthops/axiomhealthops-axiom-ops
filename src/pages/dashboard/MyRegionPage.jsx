@@ -362,7 +362,7 @@ export default function MyRegionPage() {
           {activeTab === 'overview' && (
             <>
               {/* KPI row */}
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:14 }}>
                 <StatCard label="Visits This Week" value={completed.length} icon="✅"
                   sub={`${scheduled.length} still scheduled`} color="#065F46" bg="#ECFDF5" />
                 <StatCard label="Miss Rate" value={missRate+'%'} icon="❌"

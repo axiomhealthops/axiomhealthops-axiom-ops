@@ -194,7 +194,7 @@ export default function IntakeCoordQueue() {
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
 
           {/* KPIs */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:10 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
             {[
               { label:'This Week',         val:stats.newThisWeek,        color:'#1565C0', bg:'#EFF6FF' },
               { label:'🆕 New Patients/Wk', val:stats.newPatientsWeek,    color:'#1565C0', bg:'#EFF6FF' },

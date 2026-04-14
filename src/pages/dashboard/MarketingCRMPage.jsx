@@ -280,7 +280,7 @@ export default function MarketingCRMPage() {
 
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
           {/* KPI Cards */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:14 }}>
             {[
               { label:'Total Contacts', val:contacts.length, icon:'📋', color:'var(--black)' },
               { label:'Active Referral Sources', val:activeRefs, icon:'🔥', color:'#065F46', bg:'#ECFDF5' },

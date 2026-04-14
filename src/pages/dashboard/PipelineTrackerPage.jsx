@@ -204,7 +204,7 @@ export default function PipelineTrackerPage() {
         <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
 
           {/* KPI cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
             {[
               { label: 'Total Pipeline', val: stats.total, color: '#1565C0', bg: '#EFF6FF', sub: 'SOC + Eval Pending', onClick: () => { setFilterStaleness('ALL'); } },
               { label: '🔴 Critical 60d+', val: stats.critical, color: '#DC2626', bg: '#FEF2F2', sub: 'Immediate action needed', onClick: () => setFilterStaleness('critical') },

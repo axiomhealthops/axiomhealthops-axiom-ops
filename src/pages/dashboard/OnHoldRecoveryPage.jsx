@@ -322,7 +322,7 @@ export default function OnHoldRecoveryPage() {
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
 
           {/* KPI cards */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:14 }}>
             {[
               { label:'Active On Hold', value:active.length, color:'#D97706', bg:'#FEF3C7', icon:'⏸' },
               { label:'≥30 Days (Overdue)', value:overdue.length, color:'#DC2626', bg:'#FEF2F2', icon:'🔴', alert:overdue.length>0 },

@@ -266,7 +266,7 @@ export default function SchedulingAlertsPage() {
         <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
 
           {/* KPI Strip */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
             {[
               { label: '🚨 Overdue',          val: stats.overdue,                color: '#DC2626', bg: '#FEF2F2' },
               { label: '🔴 Critical ≤7d',     val: stats.critical,               color: '#DC2626', bg: '#FEF2F2' },

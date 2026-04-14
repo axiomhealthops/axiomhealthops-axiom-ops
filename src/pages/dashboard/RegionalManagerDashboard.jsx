@@ -358,7 +358,7 @@ export default function RegionalManagerDashboard() {
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:20 }}>
 
           {/* TOP KPI ROW */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:14 }}>
             <KPICard label="Visits Completed" value={visitStats.completed.toLocaleString()} icon="✅"
               sub={`${visitStats.scheduled} still scheduled`} color="#065F46" bg="#ECFDF5"
               trend={visitStats.compTrend} />

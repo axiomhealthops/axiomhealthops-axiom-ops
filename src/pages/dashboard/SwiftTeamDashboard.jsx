@@ -650,7 +650,7 @@ export default function SwiftTeamDashboard() {
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
 
             {/* KPI strip */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
               {[
                 { label: 'Active Wounds', val: stats.total, color: '#DC2626', bg: '#FEF2F2' },
                 { label: '🚨 Reviews Overdue', val: stats.overdue, color: '#DC2626', bg: '#FEF2F2' },

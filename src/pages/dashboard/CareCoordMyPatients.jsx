@@ -357,7 +357,7 @@ export default function CareCoordMyPatients() {
               </div>
 
               {/* KPI Strip */}
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
                 {[
                   { label:'Active Patients',    val:stats.active,         color:'#059669', bg:'#ECFDF5' },
                   { label:'No Contact 14d+',    val:stats.noContact14,    color:stats.noContact14>10?'#DC2626':'#D97706', bg:stats.noContact14>10?'#FEF2F2':'#FEF3C7' },

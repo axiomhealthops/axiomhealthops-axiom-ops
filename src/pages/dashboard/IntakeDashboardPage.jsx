@@ -539,7 +539,7 @@ export default function IntakeDashboardPage() {
             { label: 'This Month',         val: stats.thisMonthRecs.length,                color: '#7C3AED',      sub: stats.thisMonthNew.length + ' new · ' + stats.thisMonthExisting.length + ' existing', action: () => { setMonthFilter(new Date().toISOString().slice(0,7)); setStatusFilter('ALL'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
           ].map(tile => (
             <div key={tile.label} onClick={tile.action}
-              style={{ flex: 1, minWidth: 100, padding: '10px 14px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.bg || (tile.alert ? '#FFFBF5' : 'transparent'), cursor: 'pointer', transition: 'background 0.15s' }}
+              style={{ flex: '1 1 140px', minWidth: 140, padding: '10px 14px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.bg || (tile.alert ? '#FFFBF5' : 'transparent'), cursor: 'pointer', transition: 'background 0.15s' }}
               onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
               onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
               <div style={{ fontSize: 9, color: 'var(--gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{tile.label}</div>

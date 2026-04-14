@@ -216,7 +216,7 @@ export default function ExecutiveReportPage() {
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg)', fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--gray)' }}>
               01 · VISIT PERFORMANCE
             </div>
-            <div style={{ padding: 20, display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12 }}>
+            <div style={{ padding: 20, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
               {[
                 { label: 'Completed Visits', val: stats.thisCompleted, delta: stats.visitDelta, suffix: '', good: 500, warn: 300 },
                 { label: 'Est. Revenue', val: fmt$(stats.estRevenue), delta: stats.revDelta, deltaFmt: fmt$(Math.abs(stats.revDelta)), isDollar: true, good: 100000, warn: 50000, rawVal: stats.estRevenue },

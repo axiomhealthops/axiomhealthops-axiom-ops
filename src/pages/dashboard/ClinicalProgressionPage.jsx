@@ -346,7 +346,7 @@ export default function ClinicalProgressionPage() {
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
 
           {/* KPI cards */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:12 }}>
             {[
               { label:'LOC 5 — High Risk', val:stats.highRisk, color:'#DC2626', bg:'#FEF2F2', border:'#FECACA', sub:'Critical patients' },
               { label:'↓ Step-Down Ready', val:stats.readyForStepDown, color:'#1565C0', bg:'#EFF6FF', border:'#BFDBFE', sub:'Completed visits at level' },
@@ -559,7 +559,7 @@ export default function ClinicalProgressionPage() {
                       </div>
 
                       {/* Stats */}
-                      <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10 }}>
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
                         {[
                           { label:'Current Level', val:p.cfg?.label||'—', color:p.cfg?.color },
                           { label:'Visits at Level', val:`${p.visitsAtCurrentLevel}${p.targetVisits<999?'/'+p.targetVisits:''}` },

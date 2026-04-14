@@ -300,7 +300,7 @@ export default function DirectorDashboard() {
         </div>
 
         {/* Today's Visit Pulse */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
           {[
             { label:'Completed', val:m.completedThisWeek.length, color:'#059669', sub:`of ${WEEKLY_TARGET} target`, bg:'#F0FFF4' },
             { label:'Cancelled', val:m.cancelledThisWeek.length, color:'#DC2626', sub:`${m.cancelRate}% cancel rate`, bg:m.cancelRate>10?'#FEF2F2':'var(--card-bg)' },
@@ -322,7 +322,7 @@ export default function DirectorDashboard() {
             <span style={{ background:'#DC2626', color:'#fff', borderRadius:5, padding:'2px 8px', fontSize:11 }}>TRIAGE</span>
             Today's 5 Priority Actions
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
             <TriageCard
               rank={1} urgent
               title="Active Patients Not Seen 14+ Days"

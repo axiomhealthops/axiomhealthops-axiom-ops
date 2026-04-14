@@ -153,7 +153,7 @@ export default function RMDailyDashboard() {
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
 
           {/* KPI strip */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:10 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
             {[
               { label:'Active Patients', val:metrics.activePatients, color:'#059669', bg:'#ECFDF5' },
               { label:'Visits This Week', val:metrics.completedVisits, color:'#1565C0', bg:'#EFF6FF' },

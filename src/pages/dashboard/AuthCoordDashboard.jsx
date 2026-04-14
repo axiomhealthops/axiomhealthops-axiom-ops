@@ -266,7 +266,7 @@ export default function AuthCoordDashboard() {
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
  
           {/* KPI Strip */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:10 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
             {[
               { label:'Active Auths',   val:stats.totalActive,    color:'#059669', bg:'#ECFDF5', tab:'all' },
               { label:'🔴 Expired/Today', val:stats.expiringToday, color:'#DC2626', bg:'#FEF2F2', tab:'today' },
