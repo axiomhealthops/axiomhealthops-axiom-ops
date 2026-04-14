@@ -130,27 +130,65 @@ function ImportPanel({ onImportDone }) {
     reader.onerror = () => { setStatus('error'); setMsg('File read failed'); };
     reader.onload = async (e) => {
       try {
-        const rows = parseIntakeXLSX(e.target.result);
-        setMsg(`Parsed ${rows.length} rows. Clearing old data…`);
-        // Delete in batches to ensure full clear regardless of RLS
-        let keepDeleting = true;
-        while (keepDeleting) {
-          const { data: toDelete } = await supabase.from('intake_referrals').select('id').limit(500);
-          if (!toDelete || toDelete.length === 0) { keepDeleting = false; break; }
-          const ids = toDelete.map(r => r.id);
-          await supabase.from('intake_referrals').delete().in('id', ids);
-          if (toDelete.length < 500) keepDeleting = false;
+        const rawRows = parseIntakeXLSX(e.target.result);
+        setMsg(`Parsed ${rawRows.length} rows. Checking for duplicates…`);
+
+        // Dedupe by unique key (patient_name, date_received) — last occurrence wins.
+        // A patient can legitimately have multiple referrals on different dates
+        // (e.g. denied in March with Humana, accepted in April with Aetna), so
+        // the unique key is the pair — not patient_name alone.
+        const dedupe = new Map();
+        for (const r of rawRows) {
+          if (!r.patient_name || !r.date_received) continue; // skip unkeyable rows
+          const key = `${r.patient_name}||${r.date_received}`;
+          dedupe.set(key, r);
         }
-        let inserted = 0;
+        const rows = Array.from(dedupe.values()).map(r => ({
+          ...r,
+          updated_at: new Date().toISOString(),
+        }));
+        const droppedDupes = rawRows.length - rows.length;
+
+        // Count existing rows so we can report new vs updated
+        const { count: countBefore } = await supabase
+          .from('intake_referrals')
+          .select('*', { count: 'exact', head: true });
+
+        setMsg(`Upserting ${rows.length} rows…`);
+
+        // Upsert in chunks. onConflict matches the unique constraint so same-key
+        // rows get UPDATED in place; new-key rows get INSERTED. Historical rows
+        // not present in the upload are left alone.
         const CHUNK = 200;
+        let processed = 0;
         for (let i = 0; i < rows.length; i += CHUNK) {
           const chunk = rows.slice(i, i + CHUNK);
-          const { error } = await supabase.from('intake_referrals').insert(chunk);
-          if (error) throw new Error(error.message);
-          inserted += chunk.length;
-          setMsg(`Uploading… ${inserted}/${rows.length}`);
+          const { error } = await supabase
+            .from('intake_referrals')
+            .upsert(chunk, { onConflict: 'patient_name,date_received' });
+          if (error) {
+            // Surface the offending chunk so a bad row can be identified fast
+            const firstRow = chunk[0];
+            const lastRow = chunk[chunk.length - 1];
+            throw new Error(
+              `${error.message} (failed on rows ${i + 1}–${i + chunk.length}, ` +
+              `e.g. ${firstRow.patient_name} / ${firstRow.date_received} … ` +
+              `${lastRow.patient_name} / ${lastRow.date_received})`
+            );
+          }
+          processed += chunk.length;
+          setMsg(`Upserting… ${processed.toLocaleString()}/${rows.length.toLocaleString()}`);
         }
-        setStatus('success'); setMsg(`${rows.length.toLocaleString()} referrals imported successfully`);
+
+        // Count again and compute breakdown
+        const { count: countAfter } = await supabase
+          .from('intake_referrals')
+          .select('*', { count: 'exact', head: true });
+        const added = Math.max(0, (countAfter || 0) - (countBefore || 0));
+        const updated = rows.length - added;
+        const dupeNote = droppedDupes > 0 ? ` · ${droppedDupes} duplicate row${droppedDupes > 1 ? 's' : ''} collapsed` : '';
+        setStatus('success');
+        setMsg(`✓ ${rows.length.toLocaleString()} processed: ${added.toLocaleString()} new, ${updated.toLocaleString()} updated${dupeNote}`);
         onImportDone();
       } catch (err) {
         setStatus('error'); setMsg('Error: ' + err.message);
