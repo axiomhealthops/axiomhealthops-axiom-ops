@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
 import ManualIntakeEntry from './ManualIntakeEntry';
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -118,7 +119,7 @@ function HBar({ label, value, max, color, subLabel }) {
 }
 
 // ── Import panel ──────────────────────────────────────────────────────
-function ImportPanel({ onImportDone }) {
+function ImportPanel({ onImportDone, profile }) {
   const [status, setStatus] = useState('idle');
   const [msg, setMsg] = useState('');
   const ref = useRef();
@@ -187,6 +188,20 @@ function ImportPanel({ onImportDone }) {
         const added = Math.max(0, (countAfter || 0) - (countBefore || 0));
         const updated = rows.length - added;
         const dupeNote = droppedDupes > 0 ? ` · ${droppedDupes} duplicate row${droppedDupes > 1 ? 's' : ''} collapsed` : '';
+
+        // Record this import in upload_batches for audit trail (shows on Data Uploads page).
+        const uploaderName = profile?.full_name || profile?.email || 'Unknown';
+        const batchRes = await supabase.from('upload_batches').insert([{
+          batch_type: 'intake_referrals',
+          file_name: file.name,
+          record_count: rows.length,
+          uploaded_by: uploaderName,
+        }]);
+        if (batchRes.error) {
+          // Non-fatal: the import worked, we just couldn't log it. Surface but don't fail.
+          console.warn('upload_batches log failed:', batchRes.error.message);
+        }
+
         setStatus('success');
         setMsg(`✓ ${rows.length.toLocaleString()} processed: ${added.toLocaleString()} new, ${updated.toLocaleString()} updated${dupeNote}`);
         onImportDone();
@@ -219,6 +234,7 @@ function ImportPanel({ onImportDone }) {
 
 // ── Main page ─────────────────────────────────────────────────────────
 export default function IntakeDashboardPage() {
+  const { profile } = useAuth();
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -242,12 +258,22 @@ export default function IntakeDashboardPage() {
   const [payorDx, setPayorDx] = useState('ALL');
 
   async function fetchRecords() {
+    // PostgREST silently caps at ~1000 rows even when .limit(N) requests more.
+    // Paginate via .range() to get the full set regardless of server-side cap.
     setLoading(true);
-    const { data } = await supabase.from('intake_referrals')
-      .select('id,date_received,referral_status,referral_type,region,patient_name,insurance,denial_reason,diagnosis,chart_status')
-      .order('date_received', { ascending: false })
-      .limit(6000);
-    setRecords(data || []);
+    const PAGE = 1000;
+    const all = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase.from('intake_referrals')
+        .select('id,date_received,referral_status,referral_type,region,patient_name,insurance,denial_reason,diagnosis,chart_status')
+        .order('date_received', { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) { console.warn('fetchRecords error:', error.message); break; }
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < PAGE) break;
+    }
+    setRecords(all);
     setLoading(false);
   }
 
@@ -438,7 +464,7 @@ export default function IntakeDashboardPage() {
         {/* Import panel */}
         {showImport && (
           <div style={{ padding: '16px 20px 0', flexShrink: 0 }}>
-            <ImportPanel onImportDone={() => { fetchRecords(); setShowImport(false); }} />
+            <ImportPanel profile={profile} onImportDone={() => { fetchRecords(); setShowImport(false); }} />
           </div>
         )}
 

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
 import { runAlertEngine } from '../../lib/alertEngine';
  
 // ── XLSX → CSV ────────────────────────────────────────────────────────
@@ -134,11 +135,13 @@ function UploadCard(props) {
 
         setMessage('Processing ' + data.length + ' records...');
 
-        // Create batch record for audit trail
+        // Create batch record for audit trail — includes who uploaded for accountability
+        var uploaderName = props.profile?.full_name || props.profile?.email || 'Unknown';
         var batchRes = await supabase.from('upload_batches').insert([{
           batch_type: props.batchType,
           file_name: file.name,
           record_count: data.length,
+          uploaded_by: uploaderName,
         }]).select('id').single();
         if (batchRes.error) throw new Error('Batch record failed: ' + batchRes.error.message);
         var batchId = batchRes.data.id;
@@ -400,6 +403,7 @@ function UploadCard(props) {
  
 // ── Main Page ─────────────────────────────────────────────────────────
 export default function UploadsPage() {
+  const { profile } = useAuth();
   var [driveLink, setDriveLink] = useState(function() {
     try { return JSON.parse(localStorage.getItem('axiom_drive_links') || '{}').main || ''; }
     catch(e) { return ''; }
@@ -463,6 +467,7 @@ export default function UploadsPage() {
             batchType="visits"
             parseType="visits"
             onSuccess={handleVisitUpload}
+            profile={profile}
           />
           <UploadCard
             title="Patient Census"
@@ -470,6 +475,7 @@ export default function UploadsPage() {
             storageKey="axiom_census"
             batchType="census"
             parseType="census"
+            profile={profile}
           />
         </div>
  
@@ -484,13 +490,22 @@ export default function UploadsPage() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {uploadHistory.map(function(batch) {
+                var typeIcon = batch.batch_type === 'visits' ? '📅'
+                             : batch.batch_type === 'census' ? '👥'
+                             : batch.batch_type === 'intake_referrals' ? '📥'
+                             : '📄';
+                var typeLabel = batch.batch_type === 'visits' ? 'Visit Schedule'
+                              : batch.batch_type === 'census' ? 'Patient Census'
+                              : batch.batch_type === 'intake_referrals' ? 'Monthly Intake Report'
+                              : batch.batch_type;
+                var byLine = batch.uploaded_by ? ' · by ' + batch.uploaded_by : '';
                 return (
                   <div key={batch.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                    <span style={{ fontSize: 16 }}>{batch.batch_type === 'visits' ? '📅' : '👥'}</span>
+                    <span style={{ fontSize: 16 }}>{typeIcon}</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{batch.file_name || 'Unknown file'}</div>
                       <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>
-                        {batch.batch_type === 'visits' ? 'Visit Schedule' : 'Patient Census'} · {batch.record_count} records in this upload
+                        {typeLabel} · {batch.record_count} records{byLine}
                       </div>
                     </div>
                     <span style={{ fontSize: 12, color: 'var(--gray)', fontFamily: 'DM Mono, monospace' }}>
