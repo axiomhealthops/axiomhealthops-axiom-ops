@@ -43,3 +43,51 @@ body {
 
 button { cursor: pointer; font-family: 'DM Sans', sans-serif; }
 input, select, textarea { font-family: 'DM Sans', sans-serif; }
+
+/* ── Mobile emergency styles (Option A) ─────────────────────────── */
+/*
+   Target: screens <640px. Collapses 2- and 3-column grids to single
+   column, pads content off the hamburger button, and kills any rogue
+   horizontal overflow. Inline React styles are overridden via
+   attribute-substring selectors + !important.
+*/
+@media (max-width: 640px) {
+  html, body, #root {
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  /* 2-column grid layouts → stack vertically */
+  [style*="1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+  /* 3-column → stack vertically too */
+  [style*="1fr 1fr 1fr"],
+  [style*="repeat(3, 1fr)"],
+  [style*="repeat(3,1fr)"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Reduce aggressive card padding on narrow screens */
+  [style*="padding: 28px"],
+  [style*="padding:28px"] {
+    padding: 16px !important;
+  }
+  [style*="padding: 24px"],
+  [style*="padding:24px"] {
+    padding: 14px !important;
+  }
+
+  /* TopBar padding is 20px 28px — slim down on mobile so title has room */
+  [style*="padding: 20px 28px 16px"] {
+    padding: 14px 16px 12px 56px !important; /* left gap for hamburger */
+  }
+}
+
+/* Tablet-specific easing (640–900px) — mostly for iPad portrait */
+@media (min-width: 641px) and (max-width: 900px) {
+  [style*="padding: 28px"],
+  [style*="padding:28px"] {
+    padding: 20px !important;
+  }
+}
