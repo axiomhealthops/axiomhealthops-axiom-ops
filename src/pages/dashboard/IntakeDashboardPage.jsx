@@ -454,6 +454,29 @@ export default function IntakeDashboardPage() {
 
   const maxMonthTotal = filteredTrendMonths.length > 0 ? Math.max(...filteredTrendMonths.map(m => m.total)) : 1;
 
+  // By-region breakdown scoped to the SAME date range as the Monthly chart.
+  // When Liam picks "Last 6 months" or "April 2026", the region chart matches.
+  const VALID_REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
+  const filteredByRegion = useMemo(() => {
+    if (!records.length) return [];
+    // Build the key set the Monthly filter would accept
+    const allowedKeys = new Set(filteredTrendMonths.map(m => m.key));
+    if (!allowedKeys.size) return [];
+    const map = {};
+    records.forEach(r => {
+      const k = monthKey(r.date_received);
+      if (!k || !allowedKeys.has(k)) return;
+      if (!r.region || !VALID_REGIONS.includes(r.region)) return;
+      if (!map[r.region]) map[r.region] = { accepted: 0, denied: 0 };
+      if (r.referral_status === 'Accepted') map[r.region].accepted++;
+      else if (r.referral_status === 'Denied') map[r.region].denied++;
+    });
+    return Object.entries(map)
+      .map(([region, v]) => ({ region, ...v, total: v.accepted + v.denied }))
+      .sort((a, b) => b.total - a.total);
+  }, [records, filteredTrendMonths]);
+  const maxRegionTotal = filteredByRegion.length > 0 ? Math.max(...filteredByRegion.map(r => r.total)) : 1;
+
   const TABS = [
     { key: 'overview',  label: 'Overview' },
     { key: 'regions',   label: 'By Region' },
@@ -612,6 +635,11 @@ export default function IntakeDashboardPage() {
                         </div>
                         <div style={{ fontSize: 9, color: 'var(--gray)', textAlign: 'center' }}>{m.label}</div>
                         <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--black)' }}>{m.total}</div>
+                        <div style={{ fontSize: 8, fontFamily: 'DM Mono, monospace', lineHeight: 1.2, textAlign: 'center' }}>
+                          <span style={{ color: '#059669' }}>{m.accepted}A</span>
+                          <span style={{ color: 'var(--gray)' }}> · </span>
+                          <span style={{ color: '#DC2626' }}>{m.denied}D</span>
+                        </div>
                       </div>
                     );
                   })}
@@ -625,6 +653,52 @@ export default function IntakeDashboardPage() {
                     <div style={{ width: 10, height: 10, background: '#DC2626', borderRadius: 2 }} /> Denied
                   </div>
                 </div>
+              </div>
+
+              {/* By Region — visual, respects the Monthly chart's date range */}
+              <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, gridColumn: '1 / -1' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)' }}>Referrals by Region</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray)' }}>
+                    {trendRange === 'last6' ? 'Last 6 months'
+                     : trendRange === 'last12' ? 'Last 12 months'
+                     : trendRange === 'last24' ? 'Last 24 months'
+                     : trendRange === 'ytd' ? 'Year to date'
+                     : trendRange === 'prev_year' ? 'Previous year'
+                     : trendRange === 'custom' && trendFrom && trendTo ? `${trendFrom} to ${trendTo}`
+                     : 'All time'} · sorted by volume
+                  </div>
+                </div>
+                {filteredByRegion.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--gray)', padding: '30px 0', textAlign: 'center' }}>
+                    No referrals in the selected range.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, height: 140 }}>
+                    {filteredByRegion.map(r => {
+                      const aH = maxRegionTotal > 0 ? (r.accepted / maxRegionTotal) * 110 : 0;
+                      const dH = maxRegionTotal > 0 ? (r.denied / maxRegionTotal) * 110 : 0;
+                      const rate = r.total > 0 ? Math.round((r.accepted / r.total) * 100) : 0;
+                      return (
+                        <div key={r.region} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 4, height: 110, width: '100%' }}>
+                            <div title={`Accepted: ${r.accepted}`} style={{ flex: 1, maxWidth: 22, height: aH, background: '#10B981', borderRadius: '3px 3px 0 0', minHeight: r.accepted > 0 ? 2 : 0 }} />
+                            <div title={`Denied: ${r.denied}`} style={{ flex: 1, maxWidth: 22, height: dH, background: '#DC2626', borderRadius: '3px 3px 0 0', minHeight: r.denied > 0 ? 2 : 0 }} />
+                          </div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--black)', textAlign: 'center' }}>Rgn {r.region}</div>
+                          <div style={{ fontSize: 10, fontFamily: 'DM Mono, monospace', textAlign: 'center' }}>
+                            <span style={{ color: '#059669' }}>{r.accepted}A</span>
+                            <span style={{ color: 'var(--gray)' }}> · </span>
+                            <span style={{ color: '#DC2626' }}>{r.denied}D</span>
+                          </div>
+                          <div style={{ fontSize: 10, textAlign: 'center', fontWeight: 600, color: rate >= 50 ? '#059669' : '#DC2626' }}>
+                            {rate}%
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Insurance breakdown */}
