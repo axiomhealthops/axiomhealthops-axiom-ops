@@ -8,9 +8,23 @@ const EXTRACTION_MODES = {
     color: '#1565C0',
     bg: '#EFF6FF',
     description: 'Extract patient demographics, insurance, diagnosis, PCP, and referral source from a referral document.',
-    systemPrompt: `You are a medical document data extraction specialist for a home health therapy company (lymphedema therapy).
+    systemPrompt: `You are a medical document data extraction specialist for a home health LYMPHEDEMA therapy company.
 Extract ALL of the following fields from the referral/intake document provided. Return ONLY valid JSON with these exact keys.
 If a field is not found, use null. Do not invent data.
+
+DIAGNOSIS EXTRACTION — CRITICAL FOR TRIAGE:
+  The intake team needs ICD-10 codes identified explicitly. Look carefully for:
+  - I89.0 (Lymphedema, not elsewhere classified) — PRIMARY ACCEPT-CRITERIA CODE
+  - I97.2 (Postmastectomy lymphedema syndrome)
+  - Q82.0 (Hereditary lymphedema)
+  - R60.0 / R60.1 / R60.9 (Localized / generalized / unspecified edema)
+  - L97.x (Non-pressure chronic ulcer — wound care, flag SWIFT team)
+  - L89.x (Pressure ulcer — wound care, flag SWIFT team)
+  - E11.621 / E11.622 (Diabetic foot ulcer — wound care, flag SWIFT team)
+  Preserve the exact ICD code in the diagnosis string so downstream triage can parse it.
+
+INSURANCE — CRITICAL FOR ACCEPTANCE:
+  The following payors are commonly accepted: Humana, CarePlus, Cigna, Aetna, FHCP, Devoted, Simply, Medicare, BlueCross/BlueShield, United Healthcare. Normalize the carrier name to one of these canonical forms when possible (e.g. "Humana Gold" → "Humana", "Cigna HealthSpring" → "Cigna").
 
 {
   "patient_name": "Last, First format if possible",
@@ -20,10 +34,13 @@ If a field is not found, use null. Do not invent data.
   "city": "city",
   "zip_code": "zip",
   "county": "county if present",
-  "insurance": "insurance carrier name (e.g. Humana, CarePlus, Aetna, FHCP, Medicare, etc.)",
+  "insurance": "insurance carrier name (canonical form — Humana, CarePlus, Aetna, etc.)",
   "policy_number": "member/policy ID number",
   "secondary_insurance": "secondary insurance if present",
-  "diagnosis": "full diagnosis with ICD code if present",
+  "diagnosis": "full diagnosis with ICD-10 code(s) — include the code string so triage can parse it",
+  "icd_codes": "array of ICD-10 codes found, e.g. [\\"I89.0\\", \\"L97.509\\"]",
+  "has_lymphedema_dx": "true if any lymphedema code (I89.0, I97.2, Q82.0) is present, else false",
+  "has_wound_dx": "true if any wound/ulcer code (L97.x, L89.x, E11.621/622) is present — triggers SWIFT team flag",
   "referral_source": "name of referring hospital/facility/physician",
   "referral_source_phone": "referral source phone",
   "referral_source_fax": "referral source fax",
@@ -147,19 +164,25 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
 
       contentBlocks.push({ type: 'text', text: 'Extract the data from this document and return ONLY the JSON object.' });
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          system: cfg.systemPrompt,
-          messages: [{ role: 'user', content: contentBlocks }],
-        }),
+      // Call the Supabase Edge Function that proxies Anthropic.
+      // Direct browser calls to api.anthropic.com fail (CORS + API key
+      // exposure). The function lives at supabase/functions/extract-document
+      // and requires ANTHROPIC_API_KEY set as a project secret.
+      const { data, error: fnError } = await supabase.functions.invoke('extract-document', {
+        body: {
+          systemPrompt: cfg.systemPrompt,
+          contentBlocks,
+          max_tokens: 2048,
+        },
       });
 
-      const data = await response.json();
-      const text = data.content?.find(b => b.type === 'text')?.text || '';
+      if (fnError) {
+        // supabase.functions.invoke wraps non-2xx as error with a message
+        throw new Error(fnError.message || 'Extraction service unreachable');
+      }
+      if (data?.error) throw new Error(data.error);
+
+      const text = data?.content?.find(b => b.type === 'text')?.text || '';
 
       // Parse JSON from response
       const jsonMatch = text.match(/\{[\s\S]*\}/);
