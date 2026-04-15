@@ -2,16 +2,18 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
 
-// Sidebar sections in the correct flow order
+// Sidebar sections — ordered to mirror the referral lifecycle:
+// Overview/quick-access → Main Ops → Intake → Auth → Coordination → Clinical
+// → Marketing (business dev) → Performance (super admin only) → Admin (admin+)
 const ALL_SECTIONS = [
   { key: 'OVERVIEW',       label: 'OVERVIEW' },
+  { key: 'OPERATIONS',     label: 'MAIN OPERATIONS' },
   { key: 'INTAKE',         label: 'INTAKE' },
-  { key: 'PATIENTS',       label: 'PATIENTS' },
   { key: 'AUTHORIZATION',  label: 'AUTHORIZATION' },
   { key: 'COORDINATION',   label: 'CARE COORDINATION' },
   { key: 'CLINICAL',       label: 'CLINICAL' },
+  { key: 'MARKETING',      label: 'MARKETING' },
   { key: 'PERFORMANCE',    label: 'PERFORMANCE' },
-  { key: 'OPERATIONS',     label: 'OPERATIONS' },
   { key: 'ADMIN',          label: 'ADMIN' },
 ];
 
