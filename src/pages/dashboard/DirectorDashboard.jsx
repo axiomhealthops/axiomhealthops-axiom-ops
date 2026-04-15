@@ -19,11 +19,21 @@ function daysAgo(d) {
 
 // ── Triage Card ───────────────────────────────────────────────────────────────
 function TriageCard({ rank, title, count, subtitle, color, bg, border, detail, action, actionLabel, urgent }) {
+  const clickable = typeof action === 'function';
   return (
-    <div style={{
-      background: bg, border: `2px solid ${border || color}`,
-      borderRadius: 12, padding: '16px 18px', position: 'relative', overflow: 'hidden'
-    }}>
+    <div
+      onClick={clickable ? action : undefined}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); } }) : undefined}
+      onMouseEnter={clickable ? (e => { e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.12)'; e.currentTarget.style.transform = 'translateY(-1px)'; }) : undefined}
+      onMouseLeave={clickable ? (e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'translateY(0)'; }) : undefined}
+      style={{
+        background: bg, border: `2px solid ${border || color}`,
+        borderRadius: 12, padding: '16px 18px', position: 'relative', overflow: 'hidden',
+        cursor: clickable ? 'pointer' : 'default',
+        transition: 'transform 0.1s ease, box-shadow 0.15s ease',
+      }}>
       {urgent && (
         <div style={{ position:'absolute', top:0, left:0, right:0, height:3, background:`linear-gradient(90deg, ${color}, transparent)` }} />
       )}
@@ -43,7 +53,8 @@ function TriageCard({ rank, title, count, subtitle, color, bg, border, detail, a
         </div>
       )}
       {action && (
-        <button onClick={action}
+        <button
+          onClick={(e) => { e.stopPropagation(); action(); }}
           style={{ fontSize:10, fontWeight:700, color:'#fff', background:color, border:'none', borderRadius:5, padding:'4px 10px', cursor:'pointer', width:'100%', marginTop:4 }}>
           {actionLabel || 'View →'}
         </button>
@@ -113,7 +124,8 @@ function RegionRow({ region, active, inactiveActive, onHold, pending, completedV
 }
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function DirectorDashboard() {
+export default function DirectorDashboard({ onNavigate }) {
+  const go = (page) => { if (typeof onNavigate === 'function') onNavigate(page); };
   const [loading, setLoading] = useState(true);
   const [census, setCensus] = useState([]);
   const [visits, setVisits] = useState([]);
@@ -331,6 +343,7 @@ export default function DirectorDashboard() {
               color="#DC2626" bg="#FEF2F2" border="#FECACA"
               detail={`${fmt$(totalInactiveGap)}/wk revenue sitting idle`}
               actionLabel="Open Census → Sort Last Seen"
+              action={() => go('census')}
             />
             <TriageCard
               rank={2} urgent
@@ -340,6 +353,7 @@ export default function DirectorDashboard() {
               color="#DC2626" bg="#FFF5F5" border="#FECACA"
               detail={`+${m.highAuths.length} high priority also open`}
               actionLabel="Open Auth Renewals"
+              action={() => go('auth-renewals')}
             />
             <TriageCard
               rank={3}
@@ -348,7 +362,8 @@ export default function DirectorDashboard() {
               subtitle="SOC/Eval Pending — won't bill until first visit"
               color="#D97706" bg="#FEF3C7" border="#FCD34D"
               detail={`${fmt$(m.pendingStart.length * BLENDED_RATE * 2)}/wk potential if started`}
-              actionLabel="Open Patient Census"
+              actionLabel="Open SOC → Active Pipeline"
+              action={() => go('pipeline')}
             />
             <TriageCard
               rank={4}
@@ -357,7 +372,8 @@ export default function DirectorDashboard() {
               subtitle="Below 60% of weekly visit target"
               color="#7C3AED" bg="#F5F3FF" border="#DDD6FE"
               detail="Capacity exists — needs patient assignment"
-              actionLabel="Open Staff Directory"
+              actionLabel="Open Clinician Accountability"
+              action={() => go('clinician-accountability')}
             />
             <TriageCard
               rank={5}
@@ -367,6 +383,7 @@ export default function DirectorDashboard() {
               color="#1565C0" bg="#EFF6FF" border="#BFDBFE"
               detail={`${m.waitlistUnassigned.length} waitlist patients unassigned`}
               actionLabel="Open On-Hold Recovery"
+              action={() => go('on-hold')}
             />
           </div>
         </div>

@@ -130,7 +130,9 @@ export default function Dashboard() {
 
   function renderPage() {
     if (!canAccess(activePage)) return <AccessDenied />;
-    if (PageComponent) return <PageComponent />;
+    // Pass onNavigate so pages can deep-link to other pages
+    // (e.g. DirectorDashboard TriageCards → target pages).
+    if (PageComponent) return <PageComponent onNavigate={setActivePage} />;
     return <ComingSoon page={activePage} />;
   }
 
