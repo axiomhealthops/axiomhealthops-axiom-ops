@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import TopBar from '../../components/TopBar';
 import { REGIONS } from '../../lib/constants';
 import { parseVisitDate, toDateStr, formatShortDate, getWeekDays, getMonthDays } from '../../lib/dateUtils';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
  
 var SC = {
   completed: { bg: '#ECFDF5', color: '#065F46', border: '#6EE7B7' },
@@ -229,8 +230,18 @@ export default function VisitSchedulePage() {
   // caps .limit(N) at 1000 regardless of the value requested. Without
   // pagination the page would truncate at 1000 rows and potentially show
   // only old completed visits while missing the current week entirely.
+  // Region scoping — super admin sees all; everyone else is limited to
+  // their assigned regions.
+  var regionScope = useAssignedRegions();
+
   var fetchVisits = useCallback(function(anchorDate) {
     setLoading(true);
+    // Fail closed for users with no regions assigned.
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setVisits([]);
+      setLoading(false);
+      return;
+    }
     var d = anchorDate || new Date();
     var from = new Date(d); from.setDate(d.getDate() - 45);
     var to   = new Date(d); to.setDate(d.getDate() + 45);
@@ -240,13 +251,14 @@ export default function VisitSchedulePage() {
     var PAGE = 1000;
     var all = [];
     var pull = function(offset) {
-      return supabase.from('visit_schedule_data')
+      var q = supabase.from('visit_schedule_data')
         .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region,discipline,insurance,visit_time')
         .gte('visit_date', fromStr)
         .lte('visit_date', toStr)
         .order('visit_date', { ascending: false })
-        .range(offset, offset + PAGE - 1)
-        .then(function(res) {
+        .range(offset, offset + PAGE - 1);
+      q = regionScope.applyToQuery(q);
+      return q.then(function(res) {
           if (res.error || !res.data || res.data.length === 0) return all;
           for (var i = 0; i < res.data.length; i++) all.push(res.data[i]);
           if (res.data.length < PAGE) return all;
@@ -257,9 +269,12 @@ export default function VisitSchedulePage() {
       setVisits(rows || []);
       setLoading(false);
     });
-  }, []);
+  }, [regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
-  useEffect(function() { fetchVisits(anchor); }, []);
+  useEffect(function() {
+    if (regionScope.loading) return;
+    fetchVisits(anchor);
+  }, [regionScope.loading, fetchVisits]);
 
   var withDates = useMemo(function() {
     return visits.map(function(v) {

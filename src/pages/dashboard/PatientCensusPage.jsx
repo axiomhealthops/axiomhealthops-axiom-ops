@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
 function isEval(e) { return /eval/i.test(e||''); }
@@ -617,18 +618,30 @@ export default function PatientCensusPage({ intent } = {}) {
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
 
+  // Region scoping per logged-in user. Super admin sees all; RM/Care
+  // Coord/etc. only see rows for their assigned regions.
+  const { regions: allowedRegions, isAllAccess, loading: regionsLoading, applyToQuery } = useAssignedRegions();
+
   useEffect(() => {
+    if (regionsLoading) return;
+    // Fail closed: user with no assigned regions sees nothing.
+    if (!isAllAccess && (!allowedRegions || allowedRegions.length === 0)) {
+      setCensus([]); setVisits([]); setAuthData([]); setIntakeData([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     Promise.all([
-      supabase.from('census_data').select('*'),
-      supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region,discipline,insurance'),
-      supabase.from('auth_tracker').select('*'),
-      supabase.from('intake_referrals').select('*').not('date_received','is',null).order('date_received',{ascending:false}),
+      applyToQuery(supabase.from('census_data').select('*')),
+      applyToQuery(supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region,discipline,insurance')),
+      applyToQuery(supabase.from('auth_tracker').select('*')),
+      applyToQuery(supabase.from('intake_referrals').select('*').not('date_received','is',null).order('date_received',{ascending:false})),
     ]).then(([c,v,a,i]) => {
       setCensus(c.data||[]); setVisits(v.data||[]);
       setAuthData(a.data||[]); setIntakeData(i.data||[]);
       setLoading(false);
     });
-  }, []);
+  }, [isAllAccess, regionsLoading, JSON.stringify(allowedRegions)]);
 
   // Sort distinct values first, THEN prepend 'ALL' so "All Regions" stays at the
   // top of the dropdown regardless of the letters used for region codes.

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 // NOTE: A ZIP_REGION_MAP constant previously lived here but was unused
 // throughout the codebase. It is removed to unblock the build (it had
@@ -225,19 +226,32 @@ export default function WaitlistPage() {
 
   const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
+  // Region scoping — users only see rows for their assigned regions.
+  const regionScope = useAssignedRegions();
+
   const load = useCallback(async () => {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setWaitlist([]); setClinicians([]); setIntake([]); setVisits([]);
+      setLoading(false);
+      return;
+    }
     const [wl, cl, ir, vs] = await Promise.all([
-      fetchAllPages(supabase.from('waitlist_assignments').select('*')),
-      fetchAllPages(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,zip,lat,lng').eq('is_active', true)),
-      fetchAllPages(supabase.from('intake_referrals').select('patient_name,city,zip_code,county,diagnosis,contact_number,pcp_name,location').order('date_received', { ascending: false })),
-      fetchAllPages(supabase.from('visit_schedule_data').select('staff_name,visit_date,status').gte('visit_date', new Date(Date.now()-7*86400000).toISOString().slice(0,10))),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('waitlist_assignments').select('*'))),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,zip,lat,lng').eq('is_active', true))),
+      // intake_referrals has a region column — scope it too, and include
+      // region in the select so downstream UI code can show it.
+      fetchAllPages(regionScope.applyToQuery(supabase.from('intake_referrals').select('patient_name,city,zip_code,county,diagnosis,contact_number,pcp_name,location,region').order('date_received', { ascending: false }))),
+      // visit_schedule_data needs region filtering too (even with limited
+      // selected columns) so we don't leak cross-region staff activity.
+      fetchAllPages(regionScope.applyToQuery(supabase.from('visit_schedule_data').select('staff_name,visit_date,status,region').gte('visit_date', new Date(Date.now()-7*86400000).toISOString().slice(0,10)))),
     ]);
     setWaitlist(wl);
     setClinicians(cl);
     setIntake(ir);
     setVisits(vs);
     setLoading(false);
-  }, []);
+  }, [regionScope.isAllAccess, regionScope.loading, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
 
