@@ -94,19 +94,17 @@ export default function ProductivityPage() {
     var fetchVisits = function() {
       var all = [];
       var PAGE = 1000;
+      // IMPORTANT: we INCLUDE Cancelled/Attempted/Missed events in the
+      // fetch so we can detect them during dedupe. Walker, Alice
+      // typically has TWO rows on her cancelled days — a "Cancelled
+      // Treatment" row AND a stale "Lymphedema Visit - Level 3" row
+      // that Pariox left behind. Matching Pariox's display total means
+      // excluding BOTH when any cancellation exists for that day.
       var pull = function(from) {
         return supabase.from('visit_schedule_data')
           .select('staff_name_normalized,visit_date,status,event_type,patient_name')
           .gte('visit_date', weekStart).lte('visit_date', weekEnd)
-          // Exclude Pariox documentation (PDF) rows AND events where the
-          // visit didn't actually happen: Cancelled Treatment, Attempted
-          // Visit, Missed, No Show. Same filter used in recompute_last_visit_dates.
           .not('event_type', 'ilike', '%(PDF)%')
-          .not('event_type', 'ilike', '%cancel%')
-          .not('event_type', 'ilike', '%attempt%')
-          .not('event_type', 'ilike', '%missed%')
-          .not('event_type', 'ilike', '%no show%')
-          .not('event_type', 'ilike', '%no-show%')
           .range(from, from + PAGE - 1)
           .then(function(res) {
             if (res.error || !res.data || res.data.length === 0) return all;
@@ -128,26 +126,44 @@ export default function ProductivityPage() {
   var nameMap = useMemo(function() { return buildNameMap(clinicians); }, [clinicians]);
  
   var statsByClinicianId = useMemo(function() {
-    var map = {};
+    // Step 1: group rows by (patient, date, staff). If ANY row in a
+    // group indicates the visit didn't happen (cancelled/attempted/
+    // missed/no-show), treat the entire group as a non-visit. This
+    // collapses Pariox's stale "Level 3" + "Cancelled Treatment" pairs
+    // into 0 visits for that slot, matching Pariox's own total.
+    var NON_REAL = /cancel|attempt|missed|no[ -]?show/i;
+    var groups = {};
     visits.forEach(function(v) {
-      // Use staff_name_normalized (FirstName LastName) — populated by the
-      // Pariox upload via normalize_pariox_name(). Falls back to legacy
-      // staff_name field for any older rows that pre-date normalization.
       var rawName = (v.staff_name_normalized || v.staff_name || '').trim();
-      if (!rawName) return;
-      var id = nameMap[rawName.toLowerCase()] ||
-               nameMap[parioxToFirstLast(rawName).toLowerCase()];
-      if (!id) return;
-      if (!map[id]) map[id] = { completed: 0, scheduled: 0, missed: 0, cancelled: 0, evals: 0, reassessments: 0, missedActive: 0 };
-      var s = (v.status || '').toLowerCase();
-      var e = (v.event_type || '').toLowerCase();
-      if (s === 'missed (active)') { map[id].missedActive++; }
-      else if (s.includes('completed')) { map[id].completed++; }
-      else if (s.includes('scheduled')) { map[id].scheduled++; }
-      else if (s.includes('missed')) { map[id].missed++; }
-      else if (s.includes('cancelled')) { map[id].cancelled++; }
-      if (e.includes('evaluation') && !e.includes('reassess') && !e.includes('re-assess')) map[id].evals++;
-      if (e.includes('reassess') || e.includes('re-assess') || e.includes('recert')) map[id].reassessments++;
+      if (!rawName || !v.patient_name || !v.visit_date) return;
+      var dateKey = (v.visit_date + '').slice(0, 10);
+      var key = v.patient_name + '|' + dateKey + '|' + rawName.toLowerCase();
+      if (!groups[key]) groups[key] = { rows: [], cancelled: false };
+      if (NON_REAL.test(v.event_type || '')) groups[key].cancelled = true;
+      else groups[key].rows.push(v);
+    });
+
+    // Step 2: iterate valid groups only and accumulate per-clinician stats
+    var map = {};
+    Object.keys(groups).forEach(function(key) {
+      var g = groups[key];
+      if (g.cancelled) return; // whole slot was cancelled — skip all rows
+      g.rows.forEach(function(v) {
+        var rawName = (v.staff_name_normalized || v.staff_name || '').trim();
+        var id = nameMap[rawName.toLowerCase()] ||
+                 nameMap[parioxToFirstLast(rawName).toLowerCase()];
+        if (!id) return;
+        if (!map[id]) map[id] = { completed: 0, scheduled: 0, missed: 0, cancelled: 0, evals: 0, reassessments: 0, missedActive: 0 };
+        var s = (v.status || '').toLowerCase();
+        var e = (v.event_type || '').toLowerCase();
+        if (s === 'missed (active)') { map[id].missedActive++; }
+        else if (s.includes('completed')) { map[id].completed++; }
+        else if (s.includes('scheduled')) { map[id].scheduled++; }
+        else if (s.includes('missed')) { map[id].missed++; }
+        else if (s.includes('cancelled')) { map[id].cancelled++; }
+        if (e.includes('evaluation') && !e.includes('reassess') && !e.includes('re-assess')) map[id].evals++;
+        if (e.includes('reassess') || e.includes('re-assess') || e.includes('recert')) map[id].reassessments++;
+      });
     });
     return map;
   }, [visits, nameMap]);
