@@ -22,13 +22,27 @@ function parioxToFirstLast(raw) {
 function buildNameMap(clinicians) {
   var map = {};
   clinicians.forEach(function(c) {
-    map[c.full_name.toLowerCase()] = c.id;
+    map[c.full_name.toLowerCase().trim()] = c.id;
     if (c.pariox_name) {
       map[c.pariox_name.trim().toLowerCase()] = c.id;
       map[parioxToFirstLast(c.pariox_name).toLowerCase()] = c.id;
     }
   });
   return map;
+}
+
+// Sun-Sat work-week bounds in LOCAL time (not UTC)
+function weekBounds() {
+  var now = new Date();
+  var day = now.getDay(); // 0 = Sun ... 6 = Sat
+  var sun = new Date(now);
+  sun.setDate(now.getDate() - day);
+  var sat = new Date(sun);
+  sat.setDate(sun.getDate() + 6);
+  var toLocal = function(d) {
+    return [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-');
+  };
+  return [toLocal(sun), toLocal(sat)];
 }
  
 function getBarColor(pct) {
@@ -54,36 +68,64 @@ function getAssignedBg(assigned, target, type) {
 }
  
 export default function ProductivityPage() {
-  var visits = useMemo(function() {
-    try { return JSON.parse(localStorage.getItem('axiom_pariox_data') || '[]'); }
-    catch (e) { return []; }
-  }, []);
- 
+  var [visits, setVisits] = useState([]);
   var [clinicians, setClinicians] = useState([]);
   var [loading, setLoading] = useState(true);
   var [regionFilter, setRegionFilter] = useState('ALL');
   var [typeFilter, setTypeFilter] = useState('ALL');
   var [sortBy, setSortBy] = useState('region');
   var [search, setSearch] = useState('');
- 
+
+  // Compute the Sun-Sat bounds once per render. Productivity is intentionally
+  // a weekly metric — every count below is scoped to this calendar week only.
+  var weekRange = useMemo(weekBounds, []);
+  var weekStart = weekRange[0], weekEnd = weekRange[1];
+
   useEffect(function() {
-    supabase.from('clinicians')
+    var clinPromise = supabase.from('clinicians')
       .select('id, full_name, discipline, employment_type, region, notes, pariox_name, is_active')
       .eq('is_active', true)
       .order('region')
-      .order('full_name')
-      .then(function(res) {
-        setClinicians(res.data || []);
-        setLoading(false);
-      });
-  }, []);
+      .order('full_name');
+
+    // Fetch THIS WEEK's visits from Supabase, paginated to bypass the
+    // PostgREST 1000-row cap. Filter PDF docs server-side so they don't
+    // double-count against per-clinician totals.
+    var fetchVisits = function() {
+      var all = [];
+      var PAGE = 1000;
+      var pull = function(from) {
+        return supabase.from('visit_schedule_data')
+          .select('staff_name_normalized,visit_date,status,event_type,patient_name')
+          .gte('visit_date', weekStart).lte('visit_date', weekEnd)
+          .not('event_type', 'ilike', '%(PDF)%')
+          .range(from, from + PAGE - 1)
+          .then(function(res) {
+            if (res.error || !res.data || res.data.length === 0) return all;
+            for (var i = 0; i < res.data.length; i++) all.push(res.data[i]);
+            if (res.data.length < PAGE) return all;
+            return pull(from + PAGE);
+          });
+      };
+      return pull(0);
+    };
+
+    Promise.all([clinPromise, fetchVisits()]).then(function(results) {
+      setClinicians(results[0].data || []);
+      setVisits(results[1] || []);
+      setLoading(false);
+    });
+  }, [weekStart, weekEnd]);
  
   var nameMap = useMemo(function() { return buildNameMap(clinicians); }, [clinicians]);
  
   var statsByClinicianId = useMemo(function() {
     var map = {};
     visits.forEach(function(v) {
-      var rawName = (v.staff_name || '').trim();
+      // Use staff_name_normalized (FirstName LastName) — populated by the
+      // Pariox upload via normalize_pariox_name(). Falls back to legacy
+      // staff_name field for any older rows that pre-date normalization.
+      var rawName = (v.staff_name_normalized || v.staff_name || '').trim();
       if (!rawName) return;
       var id = nameMap[rawName.toLowerCase()] ||
                nameMap[parioxToFirstLast(rawName).toLowerCase()];
@@ -173,7 +215,7 @@ export default function ProductivityPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Productivity Tracker"
-        subtitle={filtered.length + ' clinicians \u00b7 Week of ' + new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} />
+        subtitle={filtered.length + ' clinicians \u00b7 Week of ' + weekStart + ' \u2192 ' + weekEnd + ' (Sun\u2013Sat)'} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
  
         {/* Summary Strip */}
