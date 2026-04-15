@@ -354,7 +354,9 @@ function UploadCard(props) {
           setCount(data.length);
         }
 
-        localStorage.setItem(props.storageKey, JSON.stringify(data));
+        // (removed legacy localStorage.setItem — pages now read directly from
+        // Supabase visit_schedule_data / census_data / patient_master, so this
+        // mirror was unused and risked QuotaExceededError on large uploads.)
         setStatus('success');
         setLastUpload({ file_name: file.name, record_count: data.length, uploaded_at: now });
         if (props.onSuccess) props.onSuccess(data);
@@ -479,7 +481,6 @@ export default function UploadsPage() {
           <UploadCard
             title="Visit Schedule"
             description="Pariox visit schedule export (.xlsx). Columns: Patient, Address, Ref Source, Region, Discipline, Staff, Event, Date, Time, Insurance, Status, Notes."
-            storageKey="axiom_pariox_data"
             batchType="visits"
             parseType="visits"
             onSuccess={handleVisitUpload}
@@ -488,7 +489,6 @@ export default function UploadsPage() {
           <UploadCard
             title="Patient Census"
             description="Pariox patient census export (.xlsx). Columns: Patient, Address, Disc, Ref Source, Region, SOC, Insurance, Status."
-            storageKey="axiom_census"
             batchType="census"
             parseType="census"
             profile={profile}
