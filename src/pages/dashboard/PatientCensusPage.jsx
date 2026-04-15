@@ -611,8 +611,11 @@ export default function PatientCensusPage({ intent } = {}) {
     });
   }, []);
 
-  const regions = useMemo(() => ['ALL',...new Set(census.map(c=>c.region).filter(Boolean)).values()].sort(), [census]);
-  const insurances = useMemo(() => ['ALL',...new Set(census.map(c=>c.insurance).filter(Boolean)).values()].sort(), [census]);
+  // Sort distinct values first, THEN prepend 'ALL' so "All Regions" stays at the
+  // top of the dropdown regardless of the letters used for region codes.
+  // (Previously 'ALL' sorted *after* 'A' because "A" is a prefix of "ALL".)
+  const regions = useMemo(() => ['ALL', ...[...new Set(census.map(c=>c.region).filter(Boolean))].sort()], [census]);
+  const insurances = useMemo(() => ['ALL', ...[...new Set(census.map(c=>c.insurance).filter(Boolean))].sort()], [census]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
