@@ -25,6 +25,9 @@ function isRA(event_type) { return /reassess|re-assess|30.day/i.test(event_type 
 function isCancelled(event_type, status) {
   return /cancel/i.test(event_type || '') || /cancel/i.test(status || '');
 }
+function isMissed(status) { return /missed/i.test(status || ''); }
+function isCompleted(status) { return /completed/i.test(status || ''); }
+function isScheduled(status) { return /scheduled/i.test(status || ''); }
 
 function getPlanStyle(name) {
   const n = (name || '').toLowerCase();
@@ -51,11 +54,16 @@ export default function OverviewPage() {
     // visits can each grow past the 1000-row PostgREST cap. data_freshness
     // is 3 rows so pagination is a no-op for it.
     Promise.all([
+      // IMPORTANT: Do NOT exclude PDF rows. In Pariox exports, PDF rows are
+      // the canonical completed-visit record — the schedule board keeps the
+      // original "Scheduled" row around after the visit happens, and the PDF
+      // is added as proof of completion. Excluding PDFs was causing Overview
+      // to report ~1/3 of actual completed visits.
+      // Dedupe happens below in visitStats by (patient, date, staff).
       fetchAllPages(
         supabase.from('visit_schedule_data')
-          .select('patient_name,visit_date,status,event_type,region,discipline,insurance')
+          .select('patient_name,visit_date,status,event_type,region,discipline,insurance,staff_name')
           .gte('visit_date', wStart).lte('visit_date', wEnd)
-          .not('event_type', 'ilike', '%(PDF)%')
       ),
       fetchAllPages(
         supabase.from('auth_tracker')
@@ -76,21 +84,33 @@ export default function OverviewPage() {
     });
   }, []);
 
-  // Visit stats — deduplicate evals and RAs (PT + PTA same patient + same date = 1 billable)
+  // Visit stats — group by (patient, date, staff) triple and resolve each
+  // group to a single status. This matches Pariox's actual semantics:
+  //   - A completed visit often has BOTH a stale "Scheduled" schedule row
+  //     AND a new "Completed" PDF row → dedupe counts it as 1 completed.
+  //   - A cancellation often produces a "Cancelled Treatment" pair alongside
+  //     a stale "Level 3" row → dedupe counts it as 1 cancelled.
+  // Resolution priority within a group: cancelled > missed > completed > scheduled.
+  // Same logic as ProductivityPage so numbers reconcile across dashboards.
   const visitStats = useMemo(() => {
-    const evalSeen = new Set();
-    let completed = 0, scheduled = 0, cancelled = 0;
-
+    const groups = new Map(); // key = "patient||date||staff" -> status bucket
     visits.forEach(v => {
-      if (isCancelled(v.event_type, v.status)) { cancelled++; return; }
-      const needsDedup = isEval(v.event_type) || isRA(v.event_type);
-      if (needsDedup) {
-        const key = `${v.patient_name}||${v.visit_date}`;
-        if (evalSeen.has(key)) return;
-        evalSeen.add(key);
-      }
-      if (/completed/i.test(v.status || '')) completed++;
-      else if (/scheduled/i.test(v.status || '')) scheduled++;
+      const key = `${(v.patient_name||'').toLowerCase()}||${v.visit_date}||${(v.staff_name||'').toLowerCase()}`;
+      let bucket = groups.get(key) || { cancelled:false, missed:false, completed:false, scheduled:false, evalish:false };
+      if (isCancelled(v.event_type, v.status)) bucket.cancelled = true;
+      else if (isMissed(v.status)) bucket.missed = true;
+      else if (isCompleted(v.status)) bucket.completed = true;
+      else if (isScheduled(v.status)) bucket.scheduled = true;
+      if (isEval(v.event_type) || isRA(v.event_type)) bucket.evalish = true;
+      groups.set(key, bucket);
+    });
+
+    let completed = 0, scheduled = 0, cancelled = 0;
+    groups.forEach(b => {
+      if (b.cancelled) cancelled++;
+      else if (b.missed) { /* not billable, not counted here */ }
+      else if (b.completed) completed++;
+      else if (b.scheduled) scheduled++;
     });
 
     const billable = completed + scheduled;
@@ -99,20 +119,23 @@ export default function OverviewPage() {
     return { completed, scheduled, cancelled, billable, pct, estRevenue };
   }, [visits]);
 
-  // Region breakdown — deduped, valid regions only
+  // Region breakdown — group by (patient, date, staff) triple so PDF +
+  // stale-Scheduled rows for the same visit don't get counted twice.
+  // Skip groups that resolve to cancelled or missed.
   const regionMap = useMemo(() => {
-    const map = {};
-    const seen = new Set();
+    const groups = new Map();
     visits.forEach(v => {
       if (!VALID_REGIONS.includes(v.region)) return;
-      if (isCancelled(v.event_type, v.status)) return;
-      const needsDedup = isEval(v.event_type) || isRA(v.event_type);
-      if (needsDedup) {
-        const key = `${v.patient_name}||${v.visit_date}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-      }
-      map[v.region] = (map[v.region] || 0) + 1;
+      const key = `${(v.patient_name||'').toLowerCase()}||${v.visit_date}||${(v.staff_name||'').toLowerCase()}`;
+      let g = groups.get(key) || { region: v.region, cancelled:false, missed:false };
+      if (isCancelled(v.event_type, v.status)) g.cancelled = true;
+      else if (isMissed(v.status)) g.missed = true;
+      groups.set(key, g);
+    });
+    const map = {};
+    groups.forEach(g => {
+      if (g.cancelled || g.missed) return;
+      map[g.region] = (map[g.region] || 0) + 1;
     });
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [visits]);
