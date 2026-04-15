@@ -26,10 +26,17 @@ export default function AlertsBell() {
   var [alerts, setAlerts] = useState([]);
   var [open, setOpen] = useState(false);
   var [loading, setLoading] = useState(false);
+  // Counts come from a separate count() query so the badge reflects the
+  // TRUE unread total even when there are more than 60 alerts. Without
+  // this the badge gets stuck at the .limit(60) ceiling forever.
+  var [unreadTotal, setUnreadTotal] = useState(0);
+  var [criticalTotal, setCriticalTotal] = useState(0);
   var panelRef = useRef();
- 
+
   function fetchAlerts() {
     setLoading(true);
+
+    // Query 1: the dropdown list (top 60 newest, read or unread)
     supabase.from('alerts')
       .select('*')
       .eq('is_dismissed', false)
@@ -39,6 +46,21 @@ export default function AlertsBell() {
         setAlerts(res.data || []);
         setLoading(false);
       });
+
+    // Query 2: TRUE count of unread (no row payload, just the count)
+    supabase.from('alerts')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_dismissed', false)
+      .eq('is_read', false)
+      .then(function(res) { setUnreadTotal(res.count || 0); });
+
+    // Query 3: TRUE count of unread + critical (drives badge color)
+    supabase.from('alerts')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_dismissed', false)
+      .eq('is_read', false)
+      .eq('priority', 'critical')
+      .then(function(res) { setCriticalTotal(res.count || 0); });
   }
  
   useEffect(function() {
@@ -57,8 +79,9 @@ export default function AlertsBell() {
     return function() { document.removeEventListener('mousedown', handleClick); };
   }, [open]);
  
-  var unread = alerts.filter(function(a) { return !a.is_read; }).length;
-  var critical = alerts.filter(function(a) { return a.priority === 'critical' && !a.is_read; }).length;
+  // Use the true counts from the count queries (not the .filter on the limited list)
+  var unread = unreadTotal;
+  var critical = criticalTotal;
  
   function markRead(id) {
     supabase.from('alerts').update({ is_read: true }).eq('id', id).then(fetchAlerts);
@@ -102,7 +125,9 @@ export default function AlertsBell() {
           <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--black)' }}>Alerts</div>
-              <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 1 }}>{unread} unread of {alerts.length} total</div>
+              <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 1 }}>
+                {unread} unread{alerts.length < unread ? ' · showing newest ' + alerts.length : ' of ' + alerts.length + ' total'}
+              </div>
             </div>
             {unread > 0 && (
               <button onClick={markAllRead} style={{ fontSize: 11, color: '#1565C0', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>

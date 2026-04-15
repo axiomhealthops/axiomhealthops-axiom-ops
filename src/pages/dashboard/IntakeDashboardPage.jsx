@@ -202,6 +202,18 @@ function ImportPanel({ onImportDone, profile }) {
           console.warn('upload_batches log failed:', batchRes.error.message);
         }
 
+        // Update data_freshness so the Operations Overview "stale data" banner
+        // clears for intake_referrals. Pariox visit/census uploads do this too;
+        // intake import was the only one missing it.
+        const nowIso = new Date().toISOString();
+        const freshRes = await supabase.from('data_freshness').upsert({
+          data_type: 'intake_referrals',
+          last_upload: nowIso,
+          record_count: rows.length,
+          updated_at: nowIso,
+        }, { onConflict: 'data_type' });
+        if (freshRes.error) console.warn('data_freshness upsert failed:', freshRes.error.message);
+
         setStatus('success');
         setMsg(`✓ ${rows.length.toLocaleString()} processed: ${added.toLocaleString()} new, ${updated.toLocaleString()} updated${dupeNote}`);
         onImportDone();
