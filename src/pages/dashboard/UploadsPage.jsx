@@ -175,7 +175,23 @@ function UploadCard(props) {
             record_count: rows.length,
             updated_at: now,
           }, { onConflict: 'data_type' });
-          setMessage('✓ Visits saved. ' + rows.length + ' in this upload · ' + (count || '?') + ' total in history.');
+
+          // Refresh last_visit_date / last_visit_clinician on census_data and
+          // patient_master from the visits we just upserted. Without this step,
+          // historical Pariox uploads would land in visit_schedule_data but the
+          // patient-level "last seen" fields would stay stale.
+          setMessage('Refreshing last-visit dates on census & patient master...');
+          var rpcRes = await supabase.rpc('recompute_last_visit_dates');
+          var lastVisitMsg = '';
+          if (rpcRes && rpcRes.data && rpcRes.data.success) {
+            lastVisitMsg = ' · refreshed last-visit on '
+              + (rpcRes.data.census_rows_updated || 0) + ' census + '
+              + (rpcRes.data.patient_master_rows_updated || 0) + ' master rows';
+          } else if (rpcRes && rpcRes.error) {
+            console.warn('recompute_last_visit_dates failed:', rpcRes.error.message);
+          }
+
+          setMessage('✓ Visits saved. ' + rows.length + ' in this upload · ' + (count || '?') + ' total in history' + lastVisitMsg + '.');
           setCount(rows.length);
         }
 
