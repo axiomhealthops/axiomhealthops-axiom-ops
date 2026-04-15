@@ -125,14 +125,24 @@ export default function Dashboard() {
     return 'overview';
   })();
   const [activePage, setActivePage] = useState(defaultPage);
+  const [pageIntent, setPageIntent] = useState(null);
+  const navigate = (page, intent = null) => {
+    setActivePage(page);
+    setPageIntent(intent);
+  };
 
   const PageComponent = PAGE_COMPONENTS[activePage];
 
   function renderPage() {
     if (!canAccess(activePage)) return <AccessDenied />;
-    // Pass onNavigate so pages can deep-link to other pages
-    // (e.g. DirectorDashboard TriageCards → target pages).
-    if (PageComponent) return <PageComponent onNavigate={setActivePage} />;
+    // Pages receive:
+    //   - onNavigate(page, intent?) — switch page and optionally pass pre-filter state
+    //   - intent — optional initial-state hint from the caller (e.g. "filter to overdue")
+    // The intent is consumed once on page mount via lazy useState initializer, so
+    // subsequent re-renders don't force the filter back.
+    if (PageComponent) {
+      return <PageComponent onNavigate={navigate} intent={pageIntent} />;
+    }
     return <ComingSoon page={activePage} />;
   }
 

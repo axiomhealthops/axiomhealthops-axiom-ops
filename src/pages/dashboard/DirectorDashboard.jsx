@@ -125,7 +125,7 @@ function RegionRow({ region, active, inactiveActive, onHold, pending, completedV
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function DirectorDashboard({ onNavigate }) {
-  const go = (page) => { if (typeof onNavigate === 'function') onNavigate(page); };
+  const go = (page, intent) => { if (typeof onNavigate === 'function') onNavigate(page, intent); };
   const [loading, setLoading] = useState(true);
   const [census, setCensus] = useState([]);
   const [visits, setVisits] = useState([]);
@@ -343,7 +343,7 @@ export default function DirectorDashboard({ onNavigate }) {
               color="#DC2626" bg="#FEF2F2" border="#FECACA"
               detail={`${fmt$(totalInactiveGap)}/wk revenue sitting idle`}
               actionLabel="Open Census → Sort Last Seen"
-              action={() => go('census')}
+              action={() => go('census', { lastSeen: 'overdue', status: 'active' })}
             />
             <TriageCard
               rank={2} urgent

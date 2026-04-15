@@ -579,7 +579,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
   );
 }
 
-export default function PatientCensusPage() {
+export default function PatientCensusPage({ intent } = {}) {
   const [census, setCensus] = useState([]);
   const [visits, setVisits] = useState([]);
   const [authData, setAuthData] = useState([]);
@@ -588,7 +588,12 @@ export default function PatientCensusPage() {
   const [search, setSearch] = useState('');
   const [regionFilter, setRegionFilter] = useState('ALL');
   const [insFilter, setInsFilter] = useState('ALL');
-  const [statusFilter, setStatusFilter] = useState('ALL');
+  // statusFilter + lastSeenFilter: accept initial values from caller-supplied intent
+  // (e.g. Director Command TriageCard #1 lands here with overdue+active pre-applied).
+  // Lazy initializer so the intent is consumed once on mount and doesn't override
+  // subsequent user interactions.
+  const [statusFilter, setStatusFilter] = useState(() => intent?.status || 'ALL');
+  const [lastSeenFilter, setLastSeenFilter] = useState(() => intent?.lastSeen || 'ALL');
   const [selected, setSelected] = useState(null);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
@@ -611,13 +616,34 @@ export default function PatientCensusPage() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return census.filter(c =>
-      (regionFilter==='ALL'||c.region===regionFilter) &&
-      (insFilter==='ALL'||c.insurance===insFilter) &&
-      (statusFilter==='ALL'||c.status===statusFilter) &&
-      (!q||(c.patient_name||'').toLowerCase().includes(q)||(c.insurance||'').toLowerCase().includes(q))
-    );
-  }, [census, search, regionFilter, insFilter, statusFilter]);
+    const now = Date.now();
+    return census.filter(c => {
+      if (regionFilter !== 'ALL' && c.region !== regionFilter) return false;
+      if (insFilter !== 'ALL' && c.insurance !== insFilter) return false;
+      // status comparison is case-insensitive since DB values vary ("Active" vs "active")
+      if (statusFilter !== 'ALL' && (c.status || '').toLowerCase() !== statusFilter.toLowerCase()) return false;
+      if (q && !(c.patient_name || '').toLowerCase().includes(q) && !(c.insurance || '').toLowerCase().includes(q)) return false;
+
+      // Last-seen filter. Semantics MATCH Director Dashboard card #1
+      // (inactiveActive) so clicking that card and landing here shows the
+      // same patient set:
+      //   overdue = no visit record OR >14 days since last visit
+      //   none    = no visit record only
+      //   week    = visited within the last 7 days
+      //   today   = visited today
+      if (lastSeenFilter !== 'ALL') {
+        const hasVisit = !!c.last_visit_date;
+        const days = hasVisit
+          ? Math.floor((now - new Date(c.last_visit_date + 'T00:00:00').getTime()) / 86400000)
+          : null;
+        if (lastSeenFilter === 'overdue' && !(days === null || days > 14)) return false;
+        if (lastSeenFilter === 'none'    && hasVisit) return false;
+        if (lastSeenFilter === 'week'    && (days === null || days > 7)) return false;
+        if (lastSeenFilter === 'today'   && days !== 0) return false;
+      }
+      return true;
+    });
+  }, [census, search, regionFilter, insFilter, statusFilter, lastSeenFilter]);
 
   const paged = filtered.slice(page*PAGE_SIZE, (page+1)*PAGE_SIZE);
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
@@ -669,7 +695,7 @@ export default function PatientCensusPage() {
             style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}>
             {['ALL','active','inactive','discharged'].map(s => <option key={s} value={s}>{s==='ALL'?'All Statuses':s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
           </select>
-          <select onChange={e => { /* last seen filter */ }} 
+          <select value={lastSeenFilter} onChange={e => { setLastSeenFilter(e.target.value); setPage(0); }}
             style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}
             id="lastSeenFilter">
             <option value="ALL">All Last Seen</option>
