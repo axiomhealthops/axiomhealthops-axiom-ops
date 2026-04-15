@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import ManualIntakeEntry from './ManualIntakeEntry';
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -273,17 +274,26 @@ export default function IntakeDashboardPage() {
   const [payorIns, setPayorIns] = useState('ALL');
   const [payorDx, setPayorDx] = useState('ALL');
 
+  const regionScope = useAssignedRegions();
+
   async function fetchRecords() {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setRecords([]); setLoading(false); return;
+    }
     // PostgREST silently caps at ~1000 rows even when .limit(N) requests more.
     // Paginate via .range() to get the full set regardless of server-side cap.
     setLoading(true);
     const PAGE = 1000;
     const all = [];
     for (let from = 0; ; from += PAGE) {
-      const { data, error } = await supabase.from('intake_referrals')
-        .select('id,date_received,referral_status,referral_type,region,patient_name,insurance,denial_reason,diagnosis,chart_status')
-        .order('date_received', { ascending: false })
-        .range(from, from + PAGE - 1);
+      const q = regionScope.applyToQuery(
+        supabase.from('intake_referrals')
+          .select('id,date_received,referral_status,referral_type,region,patient_name,insurance,denial_reason,diagnosis,chart_status')
+          .order('date_received', { ascending: false })
+          .range(from, from + PAGE - 1)
+      );
+      const { data, error } = await q;
       if (error) { console.warn('fetchRecords error:', error.message); break; }
       if (!data || data.length === 0) break;
       all.push(...data);
@@ -293,7 +303,7 @@ export default function IntakeDashboardPage() {
     setLoading(false);
   }
 
-  useEffect(() => { fetchRecords(); }, []);
+  useEffect(() => { fetchRecords(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   // ── computed stats ──────────────────────────────────────────────────
   const stats = useMemo(() => {

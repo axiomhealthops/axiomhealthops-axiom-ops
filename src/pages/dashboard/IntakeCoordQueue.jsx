@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -123,13 +124,21 @@ export default function IntakeCoordQueue() {
 
   const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
+  const regionScope = useAssignedRegions();
+
   const load = useCallback(async () => {
-    const { data } = await supabase.from('intake_referrals')
-      .select('*')
-      .order('date_received', { ascending: false });
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setReferrals([]); setLoading(false); return;
+    }
+    const { data } = await regionScope.applyToQuery(
+      supabase.from('intake_referrals')
+        .select('*')
+        .order('date_received', { ascending: false })
+    );
     setReferrals(data || []);
     setLoading(false);
-  }, []);
+  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
 

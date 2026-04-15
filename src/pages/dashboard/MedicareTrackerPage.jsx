@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -87,16 +88,24 @@ export default function MedicareTrackerPage() {
     loadFlags();
   }
 
+  const regionScope = useAssignedRegions();
+
   async function loadFlags() {
-    const { data } = await supabase.from('medicare_visit_flags')
-      .select('*').order('total_completed_visits', { ascending: false });
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setFlags([]); setLoading(false); return;
+    }
+    const { data } = await regionScope.applyToQuery(
+      supabase.from('medicare_visit_flags')
+        .select('*').order('total_completed_visits', { ascending: false })
+    );
     setFlags(data || []);
     setLoading(false);
   }
 
   useEffect(() => {
     loadFlags();
-  }, []);
+  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   async function acknowledge(flag, type) {
     const now = new Date().toISOString();

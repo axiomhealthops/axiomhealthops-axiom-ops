@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import AIDocExtractor from './AIDocExtractor';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
  
 var INSURANCES = ['Aetna','CarePlus','Cigna','Devoted','Fenyx','FHCP','Health First','Humana','Medicare','Simply','United','Other'];
 var STATUSES = [
@@ -471,20 +472,26 @@ export default function AuthTrackerPage() {
   var [showAIExtractor, setShowAIExtractor] = useState(false);
   var [censusPatients, setCensusPatients] = useState([]);
  
+  var regionScope = useAssignedRegions();
+
   function fetchRecords() {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setRecords([]); setCensusPatients([]); setLoading(false); return;
+    }
     setLoading(true);
     // Paginated — auth_tracker at 290 today but will grow; census at 750+
     Promise.all([
-      fetchAllPages(supabase.from('auth_tracker').select('*').order('created_at', { ascending: false })),
-      fetchAllPages(supabase.from('census_data').select('patient_name,region,insurance,status').order('patient_name')),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('auth_tracker').select('*').order('created_at', { ascending: false }))),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('census_data').select('patient_name,region,insurance,status').order('patient_name'))),
     ]).then(function(results) {
       setRecords(results[0]);
       setCensusPatients(results[1]);
       setLoading(false);
     });
   }
- 
-  useEffect(function() { fetchRecords(); }, []);
+
+  useEffect(function() { fetchRecords(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
  
   async function deleteRecord(id) {
     if (!window.confirm('Delete this auth record?')) return;

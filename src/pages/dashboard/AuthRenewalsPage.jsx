@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 const STATUS_CFG = {
   open:        { label:'Open',       color:'#DC2626', bg:'#FEF2F2' },
@@ -119,11 +120,19 @@ export default function AuthRenewalsPage() {
 
   const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
+  const regionScope = useAssignedRegions();
+
   const load = useCallback(async () => {
-    const { data } = await supabase.from('auth_renewal_tasks').select('*').order('days_until_expiry', { ascending: true });
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setTasks([]); setLoading(false); return;
+    }
+    const { data } = await regionScope.applyToQuery(
+      supabase.from('auth_renewal_tasks').select('*').order('days_until_expiry', { ascending: true })
+    );
     setTasks(data || []);
     setLoading(false);
-  }, []);
+  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
 

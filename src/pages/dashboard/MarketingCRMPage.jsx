@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 const CONTACT_TYPES = ['PCP','Podiatrist','Hospital','Specialist','Wound Care','Orthopedic','Vascular','Cardiology','Neurology','Assisted Living','SNF','Home Health Agency','Other'];
 const ENCOUNTER_TYPES = ['In-Person Visit','Phone Call','Drop-In','Lunch & Learn','Event','Email','Referral Received','Follow-Up','Other'];
@@ -229,17 +230,23 @@ export default function MarketingCRMPage() {
   const [encounterContact, setEncounterContact] = useState(null);
   const [expandedContact, setExpandedContact] = useState(null);
 
+  const regionScope = useAssignedRegions();
+
   async function load() {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setContacts([]); setEncounters([]); setLoading(false); return;
+    }
     const [{ data: c }, { data: e }] = await Promise.all([
-      supabase.from('marketing_contacts').select('*').order('practice_name'),
-      supabase.from('marketing_encounters').select('*').order('encounter_date', { ascending: false }),
+      regionScope.applyToQuery(supabase.from('marketing_contacts').select('*').order('practice_name')),
+      regionScope.applyToQuery(supabase.from('marketing_encounters').select('*').order('encounter_date', { ascending: false })),
     ]);
     setContacts(c || []);
     setEncounters(e || []);
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   const filteredContacts = useMemo(() => contacts.filter(c => {
     if (filterType !== 'ALL' && c.contact_type !== filterType) return false;

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 // ── LEVEL HIERARCHY ─────────────────────────────────────────────────────────
 // L5 = Most complex/intensive → L1 = Simplest → Maintenance = Lowest (tapering)
@@ -171,11 +172,17 @@ export default function ClinicalProgressionPage() {
   const [selected, setSelected] = useState(null);
   const [editModal, setEditModal] = useState(null); // patient object
 
+  const regionScope = useAssignedRegions();
+
   const loadAll = useCallback(() => {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setVisits([]); setCensus([]); setClinicalSettings({}); setLoading(false); return;
+    }
     Promise.all([
-      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,region,event_type,visit_date,status,staff_name').order('visit_date', { ascending: false })),
-      fetchAllPages(supabase.from('census_data').select('patient_name,region,status,insurance').eq('status','Active')),
-      fetchAllPages(supabase.from('patient_clinical_settings').select('*')),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('visit_schedule_data').select('patient_name,region,event_type,visit_date,status,staff_name').order('visit_date', { ascending: false }))),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('census_data').select('patient_name,region,status,insurance').eq('status','Active'))),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('patient_clinical_settings').select('*'))),
     ]).then(([v, c, cs]) => {
       setVisits(v);
       setCensus(c);
@@ -184,7 +191,7 @@ export default function ClinicalProgressionPage() {
       setClinicalSettings(csMap);
       setLoading(false);
     });
-  }, []);
+  }, [regionScope.isAllAccess, regionScope.loading, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const WOUND_TYPES = [
@@ -63,14 +64,20 @@ function FlagPatientModal({ onClose, onSaved, profileName }) {
     next_review_date: '', referral_diagnosis: '',
   });
   const [saving, setSaving] = useState(false);
+  const regionScope = useAssignedRegions();
 
   useEffect(() => {
-    supabase.from('census_data')
-      .select('patient_name, region, insurance, status')
-      .not('status', 'ilike', '%discharge%')
-      .order('patient_name')
-      .then(({ data }) => setCensus(data || []));
-  }, []);
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setCensus([]); return;
+    }
+    regionScope.applyToQuery(
+      supabase.from('census_data')
+        .select('patient_name, region, insurance, status')
+        .not('status', 'ilike', '%discharge%')
+        .order('patient_name')
+    ).then(({ data }) => setCensus(data || []));
+  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   const filteredCensus = useMemo(() => {
     if (!search) return [];
@@ -530,15 +537,24 @@ export default function SwiftTeamDashboard() {
   const [assessModal, setAssessModal] = useState(null);
   const [flagModal, setFlagModal] = useState(false);
 
+  const regionScope = useAssignedRegions();
+
   const load = useCallback(async () => {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setPatients([]); setAssessments([]); setLoading(false); return;
+    }
     const [p, a] = await Promise.all([
-      supabase.from('swift_team_patients').select('*').order('next_review_date', { ascending: true, nullsFirst: false }),
+      regionScope.applyToQuery(supabase.from('swift_team_patients').select('*').order('next_review_date', { ascending: true, nullsFirst: false })),
+      // swift_wound_assessments has no region column — it's joined via
+      // swift_team_patients.patient_name. The assessments will be implicitly
+      // scoped when we lookup by the filtered patient list client-side.
       supabase.from('swift_wound_assessments').select('*').order('assessment_date', { ascending: false }),
     ]);
     setPatients(p.data || []);
     setAssessments(a.data || []);
     setLoading(false);
-  }, []);
+  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
 

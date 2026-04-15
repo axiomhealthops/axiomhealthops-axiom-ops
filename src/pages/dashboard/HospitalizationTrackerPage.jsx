@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 const LYMPH_BENCHMARK = 1;   // <1% target
 const OTHER_BENCHMARK = 5;   // <5% target
@@ -257,15 +258,21 @@ export default function HospitalizationTrackerPage() {
 
   const canEdit = ['super_admin','ceo','admin','pod_leader'].includes(profile?.role);
 
+  const regionScope = useAssignedRegions();
+
   async function load() {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setRecords([]); setCensus([]); setLoading(false); return;
+    }
     const [h, c] = await Promise.all([
-      fetchAllPages(supabase.from('hospitalizations').select('*').order('admission_date', { ascending: false })),
-      fetchAllPages(supabase.from('census_data').select('patient_name, status, region, insurance')),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('hospitalizations').select('*').order('admission_date', { ascending: false }))),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('census_data').select('patient_name, status, region, insurance'))),
     ]);
     setRecords(h); setCensus(c); setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   const censusNames = useMemo(() => [...new Set((census||[]).map(c => c.patient_name).filter(Boolean))], [census]);
 

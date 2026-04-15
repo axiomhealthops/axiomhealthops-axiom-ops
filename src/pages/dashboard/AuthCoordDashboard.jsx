@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, safeUpdate } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
  
 function fmtDate(d) {
   if (!d) return '—';
@@ -180,17 +181,23 @@ export default function AuthCoordDashboard() {
   const [filterInsurance, setFilterInsurance] = useState('ALL');
   const [search, setSearch] = useState('');
   const [editAuth, setEditAuth] = useState(null);
- 
+
+  const regionScope = useAssignedRegions();
+
   const load = useCallback(async () => {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setAuths([]); setRenewalTasks([]); setLoading(false); return;
+    }
     const [a, r] = await Promise.all([
-      supabase.from('auth_tracker').select('*').order('auth_expiry_date', { ascending: true }),
-      supabase.from('auth_renewal_tasks').select('*').not('task_status', 'in', '("approved","denied","closed")').order('days_until_expiry', { ascending: true }),
+      regionScope.applyToQuery(supabase.from('auth_tracker').select('*').order('auth_expiry_date', { ascending: true })),
+      regionScope.applyToQuery(supabase.from('auth_renewal_tasks').select('*').not('task_status', 'in', '("approved","denied","closed")').order('days_until_expiry', { ascending: true })),
     ]);
     setAuths(a.data || []);
     setRenewalTasks(r.data || []);
     setLoading(false);
-  }, []);
- 
+  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+
   useEffect(() => { load(); }, [load]);
  
   const enriched = useMemo(() => auths.map(a => ({
