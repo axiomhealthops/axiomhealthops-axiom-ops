@@ -9,7 +9,37 @@ const REFERRAL_TYPES = ['New Referral','Re-Referral','Continuation'];
 const STATUSES = ['Pending','Accepted','Denied','On Hold'];
 const CHART_STATUSES = ['Chart Pending','Chart Received','Chart Incomplete','Ready for Auth'];
 
-export default function ManualIntakeEntry({ onClose, onSaved }) {
+export default // Module-scope field helpers. Previously defined inside the component body,
+// which caused React to unmount/remount every <input>/<select> on each keystroke
+// (new component reference per render) — resulting in focus loss after every
+// character. Critical for Hervylie's intake workflow.
+function F({ label, children, err }) {
+  return (
+    <div>
+      <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>
+        {label}{err && <span style={{ color:'#DC2626', marginLeft:4 }}>— {err}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+function I({ name, value, onChange, err, ...props }) {
+  return (
+    <input name={name} value={value||''} onChange={e => onChange(name, e.target.value)} {...props}
+      style={{ width:'100%', padding:'8px 10px', border:`1px solid ${err?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)', ...props.style }} />
+  );
+}
+function S({ name, value, onChange, err, opts, ...props }) {
+  return (
+    <select name={name} value={value||''} onChange={e => onChange(name, e.target.value)} {...props}
+      style={{ width:'100%', padding:'8px 10px', border:`1px solid ${err?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', ...props.style }}>
+      <option value="">— Select —</option>
+      {opts.map(o => <option key={o} value={o}>{o}</option>)}
+    </select>
+  );
+}
+
+function ManualIntakeEntry({ onClose, onSaved }) {
   const { profile } = useAuth();
   const today = new Date().toISOString().slice(0,10);
   const fileRef = useRef();
@@ -87,25 +117,6 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
     onClose?.();
   }
 
-  const F = ({ label, children, err }) => (
-    <div>
-      <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>
-        {label}{err && <span style={{ color:'#DC2626', marginLeft:4 }}>— {err}</span>}
-      </div>
-      {children}
-    </div>
-  );
-  const I = ({ name, ...props }) => (
-    <input name={name} value={form[name]||''} onChange={e => set(name, e.target.value)} {...props}
-      style={{ width:'100%', padding:'8px 10px', border:`1px solid ${errors[name]?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)', ...props.style }} />
-  );
-  const S = ({ name, opts, ...props }) => (
-    <select name={name} value={form[name]||''} onChange={e => set(name, e.target.value)} {...props}
-      style={{ width:'100%', padding:'8px 10px', border:`1px solid ${errors[name]?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', ...props.style }}>
-      <option value="">— Select —</option>
-      {opts.map(o => <option key={o} value={o}>{o}</option>)}
-    </select>
-  );
 
   const stepTitles = ['Patient Info','Insurance','Clinical','Source & PCP','Documents'];
   const totalSteps = 5;
@@ -182,16 +193,16 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
               <div style={{ gridColumn:'span 2' }}>
                 <F label="Patient Name *" err={errors.patient_name}>
-                  <I name="patient_name" placeholder="Last, First" />
+                  <I name="patient_name" value={form.patient_name} onChange={set} err={errors.patient_name} placeholder="Last, First" />
                 </F>
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, gridColumn:'span 2' }}>
-                <F label="Date Received *"><I name="date_received" type="date" /></F>
-                <F label="Status"><S name="referral_status" opts={STATUSES} /></F>
-                <F label="Referral Type"><S name="referral_type" opts={REFERRAL_TYPES} /></F>
+                <F label="Date Received *"><I name="date_received" value={form.date_received} onChange={set} err={errors.date_received} type="date" /></F>
+                <F label="Status"><S name="referral_status" value={form.referral_status} onChange={set} err={errors.referral_status} opts={STATUSES} /></F>
+                <F label="Referral Type"><S name="referral_type" value={form.referral_type} onChange={set} err={errors.referral_type} opts={REFERRAL_TYPES} /></F>
               </div>
-              <F label="Date of Birth"><I name="dob" type="date" /></F>
-              <F label="Phone Number"><I name="phone" placeholder="(555) 000-0000" /></F>
+              <F label="Date of Birth"><I name="dob" value={form.dob} onChange={set} err={errors.dob} type="date" /></F>
+              <F label="Phone Number"><I name="phone" value={form.phone} onChange={set} err={errors.phone} placeholder="(555) 000-0000" /></F>
               <F label="Region *" err={errors.region}>
                 <select value={form.region} onChange={e => set('region', e.target.value)}
                   style={{ width:'100%', padding:'8px 10px', border:`1px solid ${errors.region?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
@@ -199,11 +210,11 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
                   {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
                 </select>
               </F>
-              <F label="County"><I name="county" /></F>
-              <F label="City"><I name="city" /></F>
-              <F label="Zip Code"><I name="zip_code" /></F>
+              <F label="County"><I name="county" value={form.county} onChange={set} err={errors.county} /></F>
+              <F label="City"><I name="city" value={form.city} onChange={set} err={errors.city} /></F>
+              <F label="Zip Code"><I name="zip_code" value={form.zip_code} onChange={set} err={errors.zip_code} /></F>
               <div style={{ gridColumn:'span 2' }}>
-                <F label="Full Address"><I name="location" placeholder="Street address" /></F>
+                <F label="Full Address"><I name="location" value={form.location} onChange={set} err={errors.location} placeholder="Street address" /></F>
               </div>
             </div>
           )}
@@ -211,8 +222,8 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
           {/* STEP 2: Insurance */}
           {step === 2 && (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-              <F label="Primary Insurance *" err={errors.insurance}><S name="insurance" opts={INSURANCES} /></F>
-              <F label="Policy / Member ID"><I name="policy_number" /></F>
+              <F label="Primary Insurance *" err={errors.insurance}><S name="insurance" value={form.insurance} onChange={set} err={errors.insurance} opts={INSURANCES} /></F>
+              <F label="Policy / Member ID"><I name="policy_number" value={form.policy_number} onChange={set} err={errors.policy_number} /></F>
               <F label="Medicare Type">
                 <select value={form.medicare_type} onChange={e => set('medicare_type', e.target.value)}
                   style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
@@ -220,12 +231,12 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
                   {['Part A','Part B','Part C (Medicare Advantage)','Part D','Medicare + Medicaid'].map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </F>
-              <F label="Secondary Insurance"><I name="secondary_insurance" /></F>
-              <F label="Secondary ID"><I name="secondary_id" /></F>
-              <F label="Chart Status"><S name="chart_status" opts={CHART_STATUSES} /></F>
-              <F label="Census Status"><I name="census_status" /></F>
-              <F label="Welcome Call"><I name="welcome_call" placeholder="Date or 'No'" /></F>
-              <F label="First Appointment"><I name="first_appt" placeholder="Date or 'Pending'" /></F>
+              <F label="Secondary Insurance"><I name="secondary_insurance" value={form.secondary_insurance} onChange={set} err={errors.secondary_insurance} /></F>
+              <F label="Secondary ID"><I name="secondary_id" value={form.secondary_id} onChange={set} err={errors.secondary_id} /></F>
+              <F label="Chart Status"><S name="chart_status" value={form.chart_status} onChange={set} err={errors.chart_status} opts={CHART_STATUSES} /></F>
+              <F label="Census Status"><I name="census_status" value={form.census_status} onChange={set} err={errors.census_status} /></F>
+              <F label="Welcome Call"><I name="welcome_call" value={form.welcome_call} onChange={set} err={errors.welcome_call} placeholder="Date or 'No'" /></F>
+              <F label="First Appointment"><I name="first_appt" value={form.first_appt} onChange={set} err={errors.first_appt} placeholder="Date or 'Pending'" /></F>
             </div>
           )}
 
@@ -254,14 +265,14 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
           {step === 4 && (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
               <div style={{ gridColumn:'span 2', fontSize:13, fontWeight:700, color:'var(--black)', paddingBottom:4, borderBottom:'1px solid var(--border)' }}>Referral Source</div>
-              <F label="Source Name"><I name="referral_source" placeholder="Hospital, clinic, physician…" /></F>
-              <F label="Source Phone"><I name="referral_source_phone" /></F>
-              <F label="Source Fax"><I name="referral_source_fax" /></F>
+              <F label="Source Name"><I name="referral_source" value={form.referral_source} onChange={set} err={errors.referral_source} placeholder="Hospital, clinic, physician…" /></F>
+              <F label="Source Phone"><I name="referral_source_phone" value={form.referral_source_phone} onChange={set} err={errors.referral_source_phone} /></F>
+              <F label="Source Fax"><I name="referral_source_fax" value={form.referral_source_fax} onChange={set} err={errors.referral_source_fax} /></F>
               <div />
               <div style={{ gridColumn:'span 2', fontSize:13, fontWeight:700, color:'var(--black)', paddingBottom:4, borderBottom:'1px solid var(--border)', marginTop:8 }}>Primary Care Physician</div>
-              <F label="PCP Name"><I name="pcp_name" /></F>
-              <F label="PCP Phone"><I name="pcp_phone" /></F>
-              <F label="PCP Fax"><I name="pcp_fax" /></F>
+              <F label="PCP Name"><I name="pcp_name" value={form.pcp_name} onChange={set} err={errors.pcp_name} /></F>
+              <F label="PCP Phone"><I name="pcp_phone" value={form.pcp_phone} onChange={set} err={errors.pcp_phone} /></F>
+              <F label="PCP Fax"><I name="pcp_fax" value={form.pcp_fax} onChange={set} err={errors.pcp_fax} /></F>
             </div>
           )}
 

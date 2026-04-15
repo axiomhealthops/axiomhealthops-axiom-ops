@@ -7,6 +7,17 @@ const CONTACT_TYPES = ['PCP','Podiatrist','Hospital','Specialist','Wound Care','
 const ENCOUNTER_TYPES = ['In-Person Visit','Phone Call','Drop-In','Lunch & Learn','Event','Email','Referral Received','Follow-Up','Other'];
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
+// Module-scope so the <input> isn't remounted on every keystroke (focus loss bug).
+function MktField({ label, field, type='text', required=false, half=false, value, onChange }) {
+  return (
+    <div style={{ gridColumn: half ? 'span 1' : 'span 2' }}>
+      <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>{label}{required && ' *'}</label>
+      <input type={type} value={value||''} onChange={e => onChange(f => ({...f,[field]:e.target.value}))}
+        style={{ width:'100%', padding:'7px 10px', border:`1px solid ${required && !value?'#FECACA':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
+    </div>
+  );
+}
+
 function fmtDate(d) {
   if (!d) return '—';
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -37,13 +48,6 @@ function ContactModal({ contact, onClose, onSaved, profile }) {
     onSaved();
   }
 
-  const F = ({ label, field, type='text', required=false, half=false }) => (
-    <div style={{ gridColumn: half ? 'span 1' : 'span 2' }}>
-      <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>{label}{required && ' *'}</label>
-      <input type={type} value={form[field]||''} onChange={e => setForm(f => ({...f,[field]:e.target.value}))}
-        style={{ width:'100%', padding:'7px 10px', border:`1px solid ${required && !form[field]?'#FECACA':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
-    </div>
-  );
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24, overflowY:'auto' }}>
@@ -68,12 +72,12 @@ function ContactModal({ contact, onClose, onSaved, profile }) {
               {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
             </select>
           </div>
-          <F label="Practice / Facility Name" field="practice_name" required />
-          <F label="Contact Name" field="contact_name" half />
-          <F label="Title (MD, DO, DPM, NP, etc.)" field="title" half />
-          <F label="Phone" field="phone" half />
-          <F label="Email" field="email" type="email" half />
-          <F label="NPI Number" field="npi" half />
+          <MktField label="Practice / Facility Name" field="practice_name" required  value={form.practice_name} onChange={setForm} />
+          <MktField label="Contact Name" field="contact_name" half  value={form.contact_name} onChange={setForm} />
+          <MktField label="Title (MD, DO, DPM, NP, etc.)" field="title" half  value={form.title} onChange={setForm} />
+          <MktField label="Phone" field="phone" half  value={form.phone} onChange={setForm} />
+          <MktField label="Email" field="email" type="email" half  value={form.email} onChange={setForm} />
+          <MktField label="NPI Number" field="npi" half  value={form.npi} onChange={setForm} />
           <div>
             <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Referral Potential</label>
             <select value={form.referral_potential} onChange={e => setForm(f=>({...f,referral_potential:e.target.value}))}
@@ -83,10 +87,10 @@ function ContactModal({ contact, onClose, onSaved, profile }) {
               <option value="low">⬇ Low</option>
             </select>
           </div>
-          <F label="Address" field="address" />
-          <F label="City" field="city" half />
-          <F label="ZIP" field="zip" half />
-          <F label="Assigned To (RM / Staff)" field="assigned_to" />
+          <MktField label="Address" field="address"  value={form.address} onChange={setForm} />
+          <MktField label="City" field="city" half  value={form.city} onChange={setForm} />
+          <MktField label="ZIP" field="zip" half  value={form.zip} onChange={setForm} />
+          <MktField label="Assigned To (RM / Staff)" field="assigned_to"  value={form.assigned_to} onChange={setForm} />
           <div style={{ gridColumn:'span 2' }}>
             <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Notes</label>
             <textarea value={form.notes||''} onChange={e => setForm(f=>({...f,notes:e.target.value}))}

@@ -6,6 +6,18 @@ import { useAuth } from '../../hooks/useAuth';
 const LYMPH_BENCHMARK = 1;   // <1% target
 const OTHER_BENCHMARK = 5;   // <5% target
 
+// Module-scope so React keeps F stable across renders (focus-loss fix).
+function F({ label, req, children }) {
+  return (
+    <div>
+      <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:4 }}>
+        {label}{req && <span style={{ color:'#DC2626' }}> *</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
+
 const CAUSE_CATEGORIES = [
   { value: 'lymphedema_related', label: 'Lymphedema-Related', color: '#DC2626', bg: '#FEF2F2' },
   { value: 'other_cause',        label: 'Other Cause',        color: '#D97706', bg: '#FEF3C7' },
@@ -105,15 +117,6 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames }) {
     if (error) { setErr(error.message); return; }
     onSaved();
   }
-
-  const F = ({ label, req, children }) => (
-    <div>
-      <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:4 }}>
-        {label}{req && <span style={{ color:'#DC2626' }}> *</span>}
-      </label>
-      {children}
-    </div>
-  );
 
   const input = (k, type='text', placeholder='') => (
     <input type={type} value={form[k]} placeholder={placeholder}

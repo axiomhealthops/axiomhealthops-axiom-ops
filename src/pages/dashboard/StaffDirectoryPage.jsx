@@ -12,6 +12,16 @@ const DISCIPLINES = ['LYMPHEDEMA PT','LYMPHEDEMA PTA','OT','COTA','PT','PTA'];
 
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
 
+// Module-scope so React treats them as the same component type across renders.
+// Previously defined inside ClinEditorModal — that caused focus loss on every
+// keystroke because each render produced a new component reference.
+function F({ label, children }) {
+  return <div><div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>{label}</div>{children}</div>;
+}
+function I(props) {
+  return <input {...props} style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)', ...props.style }} />;
+}
+
 function ClinEditorModal({ clin, visits, onClose, onSave }) {
   const [form, setForm] = useState({
     full_name: clin.full_name || '',
@@ -48,11 +58,6 @@ function ClinEditorModal({ clin, visits, onClose, onSave }) {
     setSaving(false);
     onClose();
   }
-
-  const F = ({ label, children }) => (
-    <div><div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>{label}</div>{children}</div>
-  );
-  const I = (props) => <input {...props} style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)', ...props.style }} />;
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>

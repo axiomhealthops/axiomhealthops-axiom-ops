@@ -11,6 +11,29 @@ function daysUntil(d) {
   return Math.round((new Date(d) - new Date()) / 86400000);
 }
 
+// NOTE: EditField MUST be defined at module scope. When defined inside
+// PatientProfile (as it was previously), every keystroke caused a parent
+// re-render -> new component reference -> React unmounted & remounted each
+// <input>, destroying focus. That was why ZIP/phone/etc. only accepted one
+// character at a time before the user had to click back into the field.
+function EditField({ label, name, type='text', opts, value, onChange }) {
+  return (
+    <div>
+      <div style={{ fontSize:10, fontWeight:600, color:'var(--gray)', marginBottom:3 }}>{label}</div>
+      {opts ? (
+        <select value={value||''} onChange={e => onChange(name, e.target.value)}
+          style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
+          <option value="">—</option>
+          {opts.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      ) : (
+        <input type={type} value={value||''} onChange={e => onChange(name, e.target.value)}
+          style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', boxSizing:'border-box', background:'var(--card-bg)' }} />
+      )}
+    </div>
+  );
+}
+
 function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpdate }) {
   const [tab, setTab] = useState('overview');
   const [editing, setEditing] = useState(false);
@@ -187,21 +210,10 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
 
   const INSURANCES = ['Humana','CarePlus','FHCP','Devoted','Health First','Aetna','Medicare','Simply','Cigna','United Healthcare','Other'];
   const REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
-  const E = ({ label, name, type='text', opts }) => (
-    <div>
-      <div style={{ fontSize:10, fontWeight:600, color:'var(--gray)', marginBottom:3 }}>{label}</div>
-      {opts ? (
-        <select value={editForm[name]||''} onChange={e => setEditForm(p=>({...p,[name]:e.target.value}))}
-          style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
-          <option value="">—</option>
-          {opts.map(o => <option key={o} value={o}>{o}</option>)}
-        </select>
-      ) : (
-        <input type={type} value={editForm[name]||''} onChange={e => setEditForm(p=>({...p,[name]:e.target.value}))}
-          style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', boxSizing:'border-box', background:'var(--card-bg)' }} />
-      )}
-    </div>
-  );
+  // Stable field updater — referenced by EditField as `onChange` so React
+  // doesn't see the prop change across renders. (The inline `<E>` wrapper
+  // that used to live here caused focus loss on every keystroke.)
+  const setField = (name, value) => setEditForm(p => ({ ...p, [name]: value }));
 
   // All visits for this patient
   const patVisits = visits.filter(v =>
@@ -264,38 +276,41 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
           </div>
         </div>
 
-        {/* Edit Panel */}
-        {editing && (
-          <div style={{ padding:20, background:'#F0F7FF', borderBottom:'1px solid var(--border)' }}>
+        {/* Edit Panel — when editing, replaces stats/tabs/content. Scrollable
+            body + sticky footer so Save is always reachable (the old layout
+            let the save button fall off the bottom of the viewport). */}
+        {editing ? (
+          <>
+          <div style={{ flex:1, overflowY:'auto', padding:20, background:'#F0F7FF', borderBottom:'1px solid var(--border)' }}>
             <div style={{ fontSize:13, fontWeight:700, color:'var(--black)', marginBottom:12 }}>Edit Patient Information</div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:12 }}>
-              <E label="Patient Name" name="patient_name" />
-              <E label="Region" name="region" opts={REGIONS} />
-              <E label="Insurance" name="insurance" opts={INSURANCES} />
-              <E label="Status" name="status" opts={['active','inactive','discharged','on_hold']} />
+              <EditField label="Patient Name" name="patient_name" value={editForm.patient_name} onChange={setField} />
+              <EditField label="Region" name="region" opts={REGIONS} value={editForm.region} onChange={setField} />
+              <EditField label="Insurance" name="insurance" opts={INSURANCES} value={editForm.insurance} onChange={setField} />
+              <EditField label="Status" name="status" opts={['active','inactive','discharged','on_hold']} value={editForm.status} onChange={setField} />
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:12 }}>
-              <E label="Phone" name="phone" />
-              <E label="Date of Birth" name="dob" type="date" />
-              <E label="City" name="city" />
-              <E label="Zip Code" name="zip_code" />
+              <EditField label="Phone" name="phone" value={editForm.phone} onChange={setField} />
+              <EditField label="Date of Birth" name="dob" type="date" value={editForm.dob} onChange={setField} />
+              <EditField label="City" name="city" value={editForm.city} onChange={setField} />
+              <EditField label="Zip Code" name="zip_code" value={editForm.zip_code} onChange={setField} />
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
-              <E label="Full Address" name="location" />
-              <E label="County" name="county" />
+              <EditField label="Full Address" name="location" value={editForm.location} onChange={setField} />
+              <EditField label="County" name="county" value={editForm.county} onChange={setField} />
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:12 }}>
-              <E label="Diagnosis" name="diagnosis" />
-              <E label="Referral Status" name="referral_status" opts={['Pending','Accepted','Denied','On Hold']} />
-              <E label="Chart Status" name="chart_status" opts={['Chart Pending','Chart Received','Chart Incomplete','Ready for Auth']} />
+              <EditField label="Diagnosis" name="diagnosis" value={editForm.diagnosis} onChange={setField} />
+              <EditField label="Referral Status" name="referral_status" opts={['Pending','Accepted','Denied','On Hold']} value={editForm.referral_status} onChange={setField} />
+              <EditField label="Chart Status" name="chart_status" opts={['Chart Pending','Chart Received','Chart Incomplete','Ready for Auth']} value={editForm.chart_status} onChange={setField} />
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:12 }}>
-              <E label="PCP Name" name="pcp_name" />
-              <E label="PCP Phone" name="pcp_phone" />
-              <E label="PCP Fax" name="pcp_fax" />
+              <EditField label="PCP Name" name="pcp_name" value={editForm.pcp_name} onChange={setField} />
+              <EditField label="PCP Phone" name="pcp_phone" value={editForm.pcp_phone} onChange={setField} />
+              <EditField label="PCP Fax" name="pcp_fax" value={editForm.pcp_fax} onChange={setField} />
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
-              <E label="Referral Source" name="referral_source" />
+              <EditField label="Referral Source" name="referral_source" value={editForm.referral_source} onChange={setField} />
               <div>
                 <div style={{ fontSize:10, fontWeight:600, color:'var(--gray)', marginBottom:3 }}>Notes</div>
                 <textarea value={editForm.notes} onChange={e => setEditForm(p=>({...p,notes:e.target.value}))}
@@ -311,54 +326,54 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
                 {latestAuthRecord && <span style={{ fontSize:10, fontWeight:400, color:'var(--gray)', marginLeft:8, textTransform:'none', letterSpacing:0 }}>Editing most recent auth record</span>}
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:10 }}>
-                <E label="Member ID" name="member_id" />
-                <E label="Auth Number" name="auth_number" />
-                <E label="Auth Status" name="auth_status" opts={['active','pending','approved','denied','expired','cancelled']} />
-                <E label="Insurance Type" name="insurance_type" opts={['Standard (24 visits)','HMO','PPO','Medicare Advantage','Medicare Part B','Other']} />
+                <EditField label="Member ID" name="member_id" value={editForm.member_id} onChange={setField} />
+                <EditField label="Auth Number" name="auth_number" value={editForm.auth_number} onChange={setField} />
+                <EditField label="Auth Status" name="auth_status" opts={['active','pending','approved','denied','expired','cancelled']} value={editForm.auth_status} onChange={setField} />
+                <EditField label="Insurance Type" name="insurance_type" opts={['Standard (24 visits)','HMO','PPO','Medicare Advantage','Medicare Part B','Other']} value={editForm.insurance_type} onChange={setField} />
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:10 }}>
-                <E label="Therapy Type" name="therapy_type" opts={['Lymphedema','Physical Therapy','Occupational Therapy','Speech Therapy','Cardiac','Other']} />
-                <E label="Request Type" name="request_type" opts={['Initial','Renewal','Concurrent Review','Retrospective']} />
-                <E label="Frequency" name="frequency" />
+                <EditField label="Therapy Type" name="therapy_type" opts={['Lymphedema','Physical Therapy','Occupational Therapy','Speech Therapy','Cardiac','Other']} value={editForm.therapy_type} onChange={setField} />
+                <EditField label="Request Type" name="request_type" opts={['Initial','Renewal','Concurrent Review','Retrospective']} value={editForm.request_type} onChange={setField} />
+                <EditField label="Frequency" name="frequency" value={editForm.frequency} onChange={setField} />
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:10 }}>
                 <div>
                   <div style={{ fontSize:10, fontWeight:700, color:'var(--gray)', marginBottom:3 }}>VISIT TRACKING</div>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-                    <E label="Visits Auth." name="visits_authorized" type="number" />
-                    <E label="Visits Used" name="visits_used" type="number" />
+                    <EditField label="Visits Auth." name="visits_authorized" type="number" value={editForm.visits_authorized} onChange={setField} />
+                    <EditField label="Visits Used" name="visits_used" type="number" value={editForm.visits_used} onChange={setField} />
                   </div>
                 </div>
                 <div>
                   <div style={{ fontSize:10, fontWeight:700, color:'var(--gray)', marginBottom:3 }}>EVALS</div>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-                    <E label="Auth." name="evals_authorized" type="number" />
-                    <E label="Used" name="evals_used" type="number" />
+                    <EditField label="Auth." name="evals_authorized" type="number" value={editForm.evals_authorized} onChange={setField} />
+                    <EditField label="Used" name="evals_used" type="number" value={editForm.evals_used} onChange={setField} />
                   </div>
                 </div>
                 <div>
                   <div style={{ fontSize:10, fontWeight:700, color:'var(--gray)', marginBottom:3 }}>REASSESSMENTS</div>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-                    <E label="Auth." name="reassessments_authorized" type="number" />
-                    <E label="Used" name="reassessments_used" type="number" />
+                    <EditField label="Auth." name="reassessments_authorized" type="number" value={editForm.reassessments_authorized} onChange={setField} />
+                    <EditField label="Used" name="reassessments_used" type="number" value={editForm.reassessments_used} onChange={setField} />
                   </div>
                 </div>
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10, marginBottom:10 }}>
-                <E label="SOC Date" name="soc_date" type="date" />
-                <E label="Auth Submitted" name="auth_submitted_date" type="date" />
-                <E label="Needed By" name="auth_needed_by" type="date" />
-                <E label="Auth Approved" name="auth_approved_date" type="date" />
-                <E label="Auth Expiry" name="auth_expiry_date" type="date" />
+                <EditField label="SOC Date" name="soc_date" type="date" value={editForm.soc_date} onChange={setField} />
+                <EditField label="Auth Submitted" name="auth_submitted_date" type="date" value={editForm.auth_submitted_date} onChange={setField} />
+                <EditField label="Needed By" name="auth_needed_by" type="date" value={editForm.auth_needed_by} onChange={setField} />
+                <EditField label="Auth Approved" name="auth_approved_date" type="date" value={editForm.auth_approved_date} onChange={setField} />
+                <EditField label="Auth Expiry" name="auth_expiry_date" type="date" value={editForm.auth_expiry_date} onChange={setField} />
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:10 }}>
-                <E label="PCP Name" name="pcp_name" />
-                <E label="PCP Facility" name="pcp_facility" />
-                <E label="PCP Phone" name="pcp_phone" />
-                <E label="PCP Fax" name="pcp_fax" />
+                <EditField label="PCP Name" name="pcp_name" value={editForm.pcp_name} onChange={setField} />
+                <EditField label="PCP Facility" name="pcp_facility" value={editForm.pcp_facility} onChange={setField} />
+                <EditField label="PCP Phone" name="pcp_phone" value={editForm.pcp_phone} onChange={setField} />
+                <EditField label="PCP Fax" name="pcp_fax" value={editForm.pcp_fax} onChange={setField} />
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:4 }}>
-                <E label="Denial Reason (if denied)" name="denial_reason" />
+                <EditField label="Denial Reason (if denied)" name="denial_reason" value={editForm.denial_reason} onChange={setField} />
                 <div>
                   <div style={{ fontSize:10, fontWeight:600, color:'var(--gray)', marginBottom:3 }}>Auth Notes</div>
                   <textarea value={editForm.auth_notes||''} onChange={e => setEditForm(p=>({...p,auth_notes:e.target.value}))}
@@ -367,16 +382,18 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
               </div>
             </div>
 
-            <div style={{ display:'flex', gap:8 }}>
-              <button onClick={handleSave} disabled={saving}
-                style={{ padding:'8px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
-                {saving ? 'Saving…' : '✓ Save Changes'}
-              </button>
-              <button onClick={() => setEditing(false)} style={{ padding:'8px 14px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
-            </div>
           </div>
-        )}
-
+          {/* Sticky footer — always reachable regardless of form length. */}
+          <div style={{ padding:'14px 20px', borderTop:'1px solid var(--border)', display:'flex', gap:8, background:'var(--card-bg)', flexShrink:0 }}>
+            <button onClick={handleSave} disabled={saving}
+              style={{ padding:'8px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+              {saving ? 'Saving…' : '✓ Save Changes'}
+            </button>
+            <button onClick={() => setEditing(false)} style={{ padding:'8px 14px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
+          </div>
+          </>
+        ) : (
+          <>
         {/* Visit stat strip */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', borderBottom:'1px solid var(--border)' }}>
           {[
@@ -574,6 +591,8 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
     </div>
   );
