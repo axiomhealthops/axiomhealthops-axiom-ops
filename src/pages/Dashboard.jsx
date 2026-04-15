@@ -44,6 +44,7 @@ import SchedulingAlertsPage from './dashboard/SchedulingAlertsPage';
 import SwiftTeamDashboard from './dashboard/SwiftTeamDashboard';
 import DischargeTrackerPage from './dashboard/DischargeTrackerPage';
 import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
+import StaleFrequencyPage from './dashboard/StaleFrequencyPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -88,6 +89,7 @@ const PAGE_COMPONENTS = {
   'auth-renewals':           AuthRenewalsPage,
   'discharges':              DischargeTrackerPage,
   'clinical-progression':   ClinicalProgressionPage,
+  'stale-frequency':        StaleFrequencyPage,
 };
 
 function AccessDenied() {
