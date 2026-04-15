@@ -224,23 +224,39 @@ export default function VisitSchedulePage() {
   var [statusClick, setStatusClick] = useState(null);
   var [clinFilter, setClinFilter] = useState('ALL');
 
-  // Fetch visits from Supabase for a ±45-day window around the current anchor
+  // Fetch visits from Supabase for a ±45-day window around the current anchor.
+  // Uses .range() pagination in 1000-row chunks because PostgREST silently
+  // caps .limit(N) at 1000 regardless of the value requested. Without
+  // pagination the page would truncate at 1000 rows and potentially show
+  // only old completed visits while missing the current week entirely.
   var fetchVisits = useCallback(function(anchorDate) {
     setLoading(true);
     var d = anchorDate || new Date();
     var from = new Date(d); from.setDate(d.getDate() - 45);
     var to   = new Date(d); to.setDate(d.getDate() + 45);
-    var fromStr = from.toISOString().slice(0, 10);
-    var toStr   = to.toISOString().slice(0, 10);
-    supabase.from('visit_schedule_data')
-      .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region,discipline,insurance,visit_time')
-      .gte('visit_date', fromStr)
-      .lte('visit_date', toStr)
-      .limit(3000)
-      .then(function(res) {
-        setVisits(res.data || []);
-        setLoading(false);
-      });
+    var toLocal = function(x) { return [x.getFullYear(), String(x.getMonth()+1).padStart(2,'0'), String(x.getDate()).padStart(2,'0')].join('-'); };
+    var fromStr = toLocal(from);
+    var toStr   = toLocal(to);
+    var PAGE = 1000;
+    var all = [];
+    var pull = function(offset) {
+      return supabase.from('visit_schedule_data')
+        .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region,discipline,insurance,visit_time')
+        .gte('visit_date', fromStr)
+        .lte('visit_date', toStr)
+        .order('visit_date', { ascending: false })
+        .range(offset, offset + PAGE - 1)
+        .then(function(res) {
+          if (res.error || !res.data || res.data.length === 0) return all;
+          for (var i = 0; i < res.data.length; i++) all.push(res.data[i]);
+          if (res.data.length < PAGE) return all;
+          return pull(offset + PAGE);
+        });
+    };
+    pull(0).then(function(rows) {
+      setVisits(rows || []);
+      setLoading(false);
+    });
   }, []);
 
   useEffect(function() { fetchVisits(anchor); }, []);
