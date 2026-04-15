@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
 // ── LEVEL HIERARCHY ─────────────────────────────────────────────────────────
@@ -173,14 +173,14 @@ export default function ClinicalProgressionPage() {
 
   const loadAll = useCallback(() => {
     Promise.all([
-      supabase.from('visit_schedule_data').select('patient_name,region,event_type,visit_date,status,staff_name').order('visit_date', { ascending: false }),
-      supabase.from('census_data').select('patient_name,region,status,insurance').eq('status','Active'),
-      supabase.from('patient_clinical_settings').select('*'),
+      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,region,event_type,visit_date,status,staff_name').order('visit_date', { ascending: false })),
+      fetchAllPages(supabase.from('census_data').select('patient_name,region,status,insurance').eq('status','Active')),
+      fetchAllPages(supabase.from('patient_clinical_settings').select('*')),
     ]).then(([v, c, cs]) => {
-      setVisits(v.data||[]);
-      setCensus(c.data||[]);
+      setVisits(v);
+      setCensus(c);
       const csMap = {};
-      (cs.data||[]).forEach(s => { csMap[s.patient_name] = s; });
+      cs.forEach(s => { csMap[s.patient_name] = s; });
       setClinicalSettings(csMap);
       setLoading(false);
     });

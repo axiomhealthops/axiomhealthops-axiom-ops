@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import TopBar from '../../components/TopBar';
 
 const BLENDED_RATE = 185;
@@ -156,23 +156,25 @@ export default function DirectorDashboard({ onNavigate }) {
     sunDate.setDate(monDate.getDate() + 6);
     const weekEndStr = `${sunDate.getFullYear()}-${String(sunDate.getMonth()+1).padStart(2,'0')}-${String(sunDate.getDate()).padStart(2,'0')}`;
 
+    // All paginated — census (750+), visits this week (800+), and auth
+    // tables are each capable of exceeding the 1000-row PostgREST cap.
     const [c, v, ar, oh, wl, cl, dc] = await Promise.all([
-      supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date'),
-      supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr).limit(2000),
-      supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")'),
-      supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold'),
-      supabase.from('waitlist_assignments').select('patient_name,region,assignment_status,assigned_clinician,waitlisted_since,priority'),
-      supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active').eq('is_active', true),
-      supabase.from('patient_discharges').select('patient_name,discharge_date,followup_30day_required,followup_30day_completed'),
+      fetchAllPages(supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date')),
+      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr)),
+      fetchAllPages(supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")')),
+      fetchAllPages(supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold')),
+      fetchAllPages(supabase.from('waitlist_assignments').select('patient_name,region,assignment_status,assigned_clinician,waitlisted_since,priority')),
+      fetchAllPages(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active').eq('is_active', true)),
+      fetchAllPages(supabase.from('patient_discharges').select('patient_name,discharge_date,followup_30day_required,followup_30day_completed')),
     ]);
 
-    setCensus(c.data || []);
-    setVisits(v.data || []);
-    setAuthRenewals(ar.data || []);
-    setOnHold(oh.data || []);
-    setWaitlist(wl.data || []);
-    setClinicians(cl.data || []);
-    setDischarges(dc.data || []);
+    setCensus(c);
+    setVisits(v);
+    setAuthRenewals(ar);
+    setOnHold(oh);
+    setWaitlist(wl);
+    setClinicians(cl);
+    setDischarges(dc);
     setLastRefresh(new Date());
     setLoading(false);
   }, []);

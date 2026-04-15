@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 
 const RATE = 230; // $ per billable visit
 
@@ -35,12 +35,16 @@ export default function RevenuePage() {
   const [viewMode, setViewMode] = useState('clinician'); // clinician | region | insurance
 
   useEffect(() => {
-    supabase.from('visit_schedule_data')
-      .select('patient_name,visit_date,discipline,event_type,status,staff_name,region,insurance')
-      .not('visit_date', 'is', null)
-      .order('visit_date', { ascending: false })
-      .limit(10000)
-      .then(({ data }) => { setVisits(data || []); setLoading(false); });
+    // Revenue needs ALL visits (historical included), so use fetchAllPages
+    // to iterate past the 1000-row PostgREST cap. .limit(10000) was silently
+    // truncated — the page was under-reporting revenue by any history beyond
+    // the first 1000 rows.
+    fetchAllPages(
+      supabase.from('visit_schedule_data')
+        .select('patient_name,visit_date,discipline,event_type,status,staff_name,region,insurance')
+        .not('visit_date', 'is', null)
+        .order('visit_date', { ascending: false })
+    ).then((rows) => { setVisits(rows); setLoading(false); });
   }, []);
 
   const stats = useMemo(() => {

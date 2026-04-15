@@ -70,3 +70,52 @@ export async function safeUpdate(table, payload, matchObj) {
 
   return { data, error, rowCount };
 }
+
+/**
+ * Paginated fetch that bypasses the PostgREST 1000-row silent cap.
+ *
+ * Why this exists:
+ *   supabase.from(t).select(...).limit(N) is silently capped at ~1000
+ *   rows on the server regardless of N. Pages that call .limit(3000)
+ *   or .limit(10000) receive only 1000 rows and silently undercount.
+ *   Symptoms have included "Overview shows 0 scheduled visits" and
+ *   "Crystal shows 0 / Productivity undercounts by half".
+ *
+ * What this does:
+ *   Repeatedly issues .range(offset, offset+999) until an empty or
+ *   short page comes back, accumulating rows into a single array.
+ *   Works with any QueryBuilder — pass in the builder AFTER chaining
+ *   your .from / .select / .eq / .gte / .order / etc., and before
+ *   terminating with .limit or .range. Example:
+ *
+ *     const rows = await fetchAllPages(
+ *       supabase.from('visit_schedule_data')
+ *         .select('*')
+ *         .gte('visit_date', weekStart)
+ *         .lte('visit_date', weekEnd)
+ *         .order('visit_date', { ascending: false })
+ *     );
+ *
+ * Safety stop at 50,000 rows. If you need more, rethink the query.
+ *
+ * @param {import('@supabase/postgrest-js').PostgrestFilterBuilder} builder
+ * @returns {Promise<any[]>}
+ */
+export async function fetchAllPages(builder) {
+  const PAGE = 1000;
+  const MAX = 50000;
+  const all = [];
+  for (let offset = 0; offset < MAX; offset += PAGE) {
+    // Need a fresh builder per call — .range() mutates the original.
+    // The .range() method returns a new PostgrestBuilder each call so this works.
+    const { data, error } = await builder.range(offset, offset + PAGE - 1);
+    if (error) {
+      console.warn('[fetchAllPages] error at offset', offset, error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    for (const row of data) all.push(row);
+    if (data.length < PAGE) break;
+  }
+  return all;
+}

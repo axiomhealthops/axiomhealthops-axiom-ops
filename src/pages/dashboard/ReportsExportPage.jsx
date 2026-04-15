@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import * as XLSX from 'xlsx';
  
 const RATE = 230;
@@ -113,16 +113,20 @@ export default function ReportsExportPage() {
   const [categoryFilter, setCategoryFilter] = useState('ALL');
  
   useEffect(() => {
+    // All five tables paginated via fetchAllPages. Reports Export is
+    // the page most likely to hit multi-thousand-row tables (visits,
+    // intake_referrals both exceed 3k), and silent truncation here
+    // means exported CSVs/XLSX silently miss history.
     Promise.all([
-      supabase.from('visit_schedule_data').select('*'),
-      supabase.from('intake_referrals').select('*'),
-      supabase.from('auth_tracker').select('*'),
-      supabase.from('census_data').select('*'),
-      supabase.from('clinicians').select('*').eq('is_active', true),
+      fetchAllPages(supabase.from('visit_schedule_data').select('*')),
+      fetchAllPages(supabase.from('intake_referrals').select('*')),
+      fetchAllPages(supabase.from('auth_tracker').select('*')),
+      fetchAllPages(supabase.from('census_data').select('*')),
+      fetchAllPages(supabase.from('clinicians').select('*').eq('is_active', true)),
     ]).then(([v,i,a,c,cl]) => {
-      setVisits(v.data||[]); setIntake(i.data||[]);
-      setAuth(a.data||[]); setCensus(c.data||[]);
-      setClinicians(cl.data||[]); setLoading(false);
+      setVisits(v); setIntake(i);
+      setAuth(a); setCensus(c);
+      setClinicians(cl); setLoading(false);
     });
   }, []);
  
@@ -507,12 +511,13 @@ export default function ReportsExportPage() {
             break;
           }
  
-          // Lazy-fetch patient_master for status drift detection
-          const { data: master } = await supabase.from('patient_master')
-            .select('patient_key, current_status, previous_status, status_changed_at, has_been_active, has_been_discharged, total_referrals, last_discharge_date')
-            .limit(3000);
+          // Lazy-fetch patient_master for status drift detection (paginated)
+          const master = await fetchAllPages(
+            supabase.from('patient_master')
+              .select('patient_key, current_status, previous_status, status_changed_at, has_been_active, has_been_discharged, total_referrals, last_discharge_date')
+          );
           const masterMap = {};
-          (master||[]).forEach(m => { if (m.patient_key) masterMap[m.patient_key] = m; });
+          master.forEach(m => { if (m.patient_key) masterMap[m.patient_key] = m; });
  
           const fc = census.filter(c => regionFilter==='ALL' || c.region===regionFilter);
  

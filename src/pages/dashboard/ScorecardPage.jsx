@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 
 const RATE = 230;
 function isEval(e) { return /eval/i.test(e||''); }
@@ -44,13 +44,13 @@ export default function ScorecardPage() {
     const cutStr = cutoff.toISOString().slice(0,10);
 
     Promise.all([
-      supabase.from('visit_schedule_data').select('patient_name,visit_date,discipline,event_type,status,staff_name,region').not('visit_date','is',null),
-      supabase.from('intake_referrals').select('referral_status,date_received,referral_type').not('date_received','is',null),
-      supabase.from('auth_tracker').select('auth_status,created_at'),
+      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,visit_date,discipline,event_type,status,staff_name,region').not('visit_date','is',null)),
+      fetchAllPages(supabase.from('intake_referrals').select('referral_status,date_received,referral_type').not('date_received','is',null)),
+      fetchAllPages(supabase.from('auth_tracker').select('auth_status,created_at')),
     ]).then(([v, i, a]) => {
-      setVisits(v.data || []);
-      setIntake(i.data || []);
-      setAuth(a.data || []);
+      setVisits(v);
+      setIntake(i);
+      setAuth(a);
       setLoading(false);
     });
   }, []);

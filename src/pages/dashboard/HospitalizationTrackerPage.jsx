@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
 const LYMPH_BENCHMARK = 1;   // <1% target
@@ -255,11 +255,11 @@ export default function HospitalizationTrackerPage() {
   const canEdit = ['super_admin','ceo','admin','pod_leader'].includes(profile?.role);
 
   async function load() {
-    const [{ data: h }, { data: c }] = await Promise.all([
-      supabase.from('hospitalizations').select('*').order('admission_date', { ascending: false }),
-      supabase.from('census_data').select('patient_name, status, region, insurance').limit(2000),
+    const [h, c] = await Promise.all([
+      fetchAllPages(supabase.from('hospitalizations').select('*').order('admission_date', { ascending: false })),
+      fetchAllPages(supabase.from('census_data').select('patient_name, status, region, insurance')),
     ]);
-    setRecords(h||[]); setCensus(c||[]); setLoading(false);
+    setRecords(h); setCensus(c); setLoading(false);
   }
 
   useEffect(() => { load(); }, []);

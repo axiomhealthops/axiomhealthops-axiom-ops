@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
 // NOTE: A ZIP_REGION_MAP constant previously lived here but was unused
@@ -227,15 +227,15 @@ export default function WaitlistPage() {
 
   const load = useCallback(async () => {
     const [wl, cl, ir, vs] = await Promise.all([
-      supabase.from('waitlist_assignments').select('*'),
-      supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,zip,lat,lng').eq('is_active', true),
-      supabase.from('intake_referrals').select('patient_name,city,zip_code,county,diagnosis,contact_number,pcp_name,location').order('date_received', { ascending: false }),
-      supabase.from('visit_schedule_data').select('staff_name,visit_date,status').gte('visit_date', new Date(Date.now()-7*86400000).toISOString().slice(0,10)),
+      fetchAllPages(supabase.from('waitlist_assignments').select('*')),
+      fetchAllPages(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,zip,lat,lng').eq('is_active', true)),
+      fetchAllPages(supabase.from('intake_referrals').select('patient_name,city,zip_code,county,diagnosis,contact_number,pcp_name,location').order('date_received', { ascending: false })),
+      fetchAllPages(supabase.from('visit_schedule_data').select('staff_name,visit_date,status').gte('visit_date', new Date(Date.now()-7*86400000).toISOString().slice(0,10))),
     ]);
-    setWaitlist(wl.data || []);
-    setClinicians(cl.data || []);
-    setIntake(ir.data || []);
-    setVisits(vs.data || []);
+    setWaitlist(wl);
+    setClinicians(cl);
+    setIntake(ir);
+    setVisits(vs);
     setLoading(false);
   }, []);
 

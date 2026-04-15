@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
 const RATE = 230;
@@ -92,16 +92,17 @@ export default function RegionalManagerDashboard() {
   const canEditGoals = ['super_admin','ceo','admin'].includes(profile?.role);
 
   useEffect(() => {
+    // All paginated — visits and intake both exceed 1000 rows.
     Promise.all([
-      supabase.from('visit_schedule_data').select('*').not('visit_date','is',null),
-      supabase.from('intake_referrals').select('region,referral_status,date_received,insurance,patient_name,diagnosis').not('date_received','is',null),
-      supabase.from('clinicians').select('*').eq('is_active', true),
-      supabase.from('auth_tracker').select('region,auth_status,visits_authorized,visits_used,auth_expiry_date,insurance'),
-      supabase.from('rm_kpi_goals').select('*').order('region').order('period_type').order('period_number'),
+      fetchAllPages(supabase.from('visit_schedule_data').select('*').not('visit_date','is',null)),
+      fetchAllPages(supabase.from('intake_referrals').select('region,referral_status,date_received,insurance,patient_name,diagnosis').not('date_received','is',null)),
+      fetchAllPages(supabase.from('clinicians').select('*').eq('is_active', true)),
+      fetchAllPages(supabase.from('auth_tracker').select('region,auth_status,visits_authorized,visits_used,auth_expiry_date,insurance')),
+      fetchAllPages(supabase.from('rm_kpi_goals').select('*').order('region').order('period_type').order('period_number')),
     ]).then(([v,i,c,a,g]) => {
-      setVisits(v.data||[]); setIntake(i.data||[]);
-      setClinicians(c.data||[]); setAuth(a.data||[]);
-      setGoals(g.data||[]); setLoading(false);
+      setVisits(v); setIntake(i);
+      setClinicians(c); setAuth(a);
+      setGoals(g); setLoading(false);
     });
   }, []);
 

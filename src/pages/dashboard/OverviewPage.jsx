@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import StatCard from '../../components/StatCard';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { METRICS, REGIONS } from '../../lib/constants';
 
 const RATE = 230;
@@ -47,23 +47,31 @@ export default function OverviewPage() {
 
   useEffect(() => {
     const [wStart, wEnd] = weekBounds();
+    // All four tables paginated via fetchAllPages since census / auth /
+    // visits can each grow past the 1000-row PostgREST cap. data_freshness
+    // is 3 rows so pagination is a no-op for it.
     Promise.all([
-      // Filter (PDF) documentation rows server-side — they're Pariox docs, not real visits.
-      // .limit(3000) prevents the silent 1000-row PostgREST cap from truncating busy weeks.
-      supabase.from('visit_schedule_data')
-        .select('patient_name,visit_date,status,event_type,region,discipline,insurance')
-        .gte('visit_date', wStart).lte('visit_date', wEnd)
-        .not('event_type', 'ilike', '%(PDF)%')
-        .limit(3000),
-      supabase.from('auth_tracker')
-        .select('insurance,auth_status,visits_authorized,visits_used,auth_expiry_date,region,patient_name'),
-      supabase.from('census_data').select('insurance,region,status,patient_name'),
-      supabase.from('data_freshness').select('*'),
+      fetchAllPages(
+        supabase.from('visit_schedule_data')
+          .select('patient_name,visit_date,status,event_type,region,discipline,insurance')
+          .gte('visit_date', wStart).lte('visit_date', wEnd)
+          .not('event_type', 'ilike', '%(PDF)%')
+      ),
+      fetchAllPages(
+        supabase.from('auth_tracker')
+          .select('insurance,auth_status,visits_authorized,visits_used,auth_expiry_date,region,patient_name')
+      ),
+      fetchAllPages(
+        supabase.from('census_data').select('insurance,region,status,patient_name')
+      ),
+      fetchAllPages(
+        supabase.from('data_freshness').select('*')
+      ),
     ]).then(([v, a, c, f]) => {
-      setVisits(v.data || []);
-      setAuthStats(a.data || []);
-      setCensus(c.data || []);
-      setFreshness(f.data || []);
+      setVisits(v);
+      setAuthStats(a);
+      setCensus(c);
+      setFreshness(f);
       setLoading(false);
     });
   }, []);

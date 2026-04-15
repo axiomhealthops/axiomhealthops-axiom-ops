@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 
 // Regional Managers (not care coordinators)
 const REGIONAL_MANAGERS = {
@@ -26,15 +26,15 @@ export default function RegionsPage() {
 
   useEffect(() => {
     Promise.all([
-      supabase.from('clinicians').select('*').eq('is_active', true).order('full_name'),
-      supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region,insurance').not('visit_date','is',null),
-      supabase.from('intake_referrals').select('referral_status,date_received,region,patient_name').not('date_received','is',null),
-      supabase.from('auth_tracker').select('auth_status,region,patient_name,visits_used,visits_authorized'),
+      fetchAllPages(supabase.from('clinicians').select('*').eq('is_active', true).order('full_name')),
+      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region,insurance').not('visit_date','is',null)),
+      fetchAllPages(supabase.from('intake_referrals').select('referral_status,date_received,region,patient_name').not('date_received','is',null)),
+      fetchAllPages(supabase.from('auth_tracker').select('auth_status,region,patient_name,visits_used,visits_authorized')),
     ]).then(([cl, v, i, a]) => {
-      setClinicians(cl.data || []);
-      setVisits(v.data || []);
-      setIntake(i.data || []);
-      setAuth(a.data || []);
+      setClinicians(cl);
+      setVisits(v);
+      setIntake(i);
+      setAuth(a);
       setLoading(false);
     });
   }, []);

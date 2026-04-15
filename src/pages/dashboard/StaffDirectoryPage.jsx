@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 
 const REGION_ORDER = ['A','B','C','G','H','J','M','N','T','V'];
 const REGIONAL_MANAGERS = {
@@ -144,9 +144,9 @@ export default function StaffDirectoryPage() {
 
   useEffect(() => {
     Promise.all([
-      supabase.from('clinicians').select('*').order('full_name'),
-      supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region'),
-    ]).then(([c, v]) => { setClinicians(c.data||[]); setVisits(v.data||[]); setLoading(false); });
+      fetchAllPages(supabase.from('clinicians').select('*').order('full_name')),
+      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region')),
+    ]).then(([c, v]) => { setClinicians(c); setVisits(v); setLoading(false); });
   }, []);
 
   async function handleSave(id, updates) {

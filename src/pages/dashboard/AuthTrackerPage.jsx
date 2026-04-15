@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import AIDocExtractor from './AIDocExtractor';
  
 var INSURANCES = ['Aetna','CarePlus','Cigna','Devoted','Fenyx','FHCP','Health First','Humana','Medicare','Simply','United','Other'];
@@ -473,14 +473,13 @@ export default function AuthTrackerPage() {
  
   function fetchRecords() {
     setLoading(true);
+    // Paginated — auth_tracker at 290 today but will grow; census at 750+
     Promise.all([
-      supabase.from('auth_tracker').select('*').order('created_at', { ascending: false }).limit(800),
-      supabase.from('census_data').select('patient_name,region,insurance,status').order('patient_name'),
+      fetchAllPages(supabase.from('auth_tracker').select('*').order('created_at', { ascending: false })),
+      fetchAllPages(supabase.from('census_data').select('patient_name,region,insurance,status').order('patient_name')),
     ]).then(function(results) {
-      var authData = results[0].data || [];
-      var census = results[1].data || [];
-      setRecords(authData);
-      setCensusPatients(census);
+      setRecords(results[0]);
+      setCensusPatients(results[1]);
       setLoading(false);
     });
   }
