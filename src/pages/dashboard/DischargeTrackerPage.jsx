@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 const REASONS = ['goals_met','patient_request','insurance_exhausted','non_compliance','moved','deceased','hospitalized','physician_order','other'];
 const OUTCOMES = ['independent','improved','referred_out','readmit_possible','no_change','unknown'];
@@ -126,11 +127,21 @@ export default function DischargeTrackerPage() {
   const [selected, setSelected] = useState(null);
   const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
+  const regionScope = useAssignedRegions();
+
   const load = useCallback(async () => {
-    const { data } = await supabase.from('patient_discharges').select('*').order('discharge_date', { ascending: false });
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setDischarges([]); setLoading(false); return;
+    }
+    const { data } = await regionScope.applyToQuery(
+      supabase.from('patient_discharges')
+        .select('*')
+        .order('discharge_date', { ascending: false })
+    );
     setDischarges(data || []);
     setLoading(false);
-  }, []);
+  }, [regionScope.isAllAccess, regionScope.loading, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
 

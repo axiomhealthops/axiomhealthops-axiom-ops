@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 const BLENDED_RATE = 185;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
@@ -96,15 +97,25 @@ export default function PipelineTrackerPage() {
   const [sortField, setSortField] = useState('days_since_referral');
   const [selected, setSelected] = useState(null);
 
-  const load = useCallback(async () => {
-    const { data: census } = await supabase.from('census_data')
-      .select('patient_name,region,status,insurance,first_seen_date')
-      .or('status.ilike.%soc pending%,status.ilike.%eval pending%');
+  const regionScope = useAssignedRegions();
 
-    const { data: intakeAll } = await supabase.from('intake_referrals')
-      .select('patient_name,date_received,referral_source,pcp_name,diagnosis,referral_status')
-      .eq('referral_status', 'Accepted')
-      .order('date_received', { ascending: false });
+  const load = useCallback(async () => {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setPatients([]); setLoading(false); return;
+    }
+    const { data: census } = await regionScope.applyToQuery(
+      supabase.from('census_data')
+        .select('patient_name,region,status,insurance,first_seen_date')
+        .or('status.ilike.%soc pending%,status.ilike.%eval pending%')
+    );
+
+    const { data: intakeAll } = await regionScope.applyToQuery(
+      supabase.from('intake_referrals')
+        .select('patient_name,date_received,referral_source,pcp_name,diagnosis,referral_status,region')
+        .eq('referral_status', 'Accepted')
+        .order('date_received', { ascending: false })
+    );
 
     // Build intake lookup (most recent accepted referral per patient)
     const intakeMap = {};
@@ -138,7 +149,7 @@ export default function PipelineTrackerPage() {
     });
     setPatients(enriched);
     setLoading(false);
-  }, []);
+  }, [regionScope.isAllAccess, regionScope.loading, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
 

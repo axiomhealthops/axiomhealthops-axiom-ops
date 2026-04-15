@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
@@ -88,17 +89,23 @@ export default function MissedCancelledReportPage() {
   const [sortField, setSortField] = useState('visit_date');
   const [sortDir, setSortDir] = useState('desc');
   const { profile } = useAuth();
+  // Unified region scoping — replaces the RM-only branch this page had
+  // previously. Now all non-super_admin users are scoped to their
+  // assigned regions consistently.
+  const regionScope = useAssignedRegions();
 
   useEffect(() => {
-    const isRM = profile?.role === 'regional_manager';
-    const myRegions = isRM ? (profile?.regions || []) : null;
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setVisits([]); setLoading(false); return;
+    }
     let query = supabase.from('visit_schedule_data')
       .select('*')
       .or('status.ilike.%miss%,event_type.ilike.%cancel%')
       .order('visit_date', { ascending: false });
-    if (myRegions && myRegions.length > 0) query = query.in('region', myRegions);
+    query = regionScope.applyToQuery(query);
     query.then(({ data }) => { setVisits(data || []); setLoading(false); });
-  }, [profile]);
+  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   // Derived filter options
   const clinicians = useMemo(() =>

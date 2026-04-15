@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 const REGIONAL_MANAGERS = {
@@ -170,16 +171,26 @@ export default function OnHoldRecoveryPage() {
   const [sortField, setSortField] = useState('days_on_hold');
   const [sortDir, setSortDir] = useState('desc');
 
-  async function load() {
-    // Sync from census first — add any new on-hold patients
-    const { data: census } = await supabase
-      .from('census_data')
-      .select('patient_name, region, status, insurance, first_seen_date')
-      .ilike('status', '%hold%');
+  const regionScope = useAssignedRegions();
 
-    const { data: existing } = await supabase
-      .from('on_hold_recovery')
-      .select('patient_name, recovery_status');
+  async function load() {
+    if (regionScope.loading) return;
+    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+      setRecords([]); setLoading(false); return;
+    }
+    // Sync from census first — add any new on-hold patients. Scope to
+    // the user's regions so a care coord doesn't inadvertently seed
+    // on_hold_recovery rows for regions they don't own.
+    const { data: census } = await regionScope.applyToQuery(
+      supabase.from('census_data')
+        .select('patient_name, region, status, insurance, first_seen_date')
+        .ilike('status', '%hold%')
+    );
+
+    const { data: existing } = await regionScope.applyToQuery(
+      supabase.from('on_hold_recovery')
+        .select('patient_name, recovery_status')
+    );
 
     const existingActive = new Set(
       (existing || []).filter(r => r.recovery_status === 'on_hold').map(r => r.patient_name)
@@ -213,10 +224,11 @@ export default function OnHoldRecoveryPage() {
       ? null  // would do server-side calc here
       : null;
 
-    const { data } = await supabase
-      .from('on_hold_recovery')
-      .select('*')
-      .order('hold_date', { ascending: true });
+    const { data } = await regionScope.applyToQuery(
+      supabase.from('on_hold_recovery')
+        .select('*')
+        .order('hold_date', { ascending: true })
+    );
 
     // Calculate days on hold client-side
     const enriched = (data || []).map(r => ({
@@ -228,7 +240,7 @@ export default function OnHoldRecoveryPage() {
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   const filtered = useMemo(() => {
     return records.filter(r => {
