@@ -98,7 +98,15 @@ export default function ProductivityPage() {
         return supabase.from('visit_schedule_data')
           .select('staff_name_normalized,visit_date,status,event_type,patient_name')
           .gte('visit_date', weekStart).lte('visit_date', weekEnd)
+          // Exclude Pariox documentation (PDF) rows AND events where the
+          // visit didn't actually happen: Cancelled Treatment, Attempted
+          // Visit, Missed, No Show. Same filter used in recompute_last_visit_dates.
           .not('event_type', 'ilike', '%(PDF)%')
+          .not('event_type', 'ilike', '%cancel%')
+          .not('event_type', 'ilike', '%attempt%')
+          .not('event_type', 'ilike', '%missed%')
+          .not('event_type', 'ilike', '%no show%')
+          .not('event_type', 'ilike', '%no-show%')
           .range(from, from + PAGE - 1)
           .then(function(res) {
             if (res.error || !res.data || res.data.length === 0) return all;
