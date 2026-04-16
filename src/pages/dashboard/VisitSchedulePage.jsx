@@ -285,9 +285,15 @@ export default function VisitSchedulePage() {
     // ── Deduplicate: when a Completed/Cancelled "(PDF)" record exists for
     //    the same patient+date+clinician+base_event, drop the stale Scheduled row.
     //    This fixes inflated counts and stale "Scheduled" badges on finished visits.
-    var STATUS_RANK = { completed: 3, cancelled: 2, missed: 1, scheduled: 0 };
-    function rank(s) { return STATUS_RANK[(s || '').toLowerCase()] !== undefined ? STATUS_RANK[(s || '').toLowerCase()] : -1; }
-    function baseEvent(et) { return (et || '').replace(/\s*\(PDF\)\s*$/i, '').trim(); }
+    function rank(s) {
+      var l = (s || '').toLowerCase();
+      if (l.includes('completed')) return 3;
+      if (l.includes('cancelled')) return 2;
+      if (l.includes('missed')) return 1;
+      if (l.includes('scheduled')) return 0;
+      return -1;
+    }
+    function baseEvent(et) { return (et || '').replace(/\s*\(PDF\)\s*$/i, '').replace(/\s+$/, ''); }
     function dedupKey(v) {
       return [v.patient_name || '', v.visit_date || '', v.staff_name_normalized || v.staff_name || '', baseEvent(v.event_type)].join('||').toLowerCase();
     }
