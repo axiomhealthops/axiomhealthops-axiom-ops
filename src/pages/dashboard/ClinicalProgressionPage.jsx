@@ -228,6 +228,14 @@ export default function ClinicalProgressionPage() {
       const nextLevel = currentLvl && currentLvl !== 'maint' && currentIdx < levelKeys.length - 1 ? levelKeys[currentIdx + 1] : null;
       const cs = clinicalSettings[p.patient_name] || null;
 
+      // Auto-derive LOC from treatment level when no manual LOC is assigned.
+      // Level 5 → LOC 5 (High Risk), Level 4 → LOC 4, etc.
+      // Maintenance/Level 1 → LOC 1, Evaluation → LOC 3 (moderate default).
+      const LOC_FROM_LEVEL = { '5':5, '4':4, '3':3, '2':2, '1':1, 'maint':1, 'eval':3 };
+      const manualLoc = cs?.loc || null;
+      const derivedLoc = currentLvl ? (LOC_FROM_LEVEL[currentLvl] || null) : null;
+      const effectiveLoc = manualLoc || derivedLoc;
+
       return {
         patient_name: p.patient_name,
         region: p.region || data.region,
@@ -240,7 +248,9 @@ export default function ClinicalProgressionPage() {
         totalCompletedVisits: completedVisits.length,
         // Clinical settings
         visit_frequency: cs?.visit_frequency || null,
-        loc: cs?.loc || null,
+        loc: effectiveLoc,
+        loc_manual: manualLoc,
+        loc_derived: derivedLoc,
         loc_notes: cs?.loc_notes || null,
         frequency_notes: cs?.frequency_notes || null,
         settings_assigned_by: cs?.assigned_by || null,
@@ -252,7 +262,8 @@ export default function ClinicalProgressionPage() {
     return patients.filter(p => {
       if (filterRegion !== 'ALL' && p.region !== filterRegion) return false;
       if (filterLevel !== 'ALL' && p.currentLevel !== filterLevel) return false;
-      if (filterLoc !== 'ALL' && String(p.loc) !== filterLoc) return false;
+      if (filterLoc === '0' && p.loc) return false;
+      if (filterLoc !== 'ALL' && filterLoc !== '0' && String(p.loc) !== filterLoc) return false;
       if (filterFreq !== 'ALL' && p.visit_frequency !== filterFreq) return false;
       if (filterFlag === 'ready' && !p.isComplete) return false;
       if (filterFlag === 'due' && !p.reassessmentDue) return false;
@@ -277,6 +288,8 @@ export default function ClinicalProgressionPage() {
     overdue: patients.filter(p => p.isOverdue).length,
     highRisk: patients.filter(p => p.loc === 5).length,
     noLoc: patients.filter(p => !p.loc).length,
+    manualLocCount: patients.filter(p => p.loc_manual).length,
+    derivedLocCount: patients.filter(p => !p.loc_manual && p.loc_derived).length,
     byLevel: LEVELS.reduce((acc,l) => ({ ...acc, [l.key]: patients.filter(p=>p.currentLevel===l.key).length }), {}),
     byLoc: LOC_LEVELS.reduce((acc,l) => ({ ...acc, [l.key]: patients.filter(p=>p.loc===l.key).length }), {}),
     byFreq: FREQUENCIES.reduce((acc,f) => ({ ...acc, [f.key]: patients.filter(p=>p.visit_frequency===f.key).length }), {}),
@@ -302,7 +315,7 @@ export default function ClinicalProgressionPage() {
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
         title="Clinical Progression"
-        subtitle={`${stats.total} patients · ${stats.highRisk} LOC 5 high-risk · ${stats.readyForStepDown} ready to step down`}
+        subtitle={`${stats.total} active patients · ${stats.highRisk} at LOC 5 (High Risk) · ${stats.byLevel['5']||0} at Treatment L5 · ${stats.readyForStepDown} ready to step down`}
       />
       <div style={{ flex:1 }}>
 
@@ -371,7 +384,14 @@ export default function ClinicalProgressionPage() {
 
           {/* LOC Distribution */}
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:16 }}>
-            <div style={{ fontSize:13, fontWeight:700, marginBottom:12 }}>Level of Care (LOC) Distribution</div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+              <div style={{ fontSize:13, fontWeight:700 }}>Level of Care (LOC) Distribution</div>
+              <div style={{ fontSize:10, color:'var(--gray)' }}>
+                {stats.manualLocCount > 0 && <span>{stats.manualLocCount} manually assigned · </span>}
+                {stats.derivedLocCount > 0 && <span>{stats.derivedLocCount} auto-derived from treatment level · </span>}
+                {stats.noLoc > 0 && <span style={{ color:'#D97706' }}>{stats.noLoc} unassigned</span>}
+              </div>
+            </div>
             <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
               {LOC_LEVELS.map(l => {
                 const cnt = stats.byLoc[l.key] || 0;
@@ -389,8 +409,27 @@ export default function ClinicalProgressionPage() {
                 onClick={() => setFilterLoc(filterLoc==='0'?'ALL':'0')}>
                 <div style={{ fontSize:12, fontWeight:800, color:'#6B7280' }}>Unassigned</div>
                 <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', color:'#6B7280' }}>{stats.noLoc}</div>
-                <div style={{ fontSize:9, color:'#6B7280', marginTop:2 }}>Needs assignment</div>
+                <div style={{ fontSize:9, color:'#6B7280', marginTop:2 }}>No visits or level</div>
               </div>
+            </div>
+          </div>
+
+          {/* Treatment Level Distribution */}
+          <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:16 }}>
+            <div style={{ fontSize:13, fontWeight:700, marginBottom:12 }}>Treatment Level Distribution</div>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+              {LEVELS.filter(l => l.key !== 'eval').map(l => {
+                const cnt = stats.byLevel[l.key] || 0;
+                const active = filterLevel === l.key;
+                return (
+                  <div key={l.key} onClick={() => setFilterLevel(active?'ALL':l.key)}
+                    style={{ flex:1, minWidth:80, background:l.bg, border:`2px solid ${active?l.color:'transparent'}`, borderRadius:8, padding:'10px 12px', cursor:'pointer' }}>
+                    <div style={{ fontSize:12, fontWeight:800, color:l.color }}>{l.short}</div>
+                    <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', color:l.color }}>{cnt}</div>
+                    <div style={{ fontSize:9, color:l.color, marginTop:2 }}>{l.desc.slice(0,30)}</div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -445,7 +484,7 @@ export default function ClinicalProgressionPage() {
                     <div>
                       <div style={{ fontSize:12, fontWeight:600 }}>{p.patient_name}</div>
                       {p.reassessmentDue && <div style={{ fontSize:9, fontWeight:700, color:'#D97706' }}>📋 REASSESS</div>}
-                      {!p.loc && <div style={{ fontSize:9, color:'#9CA3AF' }}>No LOC</div>}
+                      {!p.loc && !p.currentLevel && <div style={{ fontSize:9, color:'#9CA3AF' }}>No LOC / No visits</div>}
                     </div>
                     <span style={{ fontSize:11, fontWeight:700, color:'var(--gray)' }}>{p.region}</span>
                     <div>
@@ -523,6 +562,7 @@ export default function ClinicalProgressionPage() {
                             <>
                               <div style={{ fontSize:20, fontWeight:900, color:lCfg.color }}>{lCfg.label} — {lCfg.full}</div>
                               <div style={{ fontSize:11, color:lCfg.color, marginTop:3 }}>{lCfg.desc}</div>
+                              {!p.loc_manual && p.loc_derived && <div style={{ fontSize:10, color:'var(--gray)', marginTop:4 }}>Auto-derived from treatment level · Edit to override</div>}
                               {p.loc_notes && <div style={{ fontSize:11, color:'var(--gray)', marginTop:6, fontStyle:'italic' }}>{p.loc_notes}</div>}
                             </>
                           ) : (
