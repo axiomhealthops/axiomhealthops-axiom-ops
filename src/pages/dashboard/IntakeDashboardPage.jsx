@@ -1333,6 +1333,9 @@ export default function IntakeDashboardPage() {
                 <span style={{ fontSize: 12, color: 'var(--gray)', marginLeft: 'auto' }}>{filtered.length.toLocaleString()} records</span>
               </div>
 
+              <datalist id="ins-edit-list">
+                {['Humana','CarePlus','FHCP','Devoted','Health First','Aetna','Medicare','Simply','Cigna','United Healthcare','BlueCross BlueShield','Molina','WellCare','Bright Health','Oscar','Ambetter','AvMed','Sunshine Health','Staywell','Prestige'].map(function(o) { return <option key={o} value={o} />; })}
+              </datalist>
               <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '0.8fr 2.2fr 0.5fr 0.9fr 1.5fr 1.5fr 0.8fr', padding: '8px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   <span>Date</span><span>Patient</span><span>Rgn</span><span>Type</span><span>Insurance</span><span>Diagnosis</span><span>Status</span>
@@ -1353,7 +1356,16 @@ export default function IntakeDashboardPage() {
                       </div>
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
                       <span style={{ fontSize: 10, color: 'var(--gray)' }}>{(r.referral_type || '').replace(' Referral','').replace('Existing Patient','Existing') || '—'}</span>
-                      <span style={{ fontSize: 11, color: 'var(--black)' }}>{r.insurance || '—'}</span>
+                      <input list="ins-edit-list" value={r.insurance||''} onChange={function(e) {
+                        var newIns = e.target.value;
+                        setRecords(function(prev) { return prev.map(function(rec) { return rec.id === r.id ? Object.assign({}, rec, { insurance: newIns }) : rec; }); });
+                      }} onBlur={async function(e) {
+                        var newIns = e.target.value;
+                        await supabase.from('intake_referrals').update({ insurance: newIns, updated_at: new Date().toISOString() }).eq('id', r.id);
+                      }} style={{ fontSize: 11, color: 'var(--black)', border: '1px solid transparent', borderRadius: 4, padding: '2px 4px', outline: 'none', background: 'transparent', width: '100%', boxSizing: 'border-box' }}
+                      onFocus={function(e) { e.target.style.border = '1px solid var(--border)'; e.target.style.background = 'var(--card-bg)'; }}
+                      onMouseOut={function(e) { if (document.activeElement !== e.target) { e.target.style.border = '1px solid transparent'; e.target.style.background = 'transparent'; } }}
+                      />
                       <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 50)}</span>
                       <select value={st} onChange={async function(e) {
                         var newStatus = e.target.value;

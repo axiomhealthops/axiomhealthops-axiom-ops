@@ -237,7 +237,11 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
           {/* STEP 2: Insurance */}
           {step === 2 && (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-              <F label="Primary Insurance *" err={errors.insurance}><S name="insurance" value={form.insurance} onChange={set} err={errors.insurance} opts={INSURANCES} /></F>
+              <F label="Primary Insurance *" err={errors.insurance}>
+                <input list="ins-list" name="insurance" value={form.insurance||''} onChange={e => set('insurance', e.target.value)} placeholder="Type or select insurance..."
+                  style={{ width:'100%', padding:'8px 10px', border:`1px solid ${errors.insurance?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)' }} />
+                <datalist id="ins-list">{INSURANCES.map(o => <option key={o} value={o} />)}</datalist>
+              </F>
               <F label="Policy / Member ID"><I name="policy_number" value={form.policy_number} onChange={set} err={errors.policy_number} /></F>
               <F label="Medicare Type">
                 <select value={form.medicare_type} onChange={e => set('medicare_type', e.target.value)}

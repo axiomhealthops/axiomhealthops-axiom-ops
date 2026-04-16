@@ -23,8 +23,9 @@ DIAGNOSIS EXTRACTION — CRITICAL FOR TRIAGE:
   - E11.621 / E11.622 (Diabetic foot ulcer — wound care, flag SWIFT team)
   Preserve the exact ICD code in the diagnosis string so downstream triage can parse it.
 
-INSURANCE — CRITICAL FOR ACCEPTANCE:
+INSURANCE — CRITICAL FOR ACCEPTANCE AND PAYOR TRACKING:
   The following payors are commonly accepted: Humana, CarePlus, Cigna, Aetna, FHCP, Devoted, Simply, Medicare, BlueCross/BlueShield, United Healthcare. Normalize the carrier name to one of these canonical forms when possible (e.g. "Humana Gold" → "Humana", "Cigna HealthSpring" → "Cigna").
+  IMPORTANT: If the insurance does NOT match any of the above, preserve the ACTUAL insurance carrier name exactly as written on the document. Do NOT use "Other" — we need the real carrier name for payor opportunity analysis (e.g. "Molina", "WellCare", "Bright Health", "Oscar", etc.).
 
 {
   "patient_name": "Last, First format if possible",
