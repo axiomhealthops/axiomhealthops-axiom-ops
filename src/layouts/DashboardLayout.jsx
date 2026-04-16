@@ -1,10 +1,39 @@
 import { useState, useEffect } from 'react';
 import Sidebar from '../components/Sidebar';
 
+var WHATS_NEW = [
+  'AI Doc Extractor save bug fixed — notes column added',
+  'Modal escape: Esc key + click-outside now close intake & AI modals',
+  'KPI tiles are now clickable on RM Daily, Clinician Accountability, Director, Productivity dashboards',
+  'Auth Tracker + Auth Coordinator: KPI tiles clickable, modals hardened',
+];
+
+function WhatsNewBanner({ onDismiss }) {
+  return (
+    <div style={{ background:'#EFF6FF', borderBottom:'2px solid #BFDBFE', padding:'8px 20px', display:'flex', alignItems:'center', gap:12, fontSize:12, flexShrink:0, zIndex:50 }}>
+      <span style={{ fontSize:14, flexShrink:0 }}>🆕</span>
+      <div style={{ flex:1, display:'flex', flexWrap:'wrap', gap:6, alignItems:'center' }}>
+        <span style={{ fontWeight:700, color:'#1E40AF', marginRight:4 }}>What's new:</span>
+        {WHATS_NEW.map(function(item, i) {
+          return (
+            <span key={i} style={{ background:'#DBEAFE', color:'#1E40AF', padding:'2px 8px', borderRadius:999, fontSize:11, fontWeight:500, whiteSpace:'nowrap' }}>
+              {item}
+            </span>
+          );
+        })}
+      </div>
+      <button onClick={onDismiss}
+        style={{ background:'none', border:'none', fontSize:16, color:'#93C5FD', cursor:'pointer', padding:'0 4px', flexShrink:0 }}
+        title="Dismiss for this session">×</button>
+    </div>
+  );
+}
+
 export default function DashboardLayout({ activePage, onNavigate, children, alertBadges = {} }) {
   const [collapsed, setCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   // Track viewport size so we can collapse the sidebar off-layout on mobile
   useEffect(() => {
@@ -36,8 +65,11 @@ export default function DashboardLayout({ activePage, onNavigate, children, aler
           }}
         >☰</button>
 
+        {/* What's new banner */}
+        {!bannerDismissed && <div style={{ paddingTop: 52 }}><WhatsNewBanner onDismiss={() => setBannerDismissed(true)} /></div>}
+
         {/* Main content — full width, small top padding so content doesn't sit under hamburger */}
-        <main style={{ minHeight: '100vh', paddingTop: 8, display: 'flex', flexDirection: 'column' }}>
+        <main style={{ minHeight: '100vh', paddingTop: bannerDismissed ? 8 : 0, display: 'flex', flexDirection: 'column' }}>
           {children}
         </main>
 
@@ -78,6 +110,7 @@ export default function DashboardLayout({ activePage, onNavigate, children, aler
         marginLeft: sidebarWidth,
         transition: 'margin-left 0.2s ease',
       }}>
+        {!bannerDismissed && <WhatsNewBanner onDismiss={() => setBannerDismissed(true)} />}
         {children}
       </main>
     </div>

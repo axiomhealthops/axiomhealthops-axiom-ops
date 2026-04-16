@@ -35,6 +35,13 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+
+  // Escape-to-close (disabled while saving)
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape' && !saving) onClose(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, saving]);
  
   async function save() {
     setSaving(true);
@@ -101,8 +108,10 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
   ];
  
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24, overflowY:'auto' }}>
-      <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:580, boxShadow:'0 24px 60px rgba(0,0,0,0.4)' }}>
+    <div onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24, overflowY:'auto' }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:580, boxShadow:'0 24px 60px rgba(0,0,0,0.4)' }}>
         <div style={{ padding:'16px 22px', background:'#0F1117', borderRadius:'14px 14px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <div>
             <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>{auth.patient_name}</div>

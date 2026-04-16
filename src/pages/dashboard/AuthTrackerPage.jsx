@@ -274,6 +274,15 @@ function DocumentPanel(props) {
 // ── Add/Edit Modal ────────────────────────────────────────────────────
 function AddEditModal(props) {
   var rec = props.record;
+  var [saving, setSaving] = useState(false);
+
+  // Escape-to-close (disabled while saving)
+  useEffect(function() {
+    function onKey(e) { if (e.key === 'Escape' && !saving) props.onClose(); }
+    window.addEventListener('keydown', onKey);
+    return function() { window.removeEventListener('keydown', onKey); };
+  }, [props.onClose, saving]);
+
   var [form, setForm] = useState(rec ? Object.assign({}, rec) : {
     patient_name: '', dob: '', member_id: '', phone: '', region: '',
     insurance: '', insurance_type: 'standard', auth_number: '', request_type: 'initial',
@@ -296,13 +305,14 @@ function AddEditModal(props) {
   }
  
   async function handleSave() {
+    setSaving(true);
     var data = Object.assign({}, form);
     ['dob','soc_date','auth_submitted_date','auth_needed_by','auth_approved_date','auth_expiry_date'].forEach(function(f) { if (!data[f]) data[f] = null; });
     ['visits_authorized','visits_used','evals_authorized','evals_used','reassessments_authorized','reassessments_used'].forEach(function(f) { data[f] = parseInt(data[f]) || 0; });
     var result = rec && rec.id
       ? await supabase.from('auth_tracker').update(data).eq('id', rec.id)
       : await supabase.from('auth_tracker').insert([data]);
-    if (result.error) { alert('Error: ' + result.error.message); return; }
+    if (result.error) { alert('Error: ' + result.error.message); setSaving(false); return; }
     // Recompute auth sequence for this patient after any save
     if (data.patient_name) {
       await supabase.rpc('recompute_auth_sequence', { p_patient_name: data.patient_name });
@@ -315,8 +325,10 @@ function AddEditModal(props) {
   var SEC = { fontSize: 11, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12, marginTop: 4 };
  
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-      <div style={{ background: 'var(--card-bg)', borderRadius: 14, width: '100%', maxWidth: 780, maxHeight: '90vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+    <div onClick={function(e) { if (e.target === e.currentTarget && !saving) props.onClose(); }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={function(e) { e.stopPropagation(); }}
+        style={{ background: 'var(--card-bg)', borderRadius: 14, width: '100%', maxWidth: 780, maxHeight: '90vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
         <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, background: 'var(--card-bg)', zIndex: 10 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--black)' }}>{rec ? 'Edit Auth Record' : 'New Auth Record'}</div>
           <button onClick={props.onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: 'var(--gray)', cursor: 'pointer' }}>&#10005;</button>
@@ -447,8 +459,8 @@ function AddEditModal(props) {
           </div>
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-            <button onClick={props.onClose} style={{ padding: '10px 20px', background: 'none', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--gray)', cursor: 'pointer' }}>Cancel</button>
-            <button onClick={handleSave} style={{ padding: '10px 24px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Save Record</button>
+            <button onClick={props.onClose} disabled={saving} style={{ padding: '10px 20px', background: 'none', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--gray)', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.5 : 1 }}>Cancel</button>
+            <button onClick={handleSave} disabled={saving} style={{ padding: '10px 24px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1 }}>{saving ? 'Saving...' : 'Save Record'}</button>
           </div>
         </div>
       </div>
@@ -581,18 +593,22 @@ export default function AuthTrackerPage() {
         {/* Summary */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
-            { label: 'Census Patients',  val: censusPatients.length, color: 'var(--black)', sub: records.length + ' have auth records' },
-            { label: 'Active Auths',       val: active,         color: 'var(--green)', sub: 'currently authorized' },
-            { label: 'Critical',           val: critical,       color: '#DC2626',      sub: '\u22647 visits or denied',   alert: critical > 0 },
-            { label: 'Auth Pending',       val: pending,        color: '#92400E',      sub: 'awaiting approval',          alert: pending > 0 },
-            { label: 'Expiring \u226430d', val: expiring30,     color: '#F59E0B',      sub: 'need renewal soon',          alert: expiring30 > 0 },
-            { label: 'Denied / Appeal',    val: denied,         color: '#6D28D9',      sub: 'needs action',               alert: denied > 0 },
+            { label: 'Census Patients',  val: censusPatients.length, color: 'var(--black)', sub: records.length + ' have auth records', tab: 'no_auth' },
+            { label: 'Active Auths',       val: active,         color: 'var(--green)', sub: 'currently authorized', tab: 'all' },
+            { label: 'Critical',           val: critical,       color: '#DC2626',      sub: '\u22647 visits or denied',   alert: critical > 0, tab: 'critical' },
+            { label: 'Auth Pending',       val: pending,        color: '#92400E',      sub: 'awaiting approval',          alert: pending > 0, tab: 'pending' },
+            { label: 'Expiring \u226430d', val: expiring30,     color: '#F59E0B',      sub: 'need renewal soon',          alert: expiring30 > 0, tab: 'expiring' },
+            { label: 'Denied / Appeal',    val: denied,         color: '#6D28D9',      sub: 'needs action',               alert: denied > 0, tab: 'denied' },
           ].map(function(tile) {
+            var isActive = activeTab === tile.tab;
             return (
-              <div key={tile.label} style={{ flex: 1, padding: '10px 16px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFFBF5' : 'transparent' }}>
+              <div key={tile.label} onClick={function() { setActiveTab(isActive ? 'all' : tile.tab); }}
+                style={{ flex: 1, padding: '10px 16px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFFBF5' : 'transparent', cursor: 'pointer', borderBottom: isActive ? '2px solid ' + tile.color : '2px solid transparent', transition: 'border-bottom 0.15s ease' }}>
                 <div style={{ fontSize: 10, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{tile.label}</div>
                 <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 2 }}>{tile.val}</div>
-                <div style={{ fontSize: 10, color: tile.alert ? tile.color : 'var(--gray)', marginTop: 2, fontWeight: tile.alert ? 600 : 400 }}>{tile.sub}</div>
+                <div style={{ fontSize: 10, color: tile.alert ? tile.color : 'var(--gray)', marginTop: 2, fontWeight: tile.alert ? 600 : 400 }}>
+                  {isActive ? '\u2713 showing' : tile.sub}
+                </div>
               </div>
             );
           })}
