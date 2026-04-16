@@ -195,15 +195,50 @@ export default function ClinicalProgressionPage() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // Priority for level resolution when multiple visits exist on the same date.
+  // Treatment visits (Level N) take priority over Reassessments/Evaluations
+  // because the treatment level defines the patient's clinical stage.
+  const LEVEL_PRIORITY = { '5':10, '4':9, '3':8, '2':7, '1':6, 'maint':5, 'eval':1 };
+
   const patients = useMemo(() => {
-    const byPatient = {};
+    // Phase 1: Group all visits by patient
+    const rawByPatient = {};
     visits.forEach(v => {
       if (!v.patient_name) return;
-      const lvl = getLevel(v.event_type);
-      if (!lvl) return;
-      const isCompleted = /completed/i.test(v.status||'') && !/cancel/i.test(v.event_type||'');
-      if (!byPatient[v.patient_name]) byPatient[v.patient_name] = { visits: [], region: v.region };
-      byPatient[v.patient_name].visits.push({ ...v, level: lvl, completed: isCompleted });
+      if (!rawByPatient[v.patient_name]) rawByPatient[v.patient_name] = { visits: [], region: v.region };
+      rawByPatient[v.patient_name].visits.push(v);
+    });
+
+    // Phase 2: Deduplicate co-treat visits. When PT+PTA (or OT+COTA) see
+    // the same patient on the same day, that is ONE patient encounter.
+    // For the level, prefer the treatment visit over the reassessment.
+    const byPatient = {};
+    Object.entries(rawByPatient).forEach(([name, data]) => {
+      const encounterMap = {}; // "date" → merged encounter
+      data.visits.forEach(v => {
+        const lvl = getLevel(v.event_type);
+        if (!lvl) return;
+        const isCompleted = /completed/i.test(v.status||'') && !/cancel/i.test(v.event_type||'');
+        const isScheduled = /scheduled/i.test(v.status||'');
+        const dateKey = v.visit_date || 'nodate';
+        const statusKey = isCompleted ? 'completed' : isScheduled ? 'scheduled' : 'other';
+        const key = dateKey + '||' + statusKey;
+        const priority = LEVEL_PRIORITY[lvl] || 0;
+
+        if (!encounterMap[key]) {
+          encounterMap[key] = { ...v, level: lvl, completed: isCompleted, _priority: priority, _staffList: [v.staff_name] };
+        } else {
+          // Same patient + date + status bucket → co-treat. Keep higher-priority level.
+          encounterMap[key]._staffList.push(v.staff_name);
+          if (priority > encounterMap[key]._priority) {
+            encounterMap[key].level = lvl;
+            encounterMap[key].event_type = v.event_type;
+            encounterMap[key]._priority = priority;
+          }
+          // Keep first staff as primary clinician
+        }
+      });
+      byPatient[name] = { visits: Object.values(encounterMap), region: data.region };
     });
 
     return census.map(p => {
