@@ -75,6 +75,10 @@ export default function ProductivityPage() {
   var [typeFilter, setTypeFilter] = useState('ALL');
   var [sortBy, setSortBy] = useState('region');
   var [search, setSearch] = useState('');
+  // Which KPI tile is acting as a scope filter. Click a tile to filter the
+  // table to the clinicians it represents; click again to clear. Per Ariel:
+  // the tiles read as cards but weren't clickable. Now they behave as scopes.
+  var [scope, setScope] = useState('ALL');
 
   // Compute the Sun-Sat bounds once per render. Productivity is intentionally
   // a weekly metric — every count below is scoped to this calendar week only.
@@ -189,6 +193,13 @@ export default function ProductivityPage() {
     return enriched.filter(function(c) {
       if (regionFilter !== 'ALL' && c.region !== regionFilter) return false;
       if (typeFilter !== 'ALL' && c.employment_type !== typeFilter) return false;
+      // Scope from clicking a KPI tile (same predicates as summary counters).
+      if (scope === 'completed'    && !(c.done > 0)) return false;
+      if (scope === 'scheduled'    && !(c.stats.scheduled > 0)) return false;
+      if (scope === 'notes'        && !(c.stats.missedActive > 0)) return false;
+      if (scope === 'under'        && !(c.employment_type !== 'prn' && c.totalAssigned > 0 && c.totalAssigned < (c.target - 2))) return false;
+      if (scope === 'ft_atrisk'    && !(c.employment_type === 'ft' && c.pct < 70 && c.done > 0)) return false;
+      if (scope === 'pt_atrisk'    && !(c.employment_type === 'pt' && c.pct < 70 && c.done > 0)) return false;
       if (search) {
         var q = search.toLowerCase();
         if (!c.full_name.toLowerCase().includes(q) && !(c.discipline || '').toLowerCase().includes(q)) return false;
@@ -202,7 +213,7 @@ export default function ProductivityPage() {
       if (sortBy === 'region') return (a.region || '').localeCompare(b.region || '');
       return 0;
     });
-  }, [enriched, regionFilter, typeFilter, search, sortBy]);
+  }, [enriched, regionFilter, typeFilter, search, sortBy, scope]);
  
   var summary = useMemo(function() {
     var ft = enriched.filter(function(c) { return c.employment_type === 'ft'; });
@@ -242,21 +253,41 @@ export default function ProductivityPage() {
         subtitle={filtered.length + ' clinicians \u00b7 Week of ' + weekStart + ' \u2192 ' + weekEnd + ' (Sun\u2013Sat)'} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
  
-        {/* Summary Strip */}
+        {/* Summary Strip — each tile is a clickable scope filter */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
-            { label: 'Completed This Week', val: summary.totalCompleted, sub: 'across all clinicians', color: 'var(--green)' },
-            { label: 'Scheduled Remaining', val: summary.totalScheduled, sub: 'visits still on calendar', color: 'var(--blue)' },
-            { label: 'Notes Not Submitted', val: summary.totalMissedActive, sub: summary.totalMissedActive > 0 ? 'Cannot bill \u2014 follow up now' : 'All notes submitted', color: summary.totalMissedActive > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.totalMissedActive > 0 },
-            { label: 'Under-Scheduled', val: summary.underScheduled, sub: 'clinicians below target', color: summary.underScheduled > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.underScheduled > 0 },
-            { label: 'FT Avg (' + summary.ft.count + ')', val: summary.ft.avg + '%', sub: summary.ft.atRisk > 0 ? summary.ft.atRisk + ' below 70%' : 'Target: 25 visits/wk', color: summary.ft.avg >= 80 ? 'var(--green)' : summary.ft.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
-            { label: 'PT Avg (' + summary.pt.count + ')', val: summary.pt.avg + '%', sub: summary.pt.atRisk > 0 ? summary.pt.atRisk + ' below 70%' : 'Target: 15 visits/wk', color: summary.pt.avg >= 80 ? 'var(--green)' : summary.pt.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
+            { key: 'completed', label: 'Completed This Week', val: summary.totalCompleted, sub: 'click: clinicians who completed visits', color: 'var(--green)' },
+            { key: 'scheduled', label: 'Scheduled Remaining', val: summary.totalScheduled, sub: 'click: clinicians with visits still on calendar', color: 'var(--blue)' },
+            { key: 'notes',     label: 'Notes Not Submitted', val: summary.totalMissedActive, sub: summary.totalMissedActive > 0 ? 'click: follow up — cannot bill' : 'All notes submitted', color: summary.totalMissedActive > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.totalMissedActive > 0 },
+            { key: 'under',     label: 'Under-Scheduled', val: summary.underScheduled, sub: 'click: clinicians below target', color: summary.underScheduled > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.underScheduled > 0 },
+            { key: 'ft_atrisk', label: 'FT Avg (' + summary.ft.count + ')', val: summary.ft.avg + '%', sub: summary.ft.atRisk > 0 ? 'click: ' + summary.ft.atRisk + ' FT below 70%' : 'Target: 25 visits/wk', color: summary.ft.avg >= 80 ? 'var(--green)' : summary.ft.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
+            { key: 'pt_atrisk', label: 'PT Avg (' + summary.pt.count + ')', val: summary.pt.avg + '%', sub: summary.pt.atRisk > 0 ? 'click: ' + summary.pt.atRisk + ' PT below 70%' : 'Target: 15 visits/wk', color: summary.pt.avg >= 80 ? 'var(--green)' : summary.pt.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
           ].map(function(tile) {
+            var isActive = scope === tile.key;
+            var activeBg = tile.alert ? '#FEE2E2' : '#DBEAFE';
             return (
-              <div key={tile.label} style={{ flex: 1, padding: '12px 16px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFF5F5' : 'transparent' }}>
-                <div style={{ fontSize: 10, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{tile.label}</div>
+              <div key={tile.label}
+                onClick={function() { setScope(isActive ? 'ALL' : tile.key); }}
+                title={isActive ? 'Click to clear filter' : 'Click to filter table to these clinicians'}
+                style={{
+                  flex: 1,
+                  padding: '12px 16px',
+                  borderRight: '1px solid var(--border)',
+                  textAlign: 'center',
+                  background: isActive ? activeBg : (tile.alert ? '#FFF5F5' : 'transparent'),
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  transition: 'background 120ms ease',
+                  boxShadow: isActive ? 'inset 0 -3px 0 ' + tile.color : 'none',
+                  fontWeight: isActive ? 700 : 400,
+                }}>
+                <div style={{ fontSize: 10, color: isActive ? tile.color : 'var(--gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {tile.label}{isActive ? ' \u00d7' : ''}
+                </div>
                 <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 3 }}>{tile.val}</div>
-                <div style={{ fontSize: 10, color: tile.alert ? tile.color : 'var(--gray)', marginTop: 2, fontWeight: tile.alert ? 600 : 400 }}>{tile.sub}</div>
+                <div style={{ fontSize: 10, color: tile.alert ? tile.color : 'var(--gray)', marginTop: 2, fontWeight: tile.alert ? 600 : 400 }}>
+                  {isActive ? 'filtering — click to clear' : tile.sub}
+                </div>
               </div>
             );
           })}
@@ -286,8 +317,14 @@ export default function ProductivityPage() {
             <option value="pct_desc">Sort: Highest % First</option>
             <option value="name">Sort: Name A-Z</option>
           </select>
+          {scope !== 'ALL' && (
+            <button onClick={function() { setScope('ALL'); }}
+              style={{ fontSize: 11, fontWeight: 700, color: '#1565C0', background: '#DBEAFE', border: '1px solid #93C5FD', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
+              Scope: {scope.replace('_', ' ')} \u00d7
+            </button>
+          )}
           <span style={{ fontSize: 12, color: visits.length === 0 ? 'var(--danger)' : 'var(--gray)', marginLeft: 'auto' }}>
-            {visits.length === 0 ? '\u26A0 Upload visit data' : visits.length + ' visits \u00b7 ' + matchedCount + ' clinicians matched'}
+            {visits.length === 0 ? '\u26A0 Upload visit data' : filtered.length + ' shown \u00b7 ' + visits.length + ' visits \u00b7 ' + matchedCount + ' matched'}
           </span>
         </div>
  
