@@ -38,7 +38,7 @@ INSURANCE — CRITICAL FOR ACCEPTANCE AND PAYOR TRACKING:
   "insurance": "insurance carrier name (canonical form — Humana, CarePlus, Aetna, etc.)",
   "policy_number": "member/policy ID number",
   "secondary_insurance": "secondary insurance if present",
-  "diagnosis": "full diagnosis with ICD-10 code(s) — include the code string so triage can parse it",
+  "diagnosis": "ALL diagnoses found with ICD-10 code(s), separated by semicolons. CRITICAL: If the referral mentions lymphedema (I89.0, I97.2, Q82.0) ANYWHERE in the document — even if other diagnoses like CHF, Hypertension, Diabetes etc. are also present — lymphedema MUST be listed FIRST. Example: 'I89.0 Lymphedema; I50.9 Congestive Heart Failure; I10 Hypertension'. Never omit lymphedema in favor of secondary diagnoses.",
   "icd_codes": "array of ICD-10 codes found, e.g. [\\"I89.0\\", \\"L97.509\\"]",
   "has_lymphedema_dx": "true if any lymphedema code (I89.0, I97.2, Q82.0) is present, else false",
   "has_wound_dx": "true if any wound/ulcer code (L97.x, L89.x, E11.621/622) is present — triggers SWIFT team flag",

@@ -265,6 +265,11 @@ export default function IntakeDashboardPage() {
   const [auditFilter, setAuditFilter] = useState('ALL');
   const [auditTypeFilter, setAuditTypeFilter] = useState('ALL'); // filter by flag type
   const [auditSelected, setAuditSelected] = useState(null); // selected patient for detail panel
+  // Patient profile modal state
+  const [profilePatient, setProfilePatient] = useState(null);
+  const [profileAuth, setProfileAuth] = useState([]);
+  const [profileVisits, setProfileVisits] = useState([]);
+  const [profileLoading, setProfileLoading] = useState(false);
   // Payor tab state (lifted)
   const [payorSearch, setPayorSearch] = useState('');
   // Monthly Referral Volume chart: date range filter
@@ -289,7 +294,7 @@ export default function IntakeDashboardPage() {
     for (let from = 0; ; from += PAGE) {
       const q = regionScope.applyToQuery(
         supabase.from('intake_referrals')
-          .select('id,date_received,referral_status,referral_type,region,patient_name,insurance,denial_reason,diagnosis,chart_status')
+          .select('id,date_received,referral_status,referral_type,region,patient_name,insurance,denial_reason,diagnosis,chart_status,dob,phone,contact_number,location,city,zip_code,county,policy_number,secondary_insurance,pcp_name,pcp_phone,pcp_fax,referral_source,referral_source_phone,referral_source_fax,referral_document,referral_document_path,referral_document_name,notes,medicare_type')
           .order('date_received', { ascending: false })
           .range(from, from + PAGE - 1)
       );
@@ -304,6 +309,24 @@ export default function IntakeDashboardPage() {
   }
 
   useEffect(() => { fetchRecords(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+
+  // ── open patient profile ───────────────────────────────────────────
+  async function openPatientProfile(record) {
+    setProfilePatient(record);
+    setProfileLoading(true);
+    setProfileAuth([]);
+    setProfileVisits([]);
+    try {
+      var pName = (record.patient_name || '').trim();
+      var [authRes, visitRes] = await Promise.all([
+        supabase.from('auth_tracker').select('*').ilike('patient_name', pName),
+        supabase.from('visit_schedule_data').select('*').ilike('patient_name', pName).order('visit_date', { ascending: false }).limit(200),
+      ]);
+      setProfileAuth(authRes.data || []);
+      setProfileVisits(visitRes.data || []);
+    } catch (e) { console.warn('Profile fetch error:', e); }
+    setProfileLoading(false);
+  }
 
   // ── computed stats ──────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -1029,7 +1052,7 @@ export default function IntakeDashboardPage() {
                             <span style={{ fontSize: 10, fontWeight: 700, color: riskColor[r.risk], background: riskBg[r.risk], padding: '2px 7px', borderRadius: 999 }}>{r.risk}</span>
                           </div>
                           <div>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name || '—'}</div>
+                            <div onClick={function(e) { e.stopPropagation(); openPatientProfile(r); }} style={{ fontSize: 12, fontWeight: 600, color: '#1565C0', cursor: 'pointer', display: 'inline' }} onMouseEnter={function(e) { e.currentTarget.style.textDecoration = 'underline'; }} onMouseLeave={function(e) { e.currentTarget.style.textDecoration = 'none'; }}>{r.patient_name || '—'}</div>
                             <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1, fontFamily: 'DM Mono, monospace' }}>{r.date_received ? r.date_received.slice(0,10) : '—'}</div>
                           </div>
                           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
@@ -1280,7 +1303,7 @@ export default function IntakeDashboardPage() {
                   </div>
                   {filteredOon.slice(0, 200).map((r, i) => (
                     <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '1fr 0.5fr 1.2fr 1.4fr 0.6fr', padding: '9px 20px', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)', alignItems: 'center' }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name || '—'}</span>
+                      <span onClick={function(e) { e.stopPropagation(); openPatientProfile(r); }} style={{ fontSize: 12, fontWeight: 600, color: '#1565C0', cursor: 'pointer' }} onMouseEnter={function(e) { e.currentTarget.style.textDecoration = 'underline'; }} onMouseLeave={function(e) { e.currentTarget.style.textDecoration = 'none'; }}>{r.patient_name || '—'}</span>
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
                       <span style={{ fontSize: 11, color: '#1565C0', fontWeight: 600 }}>{r.insurance || '—'}</span>
                       <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 40)}</span>
@@ -1351,7 +1374,7 @@ export default function IntakeDashboardPage() {
                     <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '0.8fr 2.2fr 0.5fr 0.9fr 1.5fr 1.5fr 0.8fr', padding: '9px 16px', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)', alignItems: 'center' }}>
                       <span style={{ fontSize: 11, color: 'var(--gray)', fontFamily: 'DM Mono, monospace' }}>{r.date_received ? r.date_received.slice(0, 10) : '—'}</span>
                       <div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name || '—'}</div>
+                        <div onClick={function(e) { e.stopPropagation(); openPatientProfile(r); }} style={{ fontSize: 12, fontWeight: 600, color: '#1565C0', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'transparent', transition: 'text-decoration-color 0.15s' }} onMouseEnter={function(e) { e.currentTarget.style.textDecorationColor = '#1565C0'; }} onMouseLeave={function(e) { e.currentTarget.style.textDecorationColor = 'transparent'; }}>{r.patient_name || '—'}</div>
                         {r.denial_reason && st === 'Denied' && <div style={{ fontSize: 10, color: '#DC2626', marginTop: 1 }}>{r.denial_reason.slice(0, 60)}</div>}
                       </div>
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
@@ -1391,6 +1414,191 @@ export default function IntakeDashboardPage() {
           )}
         </div>
       </div>
+
+      {/* ── PATIENT PROFILE MODAL ─────────────────────────────────────── */}
+      {profilePatient && (function() {
+        var r = profilePatient;
+        var docUrl = r.referral_document_path
+          ? supabase.storage.from('referral-documents').getPublicUrl(r.referral_document_path).data?.publicUrl
+          : r.referral_document || null;
+        var patAuth = profileAuth.sort(function(a,b) { return (b.created_at||'').localeCompare(a.created_at||''); });
+        var latestAuth = patAuth[0] || null;
+        var patVisits = profileVisits;
+        var completed = patVisits.filter(function(v) { return /completed/i.test(v.status||''); }).length;
+        var cancelled = patVisits.filter(function(v) { return /cancel/i.test(v.event_type||'')||/cancel/i.test(v.status||''); }).length;
+        var visitsRemaining = latestAuth ? (latestAuth.visits_authorized||24)-(latestAuth.visits_used||0) : null;
+        var daysToExpiry = latestAuth && latestAuth.auth_expiry_date ? Math.round((new Date(latestAuth.auth_expiry_date) - new Date()) / 86400000) : null;
+        var profileTab = r._profileTab || 'overview';
+        function setProfileTab(t) { setProfilePatient(function(p) { return p ? Object.assign({}, p, { _profileTab: t }) : p; }); }
+        function fmtD(d) { return d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—'; }
+        var PTAB = function(t,l) { return React.createElement('button', { key: t, onClick: function() { setProfileTab(t); }, style: { padding:'8px 16px', border:'none', background:'none', fontSize:12, fontWeight:profileTab===t?700:400, color:profileTab===t?'var(--black)':'var(--gray)', borderBottom:profileTab===t?'2px solid #C8102E':'2px solid transparent', cursor:'pointer', whiteSpace:'nowrap' }}, l); };
+
+        return React.createElement('div', { onClick: function() { setProfilePatient(null); }, style: { position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }},
+          React.createElement('div', { onClick: function(e) { e.stopPropagation(); }, style: { background:'var(--card-bg)', borderRadius:16, width:'100%', maxWidth:820, maxHeight:'90vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }},
+            /* Header */
+            React.createElement('div', { style: { padding:'18px 24px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'#0F1117', borderRadius:'16px 16px 0 0' }},
+              React.createElement('div', null,
+                React.createElement('div', { style: { fontSize:18, fontWeight:700, color:'#fff' }}, r.patient_name || 'Unknown Patient'),
+                React.createElement('div', { style: { fontSize:12, color:'#9CA3AF', marginTop:2 }},
+                  'Region ' + (r.region||'—') + ' · ' + (r.insurance||'—') + ' · ' + (r.referral_status||'Pending')
+                )
+              ),
+              React.createElement('div', { style: { display:'flex', gap:8, alignItems:'center' }},
+                docUrl && React.createElement('a', { href: docUrl, target:'_blank', rel:'noopener noreferrer', style: { padding:'6px 14px', background:'#1565C0', border:'none', borderRadius:6, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer', textDecoration:'none', whiteSpace:'nowrap' }}, '📄 View Referral Doc'),
+                React.createElement('button', { onClick: function() { setProfilePatient(null); }, style: { background:'none', border:'none', fontSize:22, cursor:'pointer', color:'#9CA3AF' }}, '×')
+              )
+            ),
+
+            /* Stats strip */
+            React.createElement('div', { style: { display:'grid', gridTemplateColumns:'repeat(4,1fr)', borderBottom:'1px solid var(--border)' }},
+              [
+                { label:'Visits Completed', val: completed, color:'#065F46', bg:'#ECFDF5' },
+                { label:'Cancelled', val: cancelled, color:'#DC2626', bg:'#FEF2F2' },
+                { label:'Visits Remaining', val: visitsRemaining !== null ? visitsRemaining : '—', color: visitsRemaining!==null&&visitsRemaining<=5?'#DC2626':visitsRemaining!==null&&visitsRemaining<=10?'#D97706':'#065F46', bg: visitsRemaining!==null&&visitsRemaining<=5?'#FEF2F2':visitsRemaining!==null&&visitsRemaining<=10?'#FEF3C7':'#ECFDF5' },
+                { label:'Days to Auth Expiry', val: daysToExpiry !== null ? daysToExpiry : '—', color: daysToExpiry!==null&&daysToExpiry<=7?'#DC2626':daysToExpiry!==null&&daysToExpiry<=14?'#D97706':'#065F46', bg: daysToExpiry!==null&&daysToExpiry<=7?'#FEF2F2':daysToExpiry!==null&&daysToExpiry<=14?'#FEF3C7':'#ECFDF5' },
+              ].map(function(s) { return React.createElement('div', { key: s.label, style: { padding:'12px 16px', background:s.bg, borderRight:'1px solid var(--border)', textAlign:'center' }},
+                React.createElement('div', { style: { fontSize:24, fontWeight:800, fontFamily:'DM Mono, monospace', color:s.color }}, s.val),
+                React.createElement('div', { style: { fontSize:10, fontWeight:600, color:'var(--gray)', marginTop:2 }}, s.label)
+              ); })
+            ),
+
+            /* Tabs */
+            React.createElement('div', { style: { display:'flex', borderBottom:'1px solid var(--border)', padding:'0 24px', overflowX:'auto' }},
+              PTAB('overview','Overview'), PTAB('referral','Referral'), PTAB('auth','Authorization'), PTAB('history','Visit History'), PTAB('documents','Documents')
+            ),
+
+            /* Tab content */
+            React.createElement('div', { style: { flex:1, overflowY:'auto', padding:24 }},
+              profileLoading ? React.createElement('div', { style: { textAlign:'center', color:'var(--gray)', padding:40 }}, 'Loading patient data…') :
+
+              /* OVERVIEW */
+              profileTab === 'overview' ? React.createElement('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }},
+                React.createElement('div', { style: { background:'var(--bg)', borderRadius:10, padding:16 }},
+                  React.createElement('div', { style: { fontSize:12, fontWeight:700, color:'var(--gray)', marginBottom:12, textTransform:'uppercase', letterSpacing:'0.05em' }}, 'Contact Information'),
+                  [['Patient Name', r.patient_name], ['Date of Birth', fmtD(r.dob)], ['Phone', r.phone || r.contact_number || '—'], ['Address', r.location || '—'], ['City', r.city || '—'], ['Zip', r.zip_code || '—'], ['County', r.county || '—']].map(function(pair) {
+                    return pair[1] && pair[1] !== '—' ? React.createElement('div', { key: pair[0], style: { display:'flex', gap:8, marginBottom:6, fontSize:12 }},
+                      React.createElement('span', { style: { color:'var(--gray)', fontWeight:600, minWidth:100, flexShrink:0 }}, pair[0]+':'),
+                      React.createElement('span', { style: { color:'var(--black)' }}, pair[1])
+                    ) : null;
+                  })
+                ),
+                React.createElement('div', { style: { background:'var(--bg)', borderRadius:10, padding:16 }},
+                  React.createElement('div', { style: { fontSize:12, fontWeight:700, color:'var(--gray)', marginBottom:12, textTransform:'uppercase', letterSpacing:'0.05em' }}, 'Current Auth Status'),
+                  latestAuth ? [['Auth Number', latestAuth.auth_number || '—'], ['Status', latestAuth.auth_status], ['Insurance', latestAuth.insurance], ['Visits Authorized', latestAuth.visits_authorized], ['Visits Used', latestAuth.visits_used], ['Visits Remaining', visitsRemaining], ['Auth Start', fmtD(latestAuth.soc_date || latestAuth.auth_start_date)], ['Auth Expiry', fmtD(latestAuth.auth_expiry_date)]].map(function(pair) {
+                    return React.createElement('div', { key: pair[0], style: { display:'flex', gap:8, marginBottom:6, fontSize:12 }},
+                      React.createElement('span', { style: { color:'var(--gray)', fontWeight:600, minWidth:110, flexShrink:0 }}, pair[0]+':'),
+                      React.createElement('span', { style: { color:'var(--black)' }}, pair[1])
+                    );
+                  }) : React.createElement('div', { style: { fontSize:12, color:'var(--gray)' }}, 'No authorization records found.')
+                )
+              ) :
+
+              /* REFERRAL */
+              profileTab === 'referral' ? React.createElement('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }},
+                [
+                  { title:'Referral Details', fields: [['Date Received', fmtD(r.date_received)], ['Status', r.referral_status || 'Pending'], ['Referral Type', r.referral_type || '—'], ['Region', r.region || '—'], ['Denial Reason', r.denial_reason || '— none recorded —'], ['Chart Status', r.chart_status || '—']] },
+                  { title:'Diagnosis & Insurance', fields: [['Diagnosis', r.diagnosis || '—'], ['Primary Insurance', r.insurance || '—'], ['Policy Number', r.policy_number || '—'], ['Medicare Type', r.medicare_type || '—'], ['Secondary Insurance', r.secondary_insurance || '—']] },
+                  { title:'Referral Source', fields: [['Source Name', r.referral_source || '—'], ['Source Phone', r.referral_source_phone || '—'], ['Source Fax', r.referral_source_fax || '—']] },
+                  { title:'Primary Care Physician', fields: [['PCP Name', r.pcp_name || '—'], ['PCP Phone', r.pcp_phone || '—'], ['PCP Fax', r.pcp_fax || '—']] },
+                ].map(function(section) {
+                  return React.createElement('div', { key: section.title, style: { background:'var(--bg)', borderRadius:10, padding:16 }},
+                    React.createElement('div', { style: { fontSize:12, fontWeight:700, color:'var(--gray)', marginBottom:12, textTransform:'uppercase', letterSpacing:'0.05em' }}, section.title),
+                    section.fields.map(function(pair) {
+                      return React.createElement('div', { key: pair[0], style: { display:'flex', gap:8, marginBottom:6, fontSize:12 }},
+                        React.createElement('span', { style: { color:'var(--gray)', fontWeight:600, minWidth:120, flexShrink:0 }}, pair[0]+':'),
+                        React.createElement('span', { style: { color: pair[0]==='Denial Reason'&&pair[1]!=='— none recorded —'?'#DC2626':'var(--black)', fontWeight: pair[0]==='Denial Reason'&&pair[1]!=='— none recorded —'?700:400 }}, pair[1])
+                      );
+                    })
+                  );
+                })
+              ) :
+
+              /* AUTHORIZATION */
+              profileTab === 'auth' ? React.createElement('div', { style: { display:'flex', flexDirection:'column', gap:12 }},
+                patAuth.length === 0 ? React.createElement('div', { style: { color:'var(--gray)', fontSize:13 }}, 'No authorization records found.') :
+                patAuth.map(function(a, i) {
+                  return React.createElement('div', { key: a.id || i, style: { background:'var(--bg)', borderRadius:10, padding:16, border:'1px solid var(--border)' }},
+                    React.createElement('div', { style: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }},
+                      React.createElement('div', { style: { fontSize:13, fontWeight:700, color:'var(--black)' }}, 'Auth #' + (a.auth_number || 'Pending')),
+                      React.createElement('span', { style: { fontSize:11, fontWeight:700, color:/active|approved/i.test(a.auth_status||'')?'#065F46':'#D97706', background:/active|approved/i.test(a.auth_status||'')?'#ECFDF5':'#FEF3C7', padding:'2px 8px', borderRadius:999 }}, a.auth_status)
+                    ),
+                    React.createElement('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }},
+                      [['Insurance', a.insurance], ['Visits Auth.', a.visits_authorized], ['Visits Used', a.visits_used], ['Remaining', (a.visits_authorized||24)-(a.visits_used||0)], ['Auth Start', fmtD(a.soc_date||a.auth_start_date)], ['Auth Expiry', fmtD(a.auth_expiry_date)], ['PCP', a.pcp_name||'—'], ['Request Type', a.request_type||'—'], ['Frequency', a.frequency||'—']].map(function(pair) {
+                        return React.createElement('div', { key: pair[0], style: { fontSize:12 }},
+                          React.createElement('div', { style: { color:'var(--gray)', fontWeight:600, fontSize:10, marginBottom:2 }}, pair[0]),
+                          React.createElement('div', { style: { color:'var(--black)', fontWeight:500 }}, pair[1])
+                        );
+                      })
+                    ),
+                    React.createElement('div', { style: { marginTop:12 }},
+                      React.createElement('div', { style: { display:'flex', justifyContent:'space-between', fontSize:10, color:'var(--gray)', marginBottom:3 }},
+                        React.createElement('span', null, 'Visit Utilization'),
+                        React.createElement('span', null, (a.visits_used||0) + ' / ' + (a.visits_authorized||24))
+                      ),
+                      React.createElement('div', { style: { height:6, background:'var(--border)', borderRadius:999 }},
+                        React.createElement('div', { style: { height:'100%', width:Math.min(((a.visits_used||0)/(a.visits_authorized||24))*100,100)+'%', background:'#10B981', borderRadius:999 }})
+                      )
+                    )
+                  );
+                })
+              ) :
+
+              /* VISIT HISTORY */
+              profileTab === 'history' ? React.createElement('div', null,
+                React.createElement('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', padding:'8px 12px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', borderRadius:'8px 8px 0 0' }},
+                  React.createElement('span', null, 'Date'), React.createElement('span', null, 'Clinician'), React.createElement('span', null, 'Event'), React.createElement('span', null, 'Status'), React.createElement('span', null, 'Discipline')
+                ),
+                patVisits.length === 0 ? React.createElement('div', { style: { padding:20, color:'var(--gray)', fontSize:13 }}, 'No visit history found.') :
+                patVisits.map(function(v, i) {
+                  var isCan = /cancel/i.test(v.event_type||'')||/cancel/i.test(v.status||'');
+                  var isComp = /completed/i.test(v.status||'');
+                  var isMiss = /missed/i.test(v.status||'') && !isCan;
+                  var sColor = isComp?'#065F46':isCan?'#DC2626':isMiss?'#D97706':'#1565C0';
+                  var sBg = isComp?'#ECFDF5':isCan?'#FEF2F2':isMiss?'#FEF3C7':'#EFF6FF';
+                  return React.createElement('div', { key: v.id||i, style: { display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', padding:'8px 12px', borderBottom:'1px solid var(--border)', background:i%2===0?'var(--card-bg)':'var(--bg)', alignItems:'center' }},
+                    React.createElement('span', { style: { fontSize:12, fontFamily:'DM Mono, monospace' }}, v.visit_date||'—'),
+                    React.createElement('span', { style: { fontSize:12, color:'var(--black)' }}, v.staff_name||'—'),
+                    React.createElement('span', { style: { fontSize:11, color:'var(--gray)' }}, (v.event_type||'—').replace(/\s*\(PDF\)/g,'').trim()),
+                    React.createElement('span', { style: { fontSize:10, fontWeight:700, color:sColor, background:sBg, padding:'2px 7px', borderRadius:999, display:'inline-block' }}, isCan?'Cancelled':isComp?'Completed':isMiss?'Missed':v.status||'—'),
+                    React.createElement('span', { style: { fontSize:11, color:'var(--gray)' }}, v.discipline||'—')
+                  );
+                })
+              ) :
+
+              /* DOCUMENTS */
+              profileTab === 'documents' ? React.createElement('div', null,
+                React.createElement('div', { style: { fontSize:12, fontWeight:700, color:'var(--gray)', marginBottom:16, textTransform:'uppercase', letterSpacing:'0.05em' }}, 'Referral Documents'),
+                docUrl ? React.createElement('div', { style: { background:'var(--bg)', borderRadius:10, padding:16, border:'1px solid var(--border)' }},
+                  React.createElement('div', { style: { display:'flex', alignItems:'center', gap:12 }},
+                    React.createElement('div', { style: { width:40, height:40, background:'#EFF6FF', borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20 }}, '📄'),
+                    React.createElement('div', { style: { flex:1 }},
+                      React.createElement('div', { style: { fontSize:13, fontWeight:600, color:'var(--black)' }}, r.referral_document_name || 'Referral Document'),
+                      React.createElement('div', { style: { fontSize:11, color:'var(--gray)', marginTop:2 }}, 'Uploaded with referral on ' + fmtD(r.date_received))
+                    ),
+                    React.createElement('a', { href: docUrl, target:'_blank', rel:'noopener noreferrer', style: { padding:'8px 16px', background:'#1565C0', color:'#fff', borderRadius:7, fontSize:12, fontWeight:600, textDecoration:'none' }}, 'Open Document')
+                  )
+                ) : React.createElement('div', { style: { padding:40, textAlign:'center', color:'var(--gray)', fontSize:13 }}, 'No referral document attached to this record.'),
+                patAuth.length > 0 && React.createElement('div', { style: { marginTop:20 }},
+                  React.createElement('div', { style: { fontSize:12, fontWeight:700, color:'var(--gray)', marginBottom:12, textTransform:'uppercase', letterSpacing:'0.05em' }}, 'Authorization Documents'),
+                  patAuth.filter(function(a) { return a.auth_document_path; }).length === 0
+                    ? React.createElement('div', { style: { color:'var(--gray)', fontSize:12 }}, 'No authorization documents uploaded.')
+                    : patAuth.filter(function(a) { return a.auth_document_path; }).map(function(a) {
+                        var aUrl = supabase.storage.from('auth-documents').getPublicUrl(a.auth_document_path).data?.publicUrl || a.auth_document_path;
+                        return React.createElement('div', { key: a.id, style: { background:'var(--bg)', borderRadius:10, padding:12, border:'1px solid var(--border)', marginBottom:8, display:'flex', alignItems:'center', gap:12 }},
+                          React.createElement('div', { style: { fontSize:18 }}, '🔐'),
+                          React.createElement('div', { style: { flex:1 }},
+                            React.createElement('div', { style: { fontSize:12, fontWeight:600 }}, 'Auth #' + (a.auth_number||'Pending') + ' — ' + (a.auth_document_name||'Auth Document')),
+                            React.createElement('div', { style: { fontSize:11, color:'var(--gray)' }}, (a.auth_status||'') + ' · Expires ' + fmtD(a.auth_expiry_date))
+                          ),
+                          React.createElement('a', { href: aUrl, target:'_blank', rel:'noopener noreferrer', style: { padding:'6px 12px', background:'#7C3AED', color:'#fff', borderRadius:6, fontSize:11, fontWeight:600, textDecoration:'none' }}, 'Open')
+                        );
+                      })
+                )
+              ) : null
+            )
+          )
+        );
+      })()}
     </div>
   );
 }
