@@ -166,6 +166,7 @@ export default function ClinicalProgressionPage() {
   const [filterLoc, setFilterLoc] = useState('ALL');
   const [filterFreq, setFilterFreq] = useState('ALL');
   const [filterFlag, setFilterFlag] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState('ALL');
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState('days_at_level');
   const [sortDir, setSortDir] = useState('desc');
@@ -181,7 +182,7 @@ export default function ClinicalProgressionPage() {
     }
     Promise.all([
       fetchAllPages(regionScope.applyToQuery(supabase.from('visit_schedule_data').select('patient_name,region,event_type,visit_date,status,staff_name').order('visit_date', { ascending: false }))),
-      fetchAllPages(regionScope.applyToQuery(supabase.from('census_data').select('patient_name,region,status,insurance').eq('status','Active'))),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('census_data').select('patient_name,region,status,insurance').not('status','ilike','%discharge%'))),
       fetchAllPages(regionScope.applyToQuery(supabase.from('patient_clinical_settings').select('*'))),
     ]).then(([v, c, cs]) => {
       setVisits(v);
@@ -245,6 +246,25 @@ export default function ClinicalProgressionPage() {
       const data = byPatient[p.patient_name] || { visits: [], region: p.region };
       const completedVisits = data.visits.filter(v => v.completed).sort((a,b) => b.visit_date.localeCompare(a.visit_date));
       const currentLvl = completedVisits[0]?.level || null;
+
+      // Auto-derive visit frequency from actual visit interval (last 60 days of encounters).
+      // Count completed encounters in the last 60 days and compute weekly frequency.
+      const now = Date.now();
+      const sixtyDaysAgo = new Date(now - 60*86400000).toISOString().slice(0,10);
+      const recentEncounters = completedVisits.filter(v => v.visit_date >= sixtyDaysAgo);
+      let inferredFreq = null;
+      if (recentEncounters.length >= 2) {
+        const firstDate = new Date(recentEncounters[recentEncounters.length-1].visit_date+'T00:00:00');
+        const lastDate = new Date(recentEncounters[0].visit_date+'T00:00:00');
+        const spanDays = Math.max(1, (lastDate - firstDate) / 86400000);
+        const visitsPerWeek = (recentEncounters.length / spanDays) * 7;
+        // Map to frequency buckets
+        if (visitsPerWeek >= 3) inferredFreq = '4w4';
+        else if (visitsPerWeek >= 1.5) inferredFreq = '2w4';
+        else if (visitsPerWeek >= 0.7) inferredFreq = '1w4';
+        else if (visitsPerWeek >= 0.2) inferredFreq = '1em1';
+        else inferredFreq = '1em2';
+      }
       const cfg = currentLvl ? levelConfig(currentLvl) : null;
       const visitsAtCurrentLevel = currentLvl ? completedVisits.filter(v => v.level === currentLvl).length : 0;
       const firstAtLevel = currentLvl ? completedVisits.filter(v => v.level === currentLvl).slice(-1)[0]?.visit_date : null;
@@ -275,14 +295,18 @@ export default function ClinicalProgressionPage() {
         patient_name: p.patient_name,
         region: p.region || data.region,
         insurance: p.insurance,
+        censusStatus: p.status || 'Active',
         currentLevel: currentLvl, cfg,
         visitsAtCurrentLevel, targetVisits, daysAtLevel,
         lastVisitDate, lastVisitDays, nextVisit,
         isComplete, isNearComplete, isOverdue, levelHistory, reassessmentDue, nextLevel,
         clinician: completedVisits[0]?.staff_name || null,
         totalCompletedVisits: completedVisits.length,
-        // Clinical settings
-        visit_frequency: cs?.visit_frequency || null,
+        recentEncounterCount: recentEncounters.length,
+        // Clinical settings — manual takes precedence, then inferred from visit pattern
+        visit_frequency: cs?.visit_frequency || inferredFreq,
+        visit_frequency_manual: cs?.visit_frequency || null,
+        visit_frequency_inferred: inferredFreq,
         loc: effectiveLoc,
         loc_manual: manualLoc,
         loc_derived: derivedLoc,
@@ -297,6 +321,7 @@ export default function ClinicalProgressionPage() {
     return patients.filter(p => {
       if (filterRegion !== 'ALL' && p.region !== filterRegion) return false;
       if (filterLevel !== 'ALL' && p.currentLevel !== filterLevel) return false;
+      if (filterStatus !== 'ALL' && !(p.censusStatus||'').toLowerCase().startsWith(filterStatus.toLowerCase())) return false;
       if (filterLoc === '0' && p.loc) return false;
       if (filterLoc !== 'ALL' && filterLoc !== '0' && String(p.loc) !== filterLoc) return false;
       if (filterFreq !== 'ALL' && p.visit_frequency !== filterFreq) return false;
@@ -314,10 +339,18 @@ export default function ClinicalProgressionPage() {
       if (typeof av === 'string') return sortDir==='asc'?av.localeCompare(bv):bv.localeCompare(av);
       return sortDir==='asc'?av-bv:bv-av;
     });
-  }, [patients, filterRegion, filterLevel, filterLoc, filterFreq, filterFlag, search, sortField, sortDir]);
+  }, [patients, filterRegion, filterLevel, filterLoc, filterFreq, filterFlag, filterStatus, search, sortField, sortDir]);
+
+  // Compute unique status values for the filter dropdown
+  const uniqueStatuses = useMemo(() => {
+    const s = new Set();
+    patients.forEach(p => { if (p.censusStatus) s.add(p.censusStatus); });
+    return [...s].sort();
+  }, [patients]);
 
   const stats = useMemo(() => ({
     total: patients.length,
+    activeCount: patients.filter(p => /^active/i.test(p.censusStatus||'')).length,
     readyForStepDown: patients.filter(p => p.isComplete).length,
     reassessmentDue: patients.filter(p => p.reassessmentDue).length,
     overdue: patients.filter(p => p.isOverdue).length,
@@ -325,6 +358,8 @@ export default function ClinicalProgressionPage() {
     noLoc: patients.filter(p => !p.loc).length,
     manualLocCount: patients.filter(p => p.loc_manual).length,
     derivedLocCount: patients.filter(p => !p.loc_manual && p.loc_derived).length,
+    manualFreqCount: patients.filter(p => p.visit_frequency_manual).length,
+    inferredFreqCount: patients.filter(p => !p.visit_frequency_manual && p.visit_frequency_inferred).length,
     byLevel: LEVELS.reduce((acc,l) => ({ ...acc, [l.key]: patients.filter(p=>p.currentLevel===l.key).length }), {}),
     byLoc: LOC_LEVELS.reduce((acc,l) => ({ ...acc, [l.key]: patients.filter(p=>p.loc===l.key).length }), {}),
     byFreq: FREQUENCIES.reduce((acc,f) => ({ ...acc, [f.key]: patients.filter(p=>p.visit_frequency===f.key).length }), {}),
@@ -350,7 +385,7 @@ export default function ClinicalProgressionPage() {
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
         title="Clinical Progression"
-        subtitle={`${stats.total} active patients · ${stats.highRisk} at LOC 5 (High Risk) · ${stats.byLevel['5']||0} at Treatment L5 · ${stats.readyForStepDown} ready to step down`}
+        subtitle={`${stats.total} patients on census · ${stats.activeCount} active · ${stats.highRisk} LOC 5 · ${stats.readyForStepDown} ready to step down`}
       />
       <div style={{ flex:1 }}>
 
@@ -388,11 +423,17 @@ export default function ClinicalProgressionPage() {
             {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
           </select>
 
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+            style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)' }}>
+            <option value="ALL">All Statuses</option>
+            {uniqueStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patient…"
             style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)', width:160 }} />
 
-          {(filterFlag!=='ALL'||filterLevel!=='ALL'||filterLoc!=='ALL'||filterFreq!=='ALL'||filterRegion!=='ALL'||search) && (
-            <button onClick={() => { setFilterFlag('ALL'); setFilterLevel('ALL'); setFilterLoc('ALL'); setFilterFreq('ALL'); setFilterRegion('ALL'); setSearch(''); }}
+          {(filterFlag!=='ALL'||filterLevel!=='ALL'||filterLoc!=='ALL'||filterFreq!=='ALL'||filterRegion!=='ALL'||filterStatus!=='ALL'||search) && (
+            <button onClick={() => { setFilterFlag('ALL'); setFilterLevel('ALL'); setFilterLoc('ALL'); setFilterFreq('ALL'); setFilterRegion('ALL'); setFilterStatus('ALL'); setSearch(''); }}
               style={{ fontSize:10, color:'var(--gray)', background:'none', border:'1px solid var(--border)', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>Clear</button>
           )}
           <div style={{ marginLeft:'auto', fontSize:11, color:'var(--gray)' }}>{filtered.length} shown</div>
@@ -470,7 +511,13 @@ export default function ClinicalProgressionPage() {
 
           {/* Frequency Distribution */}
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:16 }}>
-            <div style={{ fontSize:13, fontWeight:700, marginBottom:12 }}>Visit Frequency Distribution</div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+              <div style={{ fontSize:13, fontWeight:700 }}>Visit Frequency Distribution</div>
+              <div style={{ fontSize:10, color:'var(--gray)' }}>
+                {stats.manualFreqCount > 0 && <span>{stats.manualFreqCount} manually set · </span>}
+                {stats.inferredFreqCount > 0 && <span>{stats.inferredFreqCount} auto-derived from visit pattern (60-day window)</span>}
+              </div>
+            </div>
             <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
               {FREQUENCIES.map(f => {
                 const cnt = stats.byFreq[f.key] || 0;
@@ -578,7 +625,7 @@ export default function ClinicalProgressionPage() {
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14 }}>
                         <div>
                           <div style={{ fontSize:15, fontWeight:700 }}>{p.patient_name}</div>
-                          <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>Region {p.region} · {p.insurance} · {p.clinician||'No clinician'}</div>
+                          <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>Region {p.region} · {p.insurance} · {p.censusStatus} · {p.clinician||'No clinician'}</div>
                         </div>
                         <div style={{ display:'flex', gap:8 }}>
                           <button onClick={e => { e.stopPropagation(); setEditModal(p); }}
@@ -610,10 +657,11 @@ export default function ClinicalProgressionPage() {
                             <>
                               <div style={{ fontSize:20, fontWeight:900, color:fCfg.color }}>{fCfg.label}</div>
                               <div style={{ fontSize:11, color:fCfg.color, marginTop:3 }}>{fCfg.full}</div>
+                              {!p.visit_frequency_manual && p.visit_frequency_inferred && <div style={{ fontSize:10, color:'var(--gray)', marginTop:4 }}>Auto-derived from {p.recentEncounterCount} encounters in last 60 days · Edit to override</div>}
                               {p.frequency_notes && <div style={{ fontSize:11, color:'var(--gray)', marginTop:6, fontStyle:'italic' }}>{p.frequency_notes}</div>}
                             </>
                           ) : (
-                            <div style={{ fontSize:13, color:'#9CA3AF' }}>Not assigned — click Edit to set</div>
+                            <div style={{ fontSize:13, color:'#9CA3AF' }}>No recent visits — unable to compute frequency</div>
                           )}
                         </div>
                       </div>

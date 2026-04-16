@@ -655,15 +655,23 @@ export default function PatientCensusPage({ intent } = {}) {
     return census.filter(c => {
       if (regionFilter !== 'ALL' && c.region !== regionFilter) return false;
       if (insFilter !== 'ALL' && c.insurance !== insFilter) return false;
-      // status comparison: normalize DB values ("Discharge" vs "discharged", "Active" vs "active")
-      var normStatus = (c.status || '').toLowerCase().replace(/d$/, '').replace(/^discharge/, 'discharge');
-      var isDischarged = normStatus.startsWith('discharge');
+      // status comparison: match DB values against selected filter
+      var rawStatus = (c.status || '').trim();
+      var lowerStatus = rawStatus.toLowerCase();
+      var isDischarged = lowerStatus.startsWith('discharge');
       // Default "ALL" hides discharged — they're not part of the active census
       if (statusFilter === 'ALL' && isDischarged) return false;
-      if (statusFilter !== 'ALL' && statusFilter !== 'ALL_WITH_DC') {
-        var normFilter = statusFilter.toLowerCase().replace(/d$/, '').replace(/^discharge/, 'discharge');
-        if (normStatus !== normFilter && !(statusFilter === 'discharged' && isDischarged)) return false;
-      }
+      if (statusFilter === 'ALL_WITH_DC') { /* show everything */ }
+      else if (statusFilter === 'active') { if (rawStatus !== 'Active' && rawStatus !== 'active') return false; }
+      else if (statusFilter === 'active_auth') { if (!lowerStatus.startsWith('active - auth') && !lowerStatus.startsWith('active-auth')) return false; }
+      else if (statusFilter === 'soc_pending') { if (!lowerStatus.includes('soc pending')) return false; }
+      else if (statusFilter === 'eval_pending') { if (!lowerStatus.includes('eval pending')) return false; }
+      else if (statusFilter === 'auth_pending') { if (rawStatus !== 'Auth Pending') return false; }
+      else if (statusFilter === 'on_hold') { if (!lowerStatus.startsWith('on hold')) return false; }
+      else if (statusFilter === 'waitlist') { if (!lowerStatus.includes('waitlist')) return false; }
+      else if (statusFilter === 'hospitalized') { if (!lowerStatus.includes('hospitalized')) return false; }
+      else if (statusFilter === 'discharged') { if (!isDischarged) return false; }
+      else if (statusFilter !== 'ALL') { if (lowerStatus !== statusFilter.toLowerCase()) return false; }
       if (q && !(c.patient_name || '').toLowerCase().includes(q) && !(c.insurance || '').toLowerCase().includes(q)) return false;
 
       // Last-seen filter. Semantics MATCH Director Dashboard card #1
@@ -736,12 +744,17 @@ export default function PatientCensusPage({ intent } = {}) {
           <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(0); }}
             style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}>
             {[
-              { v:'ALL', l:'All Active' },
+              { v:'ALL', l:'All Active (No Discharged)' },
               { v:'active', l:'Active' },
-              { v:'inactive', l:'Inactive' },
-              { v:'on_hold', l:'On Hold' },
+              { v:'active_auth', l:'Active - Auth Pending' },
+              { v:'soc_pending', l:'SOC Pending' },
+              { v:'eval_pending', l:'Eval Pending' },
+              { v:'auth_pending', l:'Auth Pending' },
+              { v:'on_hold', l:'On Hold (All)' },
+              { v:'waitlist', l:'Waitlist' },
+              { v:'hospitalized', l:'Hospitalized' },
               { v:'discharged', l:'Discharged Only' },
-              { v:'ALL_WITH_DC', l:'All + Discharged' },
+              { v:'ALL_WITH_DC', l:'All Patients (756)' },
             ].map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
           </select>
           <select value={lastSeenFilter} onChange={e => { setLastSeenFilter(e.target.value); setPage(0); }}
