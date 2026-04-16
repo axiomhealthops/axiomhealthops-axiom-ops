@@ -3,7 +3,7 @@ import { supabase, fetchAllPages } from '../../lib/supabase';
 import TopBar from '../../components/TopBar';
 
 const BLENDED_RATE = 185;
-const WEEKLY_TARGET = 1000;
+const WEEKLY_TARGET = 750;
 const REVENUE_TARGET = 200000;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
@@ -190,12 +190,27 @@ export default function DirectorDashboard({ onNavigate }) {
     const onHoldPts = census.filter(p => /on.?hold/i.test(p.status || ''));
     const pendingStart = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status || ''));
 
-    // Visits this week
-    const completedThisWeek = visits.filter(v => /completed/i.test(v.status || ''));
-    const cancelledThisWeek = visits.filter(v => /cancel/i.test(v.status || '') || /cancel/i.test(v.event_type || ''));
-    const missedThisWeek = visits.filter(v => /missed/i.test(v.status || ''));
+    // Visits this week — deduplicate co-treats (PT+PTA same patient same day = 1 encounter).
+    // Raw rows are kept for per-clinician utilization; encounter counts drive revenue.
+    const rawCompleted = visits.filter(v => /completed/i.test(v.status || ''));
+    const rawCancelled = visits.filter(v => /cancel/i.test(v.status || '') || /cancel/i.test(v.event_type || ''));
+    const rawMissed = visits.filter(v => /missed/i.test(v.status || ''));
 
-    // Revenue
+    // Deduplicate: same patient + same date = 1 encounter per status bucket
+    function dedup(rows) {
+      const seen = new Set();
+      return rows.filter(v => {
+        const key = `${(v.patient_name||'').toLowerCase()}||${v.visit_date}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+    const completedThisWeek = dedup(rawCompleted);
+    const cancelledThisWeek = dedup(rawCancelled);
+    const missedThisWeek = dedup(rawMissed);
+
+    // Revenue — based on encounters (billing events), not raw clinician rows
     const weeklyRevenue = completedThisWeek.length * BLENDED_RATE;
     const revenueGap = REVENUE_TARGET - weeklyRevenue;
     const inactiveRevGap = inactiveActive.length * BLENDED_RATE * 2;
@@ -204,9 +219,10 @@ export default function DirectorDashboard({ onNavigate }) {
     const urgentAuths = authRenewals.filter(a => a.priority === 'urgent');
     const highAuths = authRenewals.filter(a => a.priority === 'high');
 
-    // Clinician utilization
+    // Clinician utilization — use raw rows (each clinician's individual visits count
+    // toward their productivity, even if it was a co-treat)
     const visitMap = {};
-    completedThisWeek.forEach(v => {
+    rawCompleted.forEach(v => {
       const k = (v.staff_name || '').toLowerCase().trim();
       visitMap[k] = (visitMap[k] || 0) + 1;
     });
@@ -249,7 +265,7 @@ export default function DirectorDashboard({ onNavigate }) {
 
     return {
       active: active.length, inactiveActive, onHoldPts, pendingStart,
-      completedThisWeek, cancelledThisWeek, missedThisWeek,
+      completedThisWeek, cancelledThisWeek, missedThisWeek, rawCompleted,
       weeklyRevenue, revenueGap, inactiveRevGap,
       urgentAuths, highAuths, underutilized, onHoldOverdue,
       dischargeOverdue, waitlistUnassigned, regionData,
@@ -279,7 +295,7 @@ export default function DirectorDashboard({ onNavigate }) {
     (m.urgentAuths.length === 0 ? 20 : Math.max(0, 20 - m.urgentAuths.length * 2)) +
     (m.inactiveActive.length < 50 ? 20 : Math.max(0, 20 - Math.round((m.inactiveActive.length - 50) / 10))) +
     (m.onHoldOverdue.length === 0 ? 20 : Math.max(0, 20 - m.onHoldOverdue.length)) +
-    (m.completedThisWeek.length >= 800 ? 20 : Math.round((m.completedThisWeek.length / 800) * 20)) +
+    (m.completedThisWeek.length >= 600 ? 20 : Math.round((m.completedThisWeek.length / 600) * 20)) +
     (m.cancelRate < 8 ? 20 : Math.max(0, 20 - (m.cancelRate - 8) * 2))
   );
   const scoreColor = score >= 80 ? '#059669' : score >= 60 ? '#D97706' : '#DC2626';
@@ -482,7 +498,7 @@ export default function DirectorDashboard({ onNavigate }) {
               <div style={{ maxHeight:240, overflowY:'auto' }}>
                 {(() => {
                   const visitMap = {};
-                  m.completedThisWeek.forEach(v => {
+                  (m.rawCompleted || []).forEach(v => {
                     const k = (v.staff_name || '').toLowerCase().trim();
                     visitMap[k] = (visitMap[k] || 0) + 1;
                   });
