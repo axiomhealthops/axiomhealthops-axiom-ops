@@ -655,8 +655,15 @@ export default function PatientCensusPage({ intent } = {}) {
     return census.filter(c => {
       if (regionFilter !== 'ALL' && c.region !== regionFilter) return false;
       if (insFilter !== 'ALL' && c.insurance !== insFilter) return false;
-      // status comparison is case-insensitive since DB values vary ("Active" vs "active")
-      if (statusFilter !== 'ALL' && (c.status || '').toLowerCase() !== statusFilter.toLowerCase()) return false;
+      // status comparison: normalize DB values ("Discharge" vs "discharged", "Active" vs "active")
+      var normStatus = (c.status || '').toLowerCase().replace(/d$/, '').replace(/^discharge/, 'discharge');
+      var isDischarged = normStatus.startsWith('discharge');
+      // Default "ALL" hides discharged — they're not part of the active census
+      if (statusFilter === 'ALL' && isDischarged) return false;
+      if (statusFilter !== 'ALL' && statusFilter !== 'ALL_WITH_DC') {
+        var normFilter = statusFilter.toLowerCase().replace(/d$/, '').replace(/^discharge/, 'discharge');
+        if (normStatus !== normFilter && !(statusFilter === 'discharged' && isDischarged)) return false;
+      }
       if (q && !(c.patient_name || '').toLowerCase().includes(q) && !(c.insurance || '').toLowerCase().includes(q)) return false;
 
       // Last-seen filter. Semantics MATCH Director Dashboard card #1
@@ -728,7 +735,14 @@ export default function PatientCensusPage({ intent } = {}) {
           ))}
           <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(0); }}
             style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}>
-            {['ALL','active','inactive','discharged'].map(s => <option key={s} value={s}>{s==='ALL'?'All Statuses':s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+            {[
+              { v:'ALL', l:'All Active' },
+              { v:'active', l:'Active' },
+              { v:'inactive', l:'Inactive' },
+              { v:'on_hold', l:'On Hold' },
+              { v:'discharged', l:'Discharged Only' },
+              { v:'ALL_WITH_DC', l:'All + Discharged' },
+            ].map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
           </select>
           <select value={lastSeenFilter} onChange={e => { setLastSeenFilter(e.target.value); setPage(0); }}
             style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}
