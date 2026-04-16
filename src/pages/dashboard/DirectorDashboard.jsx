@@ -192,9 +192,18 @@ export default function DirectorDashboard({ onNavigate }) {
 
     // Visits this week — deduplicate co-treats (PT+PTA same patient same day = 1 encounter).
     // Raw rows are kept for per-clinician utilization; encounter counts drive revenue.
-    const rawCompleted = visits.filter(v => /completed/i.test(v.status || ''));
-    const rawCancelled = visits.filter(v => /cancel/i.test(v.status || '') || /cancel/i.test(v.event_type || ''));
-    const rawMissed = visits.filter(v => /missed/i.test(v.status || ''));
+    //
+    // IMPORTANT: Pariox marks cancelled visits with event_type "Cancelled Treatment"
+    // but status "Completed". We must classify by event_type FIRST, then by status.
+    // Similarly, "Attempted Visit" events are not billable completed encounters.
+    const isCancelled = v => /cancel/i.test(v.event_type || '') || /cancel/i.test(v.status || '');
+    const isAttempted = v => /attempted/i.test(v.event_type || '');
+    const isMissed = v => /missed/i.test(v.status || '');
+    const isCompleted = v => /completed/i.test(v.status || '') && !isCancelled(v) && !isAttempted(v);
+
+    const rawCompleted = visits.filter(isCompleted);
+    const rawCancelled = visits.filter(isCancelled);
+    const rawMissed = visits.filter(v => isMissed(v) && !isCancelled(v));
 
     // Deduplicate: same patient + same date = 1 encounter per status bucket
     function dedup(rows) {
