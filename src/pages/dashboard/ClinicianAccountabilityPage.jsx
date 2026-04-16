@@ -26,6 +26,10 @@ function CliniciansTab({ clinicians, visits, census }) {
   const [sortField, setSortField] = useState('utilization');
   const [sortDir, setSortDir] = useState('asc'); // asc = worst first
   const [expandedClinician, setExpandedClinician] = useState(null);
+  // KPI-tile scope filter (matches ProductivityPage pattern): clicking a
+  // summary tile narrows the table to that cohort. 'ALL' = no scope.
+  // Scopes: 'under30' / 'under60' / 'hasInactive'
+  const [scope, setScope] = useState('ALL');
 
   const weekStart = useMemo(() => {
     const d = new Date();
@@ -91,11 +95,15 @@ function CliniciansTab({ clinicians, visits, census }) {
     let list = clinicianStats;
     if (filterRegion !== 'ALL') list = list.filter(c => c.region === filterRegion || c.region === 'All');
     if (filterDiscipline !== 'ALL') list = list.filter(c => c.discipline === filterDiscipline);
+    // Scope filter driven by the KPI tiles at the top of the page.
+    if (scope === 'under30') list = list.filter(c => c.utilization < 30);
+    else if (scope === 'under60') list = list.filter(c => c.utilization < 60);
+    else if (scope === 'hasInactive') list = list.filter(c => c.inactiveCount > 0);
     return [...list].sort((a, b) => {
       const av = a[sortField], bv = b[sortField];
       return sortDir === 'asc' ? (av - bv) : (bv - av);
     });
-  }, [clinicianStats, filterRegion, filterDiscipline, sortField, sortDir]);
+  }, [clinicianStats, filterRegion, filterDiscipline, sortField, sortDir, scope]);
 
   const summary = useMemo(() => ({
     under60: clinicianStats.filter(c => c.utilization < 60).length,
@@ -114,25 +122,40 @@ function CliniciansTab({ clinicians, visits, census }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 20 }}>
-      {/* Summary KPIs */}
+      {/* Summary KPIs — the three cohort tiles (Under 30%, Under 60%,
+          Inactive Patients) act as scope toggles that narrow the table to
+          matching clinicians. Avg Util and Revenue Gap are informational. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
         {[
-          { label: 'Avg Utilization', val: summary.avgUtilization + '%', color: pctColor(summary.avgUtilization), bg: pctBg(summary.avgUtilization), sub: 'across all clinicians' },
-          { label: '🔴 Under 30%', val: summary.under30, color: '#DC2626', bg: '#FEF2F2', sub: 'critically underutilized' },
-          { label: '🟠 Under 60%', val: summary.under60, color: '#D97706', bg: '#FEF3C7', sub: 'need patient assignment' },
-          { label: '⚠ Inactive Patients', val: summary.totalInactive, color: '#7C3AED', bg: '#F5F3FF', sub: 'linked to last clinician' },
-          { label: '💰 Revenue Gap', val: '$' + Math.round(summary.totalRevenueGap / 1000) + 'K/wk', color: '#DC2626', bg: '#FEF2F2', sub: 'from inactive patients' },
-        ].map(c => (
-          <div key={c.label} style={{ background: c.bg, border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: c.color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{c.label}</div>
-            <div style={{ fontSize: 24, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: c.color, marginTop: 4 }}>{c.val}</div>
-            <div style={{ fontSize: 9, color: 'var(--gray)', marginTop: 2 }}>{c.sub}</div>
-          </div>
-        ))}
+          { label: 'Avg Utilization', val: summary.avgUtilization + '%', color: pctColor(summary.avgUtilization), bg: pctBg(summary.avgUtilization), sub: 'across all clinicians', scopeKey: null },
+          { label: '🔴 Under 30%', val: summary.under30, color: '#DC2626', bg: '#FEF2F2', sub: 'critically underutilized', scopeKey: 'under30' },
+          { label: '🟠 Under 60%', val: summary.under60, color: '#D97706', bg: '#FEF3C7', sub: 'need patient assignment', scopeKey: 'under60' },
+          { label: '⚠ Inactive Patients', val: summary.totalInactive, color: '#7C3AED', bg: '#F5F3FF', sub: 'linked to last clinician', scopeKey: 'hasInactive' },
+          { label: '💰 Revenue Gap', val: '$' + Math.round(summary.totalRevenueGap / 1000) + 'K/wk', color: '#DC2626', bg: '#FEF2F2', sub: 'from inactive patients', scopeKey: null },
+        ].map(c => {
+          const clickable = !!c.scopeKey;
+          const isActive = clickable && scope === c.scopeKey;
+          return (
+            <div key={c.label}
+              onClick={clickable ? () => setScope(isActive ? 'ALL' : c.scopeKey) : undefined}
+              role={clickable ? 'button' : undefined}
+              tabIndex={clickable ? 0 : undefined}
+              onKeyDown={clickable ? e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); setScope(isActive ? 'ALL' : c.scopeKey); } } : undefined}
+              style={{ background: c.bg, border: isActive ? `2px solid ${c.color}` : '1px solid var(--border)', borderRadius: 10, padding: isActive ? '11px 13px' : '12px 14px', textAlign: 'center', cursor: clickable ? 'pointer' : 'default', transition: 'transform 0.1s ease, box-shadow 0.15s ease', boxShadow: isActive ? `0 0 0 2px ${c.color}20` : 'none' }}
+              onMouseEnter={clickable ? e => { e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'; } : undefined}
+              onMouseLeave={clickable ? e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow= isActive ? `0 0 0 2px ${c.color}20` : 'none'; } : undefined}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: c.color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{c.label}</div>
+              <div style={{ fontSize: 24, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: c.color, marginTop: 4 }}>{c.val}</div>
+              <div style={{ fontSize: 9, color: 'var(--gray)', marginTop: 2 }}>
+                {clickable ? (isActive ? <span style={{ color: c.color, fontWeight: 700 }}>✓ filtered · click to clear</span> : <span>{c.sub} · click to filter</span>) : c.sub}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Filters */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
           style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, outline: 'none', background: 'var(--card-bg)' }}>
           <option value="ALL">All Regions</option>
@@ -143,6 +166,12 @@ function CliniciansTab({ clinicians, visits, census }) {
           <option value="ALL">All Disciplines</option>
           {disciplines.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
+        {scope !== 'ALL' && (
+          <button onClick={() => setScope('ALL')}
+            style={{ padding: '5px 10px', border: '1px solid #D97706', background: '#FFFBEB', color: '#92400E', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+            Scope: {scope === 'under30' ? 'Under 30%' : scope === 'under60' ? 'Under 60%' : 'Has Inactive Patients'} ×
+          </button>
+        )}
         <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--gray)' }}>{filtered.length} clinicians · click row to see inactive patients</div>
       </div>
 

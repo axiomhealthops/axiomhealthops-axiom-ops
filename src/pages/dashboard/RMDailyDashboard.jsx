@@ -155,21 +155,38 @@ export default function RMDailyDashboard() {
       <div style={{ flex:1, overflowY:'auto' }}>
         <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
 
-          {/* KPI strip */}
+          {/* KPI strip — each tile routes to the matching tab so RMs can drill
+              in without scanning the tab bar. "targetTab" null = informational only. */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
             {[
-              { label:'Active Patients', val:metrics.activePatients, color:'#059669', bg:'#ECFDF5' },
-              { label:'Visits This Week', val:metrics.completedVisits, color:'#1565C0', bg:'#EFF6FF' },
-              { label:'Capacity Used', val:metrics.utilization+'%', color:pctColor(metrics.utilization), bg:'var(--card-bg)' },
-              { label:'🔴 Overdue vs Freq', val:metrics.inactiveActive, color:'#DC2626', bg:'#FEF2F2' },
-              { label:'🔄 On Hold', val:metrics.onHold, color:'#7C3AED', bg:'#F5F3FF' },
-              { label:'⏳ Pipeline', val:metrics.socPending, color:'#D97706', bg:'#FEF3C7' },
-            ].map(c => (
-              <div key={c.label} style={{ background:c.bg, border:'1px solid var(--border)', borderRadius:10, padding:'10px 12px', textAlign:'center' }}>
-                <div style={{ fontSize:8, fontWeight:700, color:c.color, textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
-                <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:2 }}>{c.val}</div>
-              </div>
-            ))}
+              { label:'Active Patients', val:metrics.activePatients, color:'#059669', bg:'#ECFDF5', targetTab:'all_patients', hint:'see full roster' },
+              { label:'Visits This Week', val:metrics.completedVisits, color:'#1565C0', bg:'#EFF6FF', targetTab:null, hint:null },
+              { label:'Capacity Used', val:metrics.utilization+'%', color:pctColor(metrics.utilization), bg:'var(--card-bg)', targetTab:'clinicians', hint:'by clinician' },
+              { label:'🔴 Overdue vs Freq', val:metrics.inactiveActive, color:'#DC2626', bg:'#FEF2F2', targetTab:'inactive', hint:'view patients' },
+              { label:'🔄 On Hold', val:metrics.onHold, color:'#7C3AED', bg:'#F5F3FF', targetTab:'on_hold', hint:'view list' },
+              { label:'⏳ Pipeline', val:metrics.socPending, color:'#D97706', bg:'#FEF3C7', targetTab:'pipeline', hint:'view pipeline' },
+            ].map(c => {
+              const clickable = !!c.targetTab;
+              const isActive = clickable && activeTab === c.targetTab;
+              return (
+                <div key={c.label}
+                  onClick={clickable ? () => setActiveTab(c.targetTab) : undefined}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onKeyDown={clickable ? e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); setActiveTab(c.targetTab); } } : undefined}
+                  style={{ background:c.bg, border: isActive ? `2px solid ${c.color}` : '1px solid var(--border)', borderRadius:10, padding: isActive ? '9px 11px' : '10px 12px', textAlign:'center', cursor: clickable ? 'pointer' : 'default', transition: 'transform 0.1s ease, box-shadow 0.15s ease', boxShadow: isActive ? `0 0 0 2px ${c.color}20` : 'none' }}
+                  onMouseEnter={clickable ? e => { e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'; } : undefined}
+                  onMouseLeave={clickable ? e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow= isActive ? `0 0 0 2px ${c.color}20` : 'none'; } : undefined}>
+                  <div style={{ fontSize:8, fontWeight:700, color:c.color, textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
+                  <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:2 }}>{c.val}</div>
+                  {clickable && (
+                    <div style={{ fontSize:8, color:c.color, marginTop:2, opacity: isActive ? 0.9 : 0.55, fontWeight:600 }}>
+                      {isActive ? '✓ showing' : c.hint + ' →'}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {/* Tab row */}

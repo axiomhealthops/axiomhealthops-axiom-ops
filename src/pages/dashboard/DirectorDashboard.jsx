@@ -314,21 +314,36 @@ export default function DirectorDashboard({ onNavigate }) {
           </div>
         </div>
 
-        {/* Today's Visit Pulse */}
+        {/* Today's Visit Pulse — each tile routes to the relevant drill-down
+            so Liam can jump straight from the snapshot to the detail page
+            instead of scanning the sidebar. */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
           {[
-            { label:'Completed', val:m.completedThisWeek.length, color:'#059669', sub:`of ${WEEKLY_TARGET} target`, bg:'#F0FFF4' },
-            { label:'Cancelled', val:m.cancelledThisWeek.length, color:'#DC2626', sub:`${m.cancelRate}% cancel rate`, bg:m.cancelRate>10?'#FEF2F2':'var(--card-bg)' },
-            { label:'Missed', val:m.missedThisWeek.length, color:'#D97706', sub:'this week', bg:m.missedThisWeek.length>30?'#FEF3C7':'var(--card-bg)' },
-            { label:'Clinician Cap.', val:m.clinicianCapacity, color:'#1565C0', sub:'max visits/week', bg:'#EFF6FF' },
-            { label:'Utilization', val:Math.round((m.completedThisWeek.length/m.clinicianCapacity)*100)+'%', color:m.completedThisWeek.length/m.clinicianCapacity>0.75?'#059669':'#D97706', sub:`${m.completedThisWeek.length}/${m.clinicianCapacity} capacity`, bg:'var(--card-bg)' },
-          ].map(c => (
-            <div key={c.label} style={{ background:c.bg, border:'1px solid var(--border)', borderRadius:10, padding:'10px 12px', textAlign:'center' }}>
-              <div style={{ fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
-              <div style={{ fontSize:24, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:2 }}>{c.val}</div>
-              <div style={{ fontSize:9, color:'var(--gray)', marginTop:1 }}>{c.sub}</div>
-            </div>
-          ))}
+            { label:'Completed', val:m.completedThisWeek.length, color:'#059669', sub:`of ${WEEKLY_TARGET} target`, bg:'#F0FFF4', target:'visits', hint:'visit schedule' },
+            { label:'Cancelled', val:m.cancelledThisWeek.length, color:'#DC2626', sub:`${m.cancelRate}% cancel rate`, bg:m.cancelRate>10?'#FEF2F2':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
+            { label:'Missed', val:m.missedThisWeek.length, color:'#D97706', sub:'this week', bg:m.missedThisWeek.length>30?'#FEF3C7':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
+            { label:'Clinician Cap.', val:m.clinicianCapacity, color:'#1565C0', sub:'max visits/week', bg:'#EFF6FF', target:'staff', hint:'staff directory' },
+            { label:'Utilization', val:Math.round((m.completedThisWeek.length/m.clinicianCapacity)*100)+'%', color:m.completedThisWeek.length/m.clinicianCapacity>0.75?'#059669':'#D97706', sub:`${m.completedThisWeek.length}/${m.clinicianCapacity} capacity`, bg:'var(--card-bg)', target:'clinician-accountability', hint:'by clinician' },
+          ].map(c => {
+            const clickable = !!c.target;
+            return (
+              <div key={c.label}
+                onClick={clickable ? () => go(c.target) : undefined}
+                role={clickable ? 'button' : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                onKeyDown={clickable ? e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); go(c.target); } } : undefined}
+                style={{ background:c.bg, border:'1px solid var(--border)', borderRadius:10, padding:'10px 12px', textAlign:'center', cursor: clickable ? 'pointer' : 'default', transition:'transform 0.1s ease, box-shadow 0.15s ease' }}
+                onMouseEnter={clickable ? e => { e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'; } : undefined}
+                onMouseLeave={clickable ? e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; } : undefined}>
+                <div style={{ fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
+                <div style={{ fontSize:24, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:2 }}>{c.val}</div>
+                <div style={{ fontSize:9, color:'var(--gray)', marginTop:1 }}>{c.sub}</div>
+                {clickable && (
+                  <div style={{ fontSize:8, color:c.color, marginTop:3, opacity:0.65, fontWeight:600 }}>open {c.hint} →</div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {/* TRIAGE — 5 Priority Actions */}
