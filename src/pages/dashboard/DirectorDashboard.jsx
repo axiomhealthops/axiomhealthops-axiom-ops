@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import TopBar from '../../components/TopBar';
 
-const BLENDED_RATE = 185;
+const BLENDED_RATE = 230;
 const WEEKLY_TARGET = 750;
 const REVENUE_TARGET = 200000;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
