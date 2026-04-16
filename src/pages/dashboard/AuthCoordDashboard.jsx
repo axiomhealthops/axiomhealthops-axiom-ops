@@ -100,11 +100,14 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
   }
  
   const STATUSES = [
-    { k: 'active',   l: 'Active',    c: '#059669', bg: '#ECFDF5' },
-    { k: 'pending',  l: 'Pending',   c: '#D97706', bg: '#FEF3C7' },
-    { k: 'on_hold',  l: 'On Hold',   c: '#7C3AED', bg: '#F5F3FF' },
-    { k: 'denied',   l: 'Denied',    c: '#DC2626', bg: '#FEF2F2' },
-    { k: 'discharged',l:'Discharged',c: '#6B7280', bg: '#F3F4F6' },
+    { k: 'active',         l: 'Active',          c: '#059669', bg: '#ECFDF5' },
+    { k: 'pending',        l: 'Pending',         c: '#D97706', bg: '#FEF3C7' },
+    { k: 'submitted',      l: 'Submitted',       c: '#1E40AF', bg: '#EFF6FF' },
+    { k: 'renewal_needed', l: 'Renewal Needed',  c: '#991B1B', bg: '#FEF2F2' },
+    { k: 'appealing',      l: 'Appealing',       c: '#7C3AED', bg: '#EDE9FE' },
+    { k: 'on_hold',        l: 'On Hold',         c: '#374151', bg: '#F3F4F6' },
+    { k: 'denied',         l: 'Denied',          c: '#DC2626', bg: '#FEF2F2' },
+    { k: 'discharged',     l: 'Discharged',      c: '#6B7280', bg: '#F3F4F6' },
   ];
  
   return (
@@ -125,10 +128,10 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
         <div style={{ padding:22, display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
           <div style={{ gridColumn:'1/-1' }}>
             <label style={{ fontSize:11, fontWeight:700, display:'block', marginBottom:8 }}>Auth Status</label>
-            <div style={{ display:'flex', gap:6 }}>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
               {STATUSES.map(s => (
                 <button key={s.k} onClick={() => setForm(f=>({...f, auth_status:s.k}))}
-                  style={{ flex:1, padding:'6px 4px', borderRadius:6, border:`2px solid ${form.auth_status===s.k?s.c:'var(--border)'}`, background:form.auth_status===s.k?s.bg:'var(--card-bg)', fontSize:10, fontWeight:700, color:form.auth_status===s.k?s.c:'var(--gray)', cursor:'pointer' }}>
+                  style={{ padding:'6px 10px', borderRadius:6, border:`2px solid ${form.auth_status===s.k?s.c:'var(--border)'}`, background:form.auth_status===s.k?s.bg:'var(--card-bg)', fontSize:10, fontWeight:700, color:form.auth_status===s.k?s.c:'var(--gray)', cursor:'pointer', whiteSpace:'nowrap' }}>
                   {s.l}
                 </button>
               ))}
