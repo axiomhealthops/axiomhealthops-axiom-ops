@@ -74,7 +74,7 @@ function parseVisitCSV(csv) {
       discipline: (c[4] || '').trim(),
       staff_name: (c[5] || '').trim(),
       staff_name_normalized: normalizeParioxName((c[5] || '').trim()),
-      event_type: (c[6] || '').trim(),
+      event_type: (c[6] || '').trim().replace(/\s*\(PDF\)\s*$/i, '').trim(),
       raw_date: rawDate,
       visit_date: visitDate,
       visit_time: (c[8] || '').trim(),
@@ -150,19 +150,43 @@ function UploadCard(props) {
 
         // ── VISIT SCHEDULE ─────────────────────────────────────────────
         if (props.batchType === 'visits') {
+          // ── Pre-compare: fetch existing records so we can report new vs updated vs unchanged ──
+          setMessage('Comparing with existing visit data...');
+          var existingMap = {};
+          var { data: existingRows } = await supabase.from('visit_schedule_data')
+            .select('patient_name, visit_date, event_type, staff_name, status, notes');
+          (existingRows || []).forEach(function(r) {
+            var k = [r.patient_name || '', r.visit_date || '', r.event_type || '', r.staff_name || ''].join('||').toLowerCase();
+            existingMap[k] = r;
+          });
+
           var rows = data.map(function(r) { return Object.assign({}, r, { batch_id: batchId, uploaded_at: now }); });
-          var inserted = 0, updated = 0, errors = 0;
+          var newCount = 0, updatedCount = 0, unchangedCount = 0, errors = 0;
+
+          // Classify each row before upsert
+          rows.forEach(function(r) {
+            var k = [r.patient_name || '', r.visit_date || '', r.event_type || '', r.staff_name || ''].join('||').toLowerCase();
+            var prev = existingMap[k];
+            if (!prev) {
+              newCount++;
+            } else if (prev.status !== r.status || prev.notes !== r.notes) {
+              updatedCount++;
+            } else {
+              unchangedCount++;
+            }
+          });
 
           for (var i = 0; i < rows.length; i += 100) {
             var chunk = rows.slice(i, i + 100);
             // Upsert: if same patient+date+event+staff exists, update status/notes
             // ON CONFLICT update mutable fields only (status can change day to day)
+            // event_type is normalized at parse time (PDF suffix stripped) so completed
+            // visits properly UPDATE existing Scheduled/Missed records
             var res = await supabase.from('visit_schedule_data').upsert(chunk, {
               onConflict: 'patient_name,visit_date,event_type,staff_name',
               ignoreDuplicates: false,
             });
             if (res.error) { errors++; console.warn('Upsert chunk error:', res.error.message); }
-            else inserted += chunk.length;
             setMessage('Saving visits... ' + Math.min(i + 100, rows.length) + '/' + rows.length);
           }
 
@@ -191,7 +215,7 @@ function UploadCard(props) {
             console.warn('recompute_last_visit_dates failed:', rpcRes.error.message);
           }
 
-          setMessage('✓ Visits saved. ' + rows.length + ' in this upload · ' + (count || '?') + ' total in history' + lastVisitMsg + '.');
+          setMessage('✓ Visits saved. ' + newCount + ' new · ' + updatedCount + ' updated · ' + unchangedCount + ' unchanged · ' + (count || '?') + ' total in history' + lastVisitMsg + '.');
           setCount(rows.length);
         }
 
