@@ -55,9 +55,10 @@ export default function RMDailyDashboard() {
 
   const metrics = useMemo(() => {
     const active = census.filter(p => /active/i.test(p.status||''));
-    // Overdue threshold: 60 days (matches longest legitimate cadence — 1em2 monthly frequency).
-    // Anyone seen within 60d is likely on-schedule regardless of prescribed frequency.
-    const inactiveActive = active.filter(p => (p.days_since_last_visit||999) > 60);
+    // Frequency-aware overdue: each patient has their own threshold based on inferred cadence.
+    //   4w4 → 3d, 2w4 → 4d, 1w4 → 10d, 1em1 → 30d, 1em2 → 60d, prn → never flagged.
+    // Backfilled into census_data.overdue_threshold_days + days_overdue by SQL routine.
+    const inactiveActive = active.filter(p => (p.days_overdue||0) > 0);
     const completed = visits.filter(v => /completed/i.test(v.status||''));
     const cancelled = visits.filter(v => /cancel/i.test(v.status||'')||/cancel/i.test(v.event_type||''));
     const missed = visits.filter(v => /missed/i.test(v.status||''));
@@ -102,7 +103,7 @@ export default function RMDailyDashboard() {
 
   const filteredPatients = useMemo(() => {
     let list = census;
-    if (activeTab === 'inactive') list = census.filter(p => /active/i.test(p.status||'') && (p.days_since_last_visit||999)>60);
+    if (activeTab === 'inactive') list = census.filter(p => /active/i.test(p.status||'') && (p.days_overdue||0)>0);
     if (activeTab === 'on_hold') list = census.filter(p => /on.?hold/i.test(p.status||''));
     if (activeTab === 'pipeline') list = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status||''));
     if (activeTab === 'all_patients') list = census;
@@ -139,7 +140,7 @@ export default function RMDailyDashboard() {
         <div style={{ background:'#FEF2F2', borderBottom:'2px solid #FECACA', padding:'7px 20px', display:'flex', alignItems:'center', gap:10 }}>
           <span>🚨</span>
           <span style={{ fontSize:12, fontWeight:700, color:'#DC2626' }}>
-            {metrics.inactiveActive} active patients overdue (60d+ since last visit) — ${Math.round(metrics.inactiveRevGap/1000)}K/wk revenue gap in your region
+            {metrics.inactiveActive} active patients overdue vs their prescribed frequency — ${Math.round(metrics.inactiveRevGap/1000)}K/wk revenue gap in your region
           </span>
           <button onClick={() => setActiveTab('inactive')} style={{ marginLeft:'auto', fontSize:10, fontWeight:700, color:'#DC2626', background:'white', border:'1px solid #FECACA', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>View Patients</button>
         </div>
@@ -160,7 +161,7 @@ export default function RMDailyDashboard() {
               { label:'Active Patients', val:metrics.activePatients, color:'#059669', bg:'#ECFDF5' },
               { label:'Visits This Week', val:metrics.completedVisits, color:'#1565C0', bg:'#EFF6FF' },
               { label:'Capacity Used', val:metrics.utilization+'%', color:pctColor(metrics.utilization), bg:'var(--card-bg)' },
-              { label:'🔴 Overdue (60d+)', val:metrics.inactiveActive, color:'#DC2626', bg:'#FEF2F2' },
+              { label:'🔴 Overdue vs Freq', val:metrics.inactiveActive, color:'#DC2626', bg:'#FEF2F2' },
               { label:'🔄 On Hold', val:metrics.onHold, color:'#7C3AED', bg:'#F5F3FF' },
               { label:'⏳ Pipeline', val:metrics.socPending, color:'#D97706', bg:'#FEF3C7' },
             ].map(c => (
@@ -176,7 +177,7 @@ export default function RMDailyDashboard() {
             {[
               { k:'overview',     l:'📊 Overview' },
               { k:'clinicians',   l:`👤 My Clinicians (${clinicians.length})` },
-              { k:'inactive',     l:`🚨 Overdue 60d+ (${metrics.inactiveActive})` },
+              { k:'inactive',     l:`🚨 Overdue (${metrics.inactiveActive})` },
               { k:'on_hold',      l:`🔄 On Hold (${metrics.onHold})` },
               { k:'pipeline',     l:`⏳ Pipeline (${metrics.socPending})` },
               { k:'all_patients', l:'All Patients' },
@@ -278,24 +279,28 @@ export default function RMDailyDashboard() {
                 <div style={{ marginLeft:'auto', fontSize:11, color:'var(--gray)' }}>{filteredPatients.length} patients</div>
               </div>
               <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-                <div style={{ display:'grid', gridTemplateColumns:'1.8fr 1fr 0.9fr 0.7fr 0.8fr 1.2fr', padding:'8px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', gap:8 }}>
-                  <span>Patient</span><span>Insurance</span><span>Status</span><span>Last Visit</span><span>Days Since</span><span>Last Clinician</span>
+                <div style={{ display:'grid', gridTemplateColumns:'1.7fr 0.9fr 0.8fr 0.6fr 0.7fr 0.6fr 0.7fr 1.1fr', padding:'8px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', gap:8 }}>
+                  <span>Patient</span><span>Insurance</span><span>Status</span><span>Freq</span><span>Last Visit</span><span>Days Since</span><span>Overdue</span><span>Last Clinician</span>
                 </div>
                 {filteredPatients.length === 0 ? (
                   <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
-                    {activeTab==='inactive'?'✅ No patients overdue — everyone seen within 60 days.':'No patients in this category.'}
+                    {activeTab==='inactive'?'✅ No patients overdue — every patient seen within their prescribed frequency window.':'No patients in this category.'}
                   </div>
                 ) : filteredPatients.map((p, i) => {
                   const days = p.days_since_last_visit;
-                  const dc = days>14?'#DC2626':days>7?'#D97706':'#059669';
-                  const rowBg = days>14?'#FFF5F5':i%2===0?'var(--card-bg)':'var(--bg)';
+                  const overdue = p.days_overdue || 0;
+                  const dc = overdue>0?'#DC2626':days>7?'#D97706':'#059669';
+                  const rowBg = overdue>0?'#FFF5F5':i%2===0?'var(--card-bg)':'var(--bg)';
+                  const freq = p.inferred_frequency || '—';
                   return (
-                    <div key={p.patient_name+i} style={{ display:'grid', gridTemplateColumns:'1.8fr 1fr 0.9fr 0.7fr 0.8fr 1.2fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8 }}>
+                    <div key={p.patient_name+i} style={{ display:'grid', gridTemplateColumns:'1.7fr 0.9fr 0.8fr 0.6fr 0.7fr 0.6fr 0.7fr 1.1fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8 }}>
                       <div style={{ fontSize:12, fontWeight:600 }}>{p.patient_name}</div>
                       <span style={{ fontSize:11 }}>{p.insurance}</span>
                       <span style={{ fontSize:9, fontWeight:700, padding:'2px 6px', borderRadius:999, background:/active/i.test(p.status||'')?'#ECFDF5':'#F5F3FF', color:/active/i.test(p.status||'')?'#065F46':'#7C3AED' }}>{p.status}</span>
+                      <span style={{ fontSize:10, fontWeight:600, fontFamily:'DM Mono, monospace', color:'#475569' }}>{freq}</span>
                       <span style={{ fontSize:11 }}>{fmtDate(p.last_visit_date)}</span>
-                      <span style={{ fontSize:14, fontWeight:700, fontFamily:'DM Mono, monospace', color:dc }}>{days !== null ? `${days}d` : '—'}</span>
+                      <span style={{ fontSize:13, fontWeight:700, fontFamily:'DM Mono, monospace', color:dc }}>{days !== null ? `${days}d` : '—'}</span>
+                      <span style={{ fontSize:12, fontWeight:700, fontFamily:'DM Mono, monospace', color:overdue>0?'#DC2626':'#94A3B8' }}>{overdue>0?`+${overdue}d`:'—'}</span>
                       <span style={{ fontSize:11, color:'#1565C0', fontWeight:p.last_visit_clinician?600:400 }}>{p.last_visit_clinician || '—'}</span>
                     </div>
                   );

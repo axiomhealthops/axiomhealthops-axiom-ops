@@ -67,7 +67,7 @@ export default function ExecutiveReportPage() {
         .select('patient_name,visit_date,status,event_type,staff_name,staff_name_normalized,region,insurance')
         .gte('visit_date', prevWeek.start).lte('visit_date', week.end),
       supabase.from('census_data')
-        .select('patient_name,status,region,insurance,last_visit_date,days_since_last_visit,last_visit_clinician'),
+        .select('patient_name,status,region,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,inferred_frequency,overdue_threshold_days,days_overdue'),
       supabase.from('auth_tracker')
         .select('auth_status,auth_expiry_date,visits_authorized,visits_used,insurance,region'),
       supabase.from('intake_referrals')
@@ -110,8 +110,8 @@ export default function ExecutiveReportPage() {
 
     // Census
     const activePatients = census.filter(p => /active/i.test(p.status || ''));
-    // Overdue threshold: 60 days (matches longest legitimate cadence — 1em2 monthly frequency)
-    const inactiveActive = activePatients.filter(p => (p.days_since_last_visit || 999) > 60);
+    // Frequency-aware overdue: each patient has their own threshold (4w4→3d, 2w4→4d, 1w4→10d, 1em1→30d, 1em2→60d).
+    const inactiveActive = activePatients.filter(p => (p.days_overdue || 0) > 0);
     const onHold         = census.filter(p => /on.?hold/i.test(p.status || ''));
     const socPending     = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status || ''));
     const inactiveRevGap = inactiveActive.length * BLENDED_RATE * 2;

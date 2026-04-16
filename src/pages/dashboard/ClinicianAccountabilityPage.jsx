@@ -47,8 +47,8 @@ function CliniciansTab({ clinicians, visits, census }) {
 
     // Build inactive patient map: which clinician last saw each inactive active patient
     const inactiveMap = {};
-    // Overdue threshold: 60 days (matches longest legitimate cadence — 1em2 monthly frequency)
-    census.filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 60).forEach(p => {
+    // Frequency-aware overdue: each patient has their own threshold (4w4→3d, 2w4→4d, 1w4→10d, 1em1→30d, 1em2→60d).
+    census.filter(p => /active/i.test(p.status || '') && (p.days_overdue || 0) > 0).forEach(p => {
       // Normalize the clinician name for matching
       const rawClinician = p.last_visit_clinician || '';
       const normalizedClinician = rawClinician.includes(',') 
@@ -190,7 +190,7 @@ function CliniciansTab({ clinicians, visits, census }) {
               {isExpanded && cl.inactivePatients.length > 0 && (
                 <div style={{ background: '#FEF2F2', borderBottom: '2px solid #FECACA', padding: '12px 24px' }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: '#DC2626', marginBottom: 8 }}>
-                    ⚠ {cl.inactivePatients.length} active patient{cl.inactivePatients.length > 1 ? 's' : ''} last seen by {cl.full_name} — overdue 60+ days
+                    ⚠ {cl.inactivePatients.length} active patient{cl.inactivePatients.length > 1 ? 's' : ''} last seen by {cl.full_name} — overdue vs prescribed frequency
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                     {cl.inactivePatients.map(p => (
@@ -210,7 +210,7 @@ function CliniciansTab({ clinicians, visits, census }) {
               )}
               {isExpanded && cl.inactivePatients.length === 0 && (
                 <div style={{ background: '#ECFDF5', borderBottom: '1px solid #A7F3D0', padding: '10px 24px', fontSize: 11, color: '#065F46', fontWeight: 600 }}>
-                  ✅ All assigned patients seen within 60 days — clean caseload
+                  ✅ All assigned patients seen within their prescribed frequency — clean caseload
                 </div>
               )}
             </div>
@@ -229,8 +229,8 @@ function InactivePatientsTab({ census, clinicians }) {
 
   const inactiveActive = useMemo(() =>
     census
-      .filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 60)
-      .sort((a, b) => (b.days_since_last_visit || 999) - (a.days_since_last_visit || 999)),
+      .filter(p => /active/i.test(p.status || '') && (p.days_overdue || 0) > 0)
+      .sort((a, b) => (b.days_overdue || 0) - (a.days_overdue || 0)),
     [census]);
 
   const clinicianNames = useMemo(() =>
@@ -264,10 +264,10 @@ function InactivePatientsTab({ census, clinicians }) {
       <div style={{ background: '#FEF2F2', border: '2px solid #FECACA', borderRadius: 10, padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 800, color: '#DC2626' }}>
-            🚨 {inactiveActive.length} Active Patients Not Seen in 14+ Days
+            🚨 {inactiveActive.length} Active Patients Overdue vs Prescribed Frequency
           </div>
           <div style={{ fontSize: 11, color: '#DC2626', marginTop: 2 }}>
-            Estimated weekly revenue gap: ${Math.round(inactiveActive.length * BLENDED_RATE * 2).toLocaleString()} ({inactiveActive.length} patients × 2 visits × ${BLENDED_RATE})
+            Thresholds by cadence: 4w4→3d · 2w4→4d · 1w4→10d · 1em1→30d · 1em2→60d · Estimated weekly revenue gap: ${Math.round(inactiveActive.length * BLENDED_RATE * 2).toLocaleString()}
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
@@ -313,30 +313,28 @@ function InactivePatientsTab({ census, clinicians }) {
 
       {/* Patient table */}
       <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.5fr 1fr 0.8fr 0.8fr 1.4fr 0.8fr', padding: '8px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 9, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', gap: 8 }}>
-          <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Last Visit</span><span>Days Since</span><span>Last Clinician</span><span>Rev Gap/Wk</span>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 0.4fr 0.9fr 0.5fr 0.7fr 0.6fr 0.6fr 1.2fr 0.6fr', padding: '8px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 9, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', gap: 8 }}>
+          <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Freq</span><span>Last Visit</span><span>Days</span><span>Overdue</span><span>Last Clinician</span><span>Rev Gap/Wk</span>
         </div>
         {filtered.length === 0 ? (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--gray)' }}>No patients match filters.</div>
         ) : filtered.map((p, i) => {
           const days = p.days_since_last_visit || 999;
-          const rowBg = days > 30 ? '#FFF5F5' : days > 21 ? '#FFF8F0' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
-          const dayColor = days > 30 ? '#DC2626' : days > 21 ? '#D97706' : '#92400E';
+          const overdue = p.days_overdue || 0;
+          const rowBg = overdue > 14 ? '#FFF5F5' : overdue > 4 ? '#FFF8F0' : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
+          const overdueColor = overdue > 14 ? '#DC2626' : overdue > 4 ? '#D97706' : '#92400E';
           return (
-            <div key={p.patient_name + i} style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.5fr 1fr 0.8fr 0.8fr 1.4fr 0.8fr', padding: '9px 16px', borderBottom: '1px solid var(--border)', background: rowBg, alignItems: 'center', gap: 8 }}>
+            <div key={p.patient_name + i} style={{ display: 'grid', gridTemplateColumns: '1.7fr 0.4fr 0.9fr 0.5fr 0.7fr 0.6fr 0.6fr 1.2fr 0.6fr', padding: '9px 16px', borderBottom: '1px solid var(--border)', background: rowBg, alignItems: 'center', gap: 8 }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600 }}>{p.patient_name}</div>
                 <div style={{ fontSize: 9, color: 'var(--gray)', marginTop: 1 }}>{p.status}</div>
               </div>
               <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--gray)' }}>{p.region}</span>
               <span style={{ fontSize: 11 }}>{p.insurance}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: '#475569' }}>{p.inferred_frequency || '—'}</span>
               <span style={{ fontSize: 11 }}>{fmtDate(p.last_visit_date)}</span>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: dayColor }}>
-                  {p.last_visit_date ? days : '—'}
-                </div>
-                {p.last_visit_date && <div style={{ fontSize: 9, color: dayColor }}>days</div>}
-              </div>
+              <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: 'var(--gray)' }}>{p.last_visit_date ? `${days}d` : '—'}</span>
+              <span style={{ fontSize: 14, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: overdueColor }}>{overdue > 0 ? `+${overdue}d` : '—'}</span>
               <div>
                 {p.last_visit_clinician ? (
                   <span style={{ fontSize: 11, fontWeight: 600, color: '#1565C0' }}>{p.last_visit_clinician}</span>
@@ -371,7 +369,7 @@ export default function ClinicianAccountabilityPage() {
         .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region')
         .gte('visit_date', new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10)),
       supabase.from('census_data')
-        .select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,last_visit_type'),
+        .select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,last_visit_type,inferred_frequency,overdue_threshold_days,days_overdue'),
     ]);
     setClinicians(cl.data || []);
     setVisits(v.data || []);
@@ -388,18 +386,18 @@ export default function ClinicianAccountabilityPage() {
     </div>
   );
 
-  const inactiveCount = census.filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 60).length;
+  const inactiveCount = census.filter(p => /active/i.test(p.status || '') && (p.days_overdue || 0) > 0).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       <TopBar
         title="Clinician Accountability"
-        subtitle={`${clinicians.length} active clinicians · ${inactiveCount} inactive active patients`}
+        subtitle={`${clinicians.length} active clinicians · ${inactiveCount} patients overdue vs prescribed frequency`}
       />
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
         {[
           { key: 'clinicians', label: '👤 Clinician Utilization' },
-          { key: 'inactive', label: `🚨 Inactive Active Patients (${inactiveCount})` },
+          { key: 'inactive', label: `🚨 Overdue Patients (${inactiveCount})` },
         ].map(tab => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)}
             style={{ padding: '12px 20px', border: 'none', background: 'none', fontSize: 13, fontWeight: activeTab === tab.key ? 700 : 400, color: activeTab === tab.key ? 'var(--red)' : 'var(--gray)', borderBottom: activeTab === tab.key ? '2px solid var(--red)' : '2px solid transparent', cursor: 'pointer' }}>
