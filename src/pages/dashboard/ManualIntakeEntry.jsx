@@ -9,7 +9,7 @@ const REFERRAL_TYPES = ['New Referral','Re-Referral','Continuation'];
 const STATUSES = ['Pending','Accepted','Denied','On Hold'];
 const CHART_STATUSES = ['Chart Pending','Chart Received','Chart Incomplete','Ready for Auth'];
 
-export default // Module-scope field helpers. Previously defined inside the component body,
+// Module-scope field helpers. Previously defined inside the component body,
 // which caused React to unmount/remount every <input>/<select> on each keystroke
 // (new component reference per render) — resulting in focus loss after every
 // character. Critical for Hervylie's intake workflow.
@@ -39,7 +39,7 @@ function S({ name, value, onChange, err, opts, ...props }) {
   );
 }
 
-function ManualIntakeEntry({ onClose, onSaved }) {
+export default function ManualIntakeEntry({ onClose, onSaved }) {
   const { profile } = useAuth();
   const today = new Date().toISOString().slice(0,10);
   const fileRef = useRef();
