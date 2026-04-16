@@ -200,6 +200,17 @@ function UploadCard(props) {
             updated_at: now,
           }, { onConflict: 'data_type' });
 
+          // Sync completed visit counts → auth_tracker.visits_used and
+          // recompute auth sequences (predecessor→successor transitions).
+          setMessage('Syncing visit counts to authorization tracker...');
+          var syncRes = await supabase.rpc('sync_visits_to_auth');
+          var authSyncMsg = '';
+          if (syncRes && syncRes.data && syncRes.data.success) {
+            authSyncMsg = ' · synced ' + (syncRes.data.auths_updated || 0) + ' auth record(s)';
+          } else if (syncRes && syncRes.error) {
+            console.warn('sync_visits_to_auth failed:', syncRes.error.message);
+          }
+
           // Refresh last_visit_date / last_visit_clinician on census_data and
           // patient_master from the visits we just upserted. Without this step,
           // historical Pariox uploads would land in visit_schedule_data but the
@@ -215,7 +226,7 @@ function UploadCard(props) {
             console.warn('recompute_last_visit_dates failed:', rpcRes.error.message);
           }
 
-          setMessage('✓ Visits saved. ' + newCount + ' new · ' + updatedCount + ' updated · ' + unchangedCount + ' unchanged · ' + (count || '?') + ' total in history' + lastVisitMsg + '.');
+          setMessage('✓ Visits saved. ' + newCount + ' new · ' + updatedCount + ' updated · ' + unchangedCount + ' unchanged · ' + (count || '?') + ' total in history' + lastVisitMsg + authSyncMsg + '.');
           setCount(rows.length);
         }
 

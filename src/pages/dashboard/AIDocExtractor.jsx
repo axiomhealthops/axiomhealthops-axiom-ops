@@ -259,18 +259,32 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
         if (dbErr) throw new Error(dbErr.message);
       } else {
         // Auth mode — save to auth_tracker
+        const patientName = editedData.patient_name || null;
+
+        // Detect whether this is a renewal: does this patient already have an active auth?
+        var isRenewal = false;
+        if (patientName) {
+          const { data: existingAuths } = await supabase.from('auth_tracker')
+            .select('id, auth_number')
+            .ilike('patient_name', patientName.trim())
+            .in('auth_status', ['active', 'pending', 'submitted', 'renewal_needed'])
+            .limit(1);
+          isRenewal = existingAuths && existingAuths.length > 0;
+        }
+
         const payload = {
-          patient_name: editedData.patient_name || null,
+          patient_name: patientName,
           dob: editedData.dob || null,
           member_id: editedData.member_id || null,
           insurance: editedData.insurance || 'Unknown',
-          insurance_type: 'standard',
+          insurance_type: editedData.insurance_type || 'standard',
           auth_number: editedData.auth_number || null,
           auth_status: editedData.auth_status || 'pending',
           visits_authorized: parseInt(editedData.visits_authorized) || 24,
           visits_used: 0,
           soc_date: editedData.auth_start_date || null,
           auth_expiry_date: editedData.auth_expiry_date || null,
+          auth_approved_date: editedData.auth_approved_date || null,
           therapy_type: editedData.therapy_type || 'LYMPHEDEMA',
           frequency: editedData.frequency || null,
           pcp_name: editedData.pcp_name || null,
@@ -278,7 +292,8 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
           pcp_fax: editedData.pcp_fax || null,
           denial_reason: editedData.denial_reason || null,
           notes: editedData.notes || null,
-          request_type: 'initial',
+          request_type: isRenewal ? 'renewal' : 'initial',
+          request_category: isRenewal ? 'renewal' : 'initial',
         };
         const { data: authRow, error: dbErr } = await supabase.from('auth_tracker').insert(payload).select('id').single();
         if (dbErr) throw new Error(dbErr.message);
@@ -293,6 +308,13 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
             doc_type: 'auth',
             uploaded_by: 'AI Extractor',
           });
+        }
+
+        // Recompute auth sequence for this patient — chains predecessor → successor,
+        // locks visits on the renewal until predecessor is exhausted, and updates
+        // is_currently_active + effective_visits_remaining across all auths.
+        if (patientName) {
+          await supabase.rpc('recompute_auth_sequence', { p_patient_name: patientName });
         }
       }
 
