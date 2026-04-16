@@ -1341,20 +1341,22 @@ export default function IntakeDashboardPage() {
                   <div style={{ padding: 40, textAlign: 'center', color: 'var(--gray)', fontSize: 13 }}>No records match your filters.</div>
                 )}
                 {filtered.slice(0, 300).map((r, i) => {
-                  const isAccepted = r.referral_status === 'Accepted';
+                  const st = r.referral_status || 'Pending';
+                  const stColor = st === 'Accepted' ? '#065F46' : st === 'Denied' ? '#DC2626' : st === 'On Hold' ? '#92400E' : '#1565C0';
+                  const stBg = st === 'Accepted' ? '#ECFDF5' : st === 'Denied' ? '#FEF2F2' : st === 'On Hold' ? '#FEF3C7' : '#EFF6FF';
                   return (
                     <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '0.8fr 2.2fr 0.5fr 0.9fr 1.5fr 1.5fr 0.8fr', padding: '9px 16px', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)', alignItems: 'center' }}>
                       <span style={{ fontSize: 11, color: 'var(--gray)', fontFamily: 'DM Mono, monospace' }}>{r.date_received ? r.date_received.slice(0, 10) : '—'}</span>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name || '—'}</div>
-                        {r.denial_reason && !isAccepted && <div style={{ fontSize: 10, color: '#DC2626', marginTop: 1 }}>{r.denial_reason.slice(0, 60)}</div>}
+                        {r.denial_reason && st === 'Denied' && <div style={{ fontSize: 10, color: '#DC2626', marginTop: 1 }}>{r.denial_reason.slice(0, 60)}</div>}
                       </div>
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>{r.region || '—'}</span>
                       <span style={{ fontSize: 10, color: 'var(--gray)' }}>{(r.referral_type || '').replace(' Referral','').replace('Existing Patient','Existing') || '—'}</span>
                       <span style={{ fontSize: 11, color: 'var(--black)' }}>{r.insurance || '—'}</span>
                       <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 50)}</span>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: isAccepted ? '#065F46' : '#DC2626', background: isAccepted ? '#ECFDF5' : '#FEF2F2', padding: '2px 7px', borderRadius: 999, whiteSpace: 'nowrap' }}>
-                        {isAccepted ? 'Accepted' : 'Denied'}
+                      <span style={{ fontSize: 10, fontWeight: 700, color: stColor, background: stBg, padding: '2px 7px', borderRadius: 999, whiteSpace: 'nowrap' }}>
+                        {st}
                       </span>
                     </div>
                   );
