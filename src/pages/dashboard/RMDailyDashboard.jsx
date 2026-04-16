@@ -15,6 +15,17 @@ function daysAgo(d) {
 }
 function pctColor(p) { return p>=80?'#059669':p>=60?'#D97706':'#DC2626'; }
 
+// Compute overdue dynamically from last_visit_date + overdue_threshold_days
+// instead of relying on the pre-computed days_overdue column, which goes stale
+// after visit uploads until the SQL batch job runs again.
+function computeOverdue(p) {
+  if (!p.last_visit_date) return { daysSince: null, overdue: (p.overdue_threshold_days || 14) };
+  var daysSince = Math.floor((Date.now() - new Date(p.last_visit_date + 'T00:00:00').getTime()) / 86400000);
+  var threshold = p.overdue_threshold_days || 14;
+  var overdue = Math.max(0, daysSince - threshold);
+  return { daysSince: daysSince, overdue: overdue };
+}
+
 export default function RMDailyDashboard() {
   const { profile } = useAuth();
   const [census, setCensus] = useState([]);
@@ -57,8 +68,9 @@ export default function RMDailyDashboard() {
     const active = census.filter(p => /active/i.test(p.status||''));
     // Frequency-aware overdue: each patient has their own threshold based on inferred cadence.
     //   4w4 → 3d, 2w4 → 4d, 1w4 → 10d, 1em1 → 30d, 1em2 → 60d, prn → never flagged.
-    // Backfilled into census_data.overdue_threshold_days + days_overdue by SQL routine.
-    const inactiveActive = active.filter(p => (p.days_overdue||0) > 0);
+    // Computed dynamically from last_visit_date + overdue_threshold_days so it stays
+    // fresh even before the SQL batch recalculates the days_overdue column.
+    const inactiveActive = active.filter(p => computeOverdue(p).overdue > 0);
     const completed = visits.filter(v => /completed/i.test(v.status||''));
     const cancelled = visits.filter(v => /cancel/i.test(v.status||'')||/cancel/i.test(v.event_type||''));
     const missed = visits.filter(v => /missed/i.test(v.status||''));
@@ -103,12 +115,12 @@ export default function RMDailyDashboard() {
 
   const filteredPatients = useMemo(() => {
     let list = census;
-    if (activeTab === 'inactive') list = census.filter(p => /active/i.test(p.status||'') && (p.days_overdue||0)>0);
+    if (activeTab === 'inactive') list = census.filter(p => /active/i.test(p.status||'') && computeOverdue(p).overdue > 0);
     if (activeTab === 'on_hold') list = census.filter(p => /on.?hold/i.test(p.status||''));
     if (activeTab === 'pipeline') list = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status||''));
     if (activeTab === 'all_patients') list = census;
     if (search) { const q=search.toLowerCase(); list=list.filter(p=>`${p.patient_name} ${p.insurance}`.toLowerCase().includes(q)); }
-    return list.sort((a,b)=>(b.days_since_last_visit||0)-(a.days_since_last_visit||0));
+    return list.sort((a,b)=>computeOverdue(b).overdue - computeOverdue(a).overdue);
   }, [census, activeTab, search]);
 
   if (loading) return (
@@ -304,8 +316,9 @@ export default function RMDailyDashboard() {
                     {activeTab==='inactive'?'✅ No patients overdue — every patient seen within their prescribed frequency window.':'No patients in this category.'}
                   </div>
                 ) : filteredPatients.map((p, i) => {
-                  const days = p.days_since_last_visit;
-                  const overdue = p.days_overdue || 0;
+                  const ov = computeOverdue(p);
+                  const days = ov.daysSince;
+                  const overdue = ov.overdue;
                   const dc = overdue>0?'#DC2626':days>7?'#D97706':'#059669';
                   const rowBg = overdue>0?'#FFF5F5':i%2===0?'var(--card-bg)':'var(--bg)';
                   const freq = p.inferred_frequency || '—';
