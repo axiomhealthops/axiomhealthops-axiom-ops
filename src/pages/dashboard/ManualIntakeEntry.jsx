@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import AIDocExtractor from './AIDocExtractor';
@@ -59,6 +59,17 @@ function ManualIntakeEntry({ onClose, onSaved }) {
   const [errors, setErrors] = useState({});
   const [step, setStep] = useState(1);
   const [showAI, setShowAI] = useState(false);
+
+  // Defensive escape hatch — if anything in the modal ever gets stuck (save
+  // error, network hang, stale state), users can always Esc out. Skip the
+  // handler while the AI extractor is open so its own Esc doesn't double-fire.
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape' && !showAI && !saving) onClose?.();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, showAI, saving]);
 
   function set(key, val) { setForm(p => ({ ...p, [key]: val })); }
 
@@ -122,8 +133,12 @@ function ManualIntakeEntry({ onClose, onSaved }) {
   const totalSteps = 5;
 
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
-      <div style={{ background:'var(--card-bg)', borderRadius:16, width:'100%', maxWidth:700, maxHeight:'90vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+    <div
+      onClick={e => { if (e.target === e.currentTarget && !saving) onClose?.(); }}
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ background:'var(--card-bg)', borderRadius:16, width:'100%', maxWidth:700, maxHeight:'90vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
 
         {/* Header */}
         <div style={{ padding:'18px 24px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>

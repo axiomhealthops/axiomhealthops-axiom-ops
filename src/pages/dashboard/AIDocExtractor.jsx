@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 
 const EXTRACTION_MODES = {
@@ -113,6 +113,18 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [uploadPath, setUploadPath] = useState(null);
+
+  // Defensive escape — if a save error or network hang leaves the modal
+  // showing an unrecoverable state, users can always Esc out instead of
+  // being trapped looking for the × button. Disabled while extracting
+  // or saving so an in-flight request isn't silently abandoned.
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape' && !extracting && !saving) onClose?.();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, extracting, saving]);
 
   function handleFileChange(e) {
     const f = e.target.files?.[0];
@@ -319,8 +331,12 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
   const filledCount = editedData ? fields.filter(([k]) => editedData[k]).length : 0;
 
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
-      <div style={{ background:'var(--card-bg)', borderRadius:16, width:'100%', maxWidth:760, maxHeight:'92vh', display:'flex', flexDirection:'column', boxShadow:'0 24px 60px rgba(0,0,0,0.35)' }}>
+    <div
+      onClick={e => { if (e.target === e.currentTarget && !extracting && !saving) onClose?.(); }}
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ background:'var(--card-bg)', borderRadius:16, width:'100%', maxWidth:760, maxHeight:'92vh', display:'flex', flexDirection:'column', boxShadow:'0 24px 60px rgba(0,0,0,0.35)' }}>
 
         {/* Header */}
         <div style={{ padding:'18px 24px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:cfg.bg, borderRadius:'16px 16px 0 0' }}>
