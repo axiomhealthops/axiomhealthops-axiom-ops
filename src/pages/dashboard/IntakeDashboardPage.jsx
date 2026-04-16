@@ -1355,9 +1355,17 @@ export default function IntakeDashboardPage() {
                       <span style={{ fontSize: 10, color: 'var(--gray)' }}>{(r.referral_type || '').replace(' Referral','').replace('Existing Patient','Existing') || '—'}</span>
                       <span style={{ fontSize: 11, color: 'var(--black)' }}>{r.insurance || '—'}</span>
                       <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 50)}</span>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: stColor, background: stBg, padding: '2px 7px', borderRadius: 999, whiteSpace: 'nowrap' }}>
-                        {st}
-                      </span>
+                      <select value={st} onChange={async function(e) {
+                        var newStatus = e.target.value;
+                        var { error } = await supabase.from('intake_referrals').update({ referral_status: newStatus, updated_at: new Date().toISOString() }).eq('id', r.id);
+                        if (error) { alert('Error updating status: ' + error.message); return; }
+                        setRecords(function(prev) { return prev.map(function(rec) { return rec.id === r.id ? Object.assign({}, rec, { referral_status: newStatus }) : rec; }); });
+                      }} style={{ fontSize: 10, fontWeight: 700, color: stColor, background: stBg, padding: '2px 4px', borderRadius: 6, border: '1px solid ' + stBg, cursor: 'pointer', outline: 'none', appearance: 'none', WebkitAppearance: 'none', textAlign: 'center', minWidth: 70 }}>
+                        <option value="Pending">Pending</option>
+                        <option value="Accepted">Accepted</option>
+                        <option value="Denied">Denied</option>
+                        <option value="On Hold">On Hold</option>
+                      </select>
                     </div>
                   );
                 })}
