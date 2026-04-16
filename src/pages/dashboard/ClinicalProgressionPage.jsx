@@ -283,13 +283,10 @@ export default function ClinicalProgressionPage() {
       const nextLevel = currentLvl && currentLvl !== 'maint' && currentIdx < levelKeys.length - 1 ? levelKeys[currentIdx + 1] : null;
       const cs = clinicalSettings[p.patient_name] || null;
 
-      // Auto-derive LOC from treatment level when no manual LOC is assigned.
-      // Level 5 → LOC 5 (High Risk), Level 4 → LOC 4, etc.
-      // Maintenance/Level 1 → LOC 1, Evaluation → LOC 3 (moderate default).
-      const LOC_FROM_LEVEL = { '5':5, '4':4, '3':3, '2':2, '1':1, 'maint':1, 'eval':3 };
-      const manualLoc = cs?.loc || null;
-      const derivedLoc = currentLvl ? (LOC_FROM_LEVEL[currentLvl] || null) : null;
-      const effectiveLoc = manualLoc || derivedLoc;
+      // LOC is an independent clinical risk/complexity assessment assigned by
+      // clinicians. It is NOT derived from treatment level — a patient can be at
+      // Maintenance treatment but LOC 5 if they have complex comorbidities.
+      const loc = cs?.loc || null;
 
       return {
         patient_name: p.patient_name,
@@ -303,13 +300,12 @@ export default function ClinicalProgressionPage() {
         clinician: completedVisits[0]?.staff_name || null,
         totalCompletedVisits: completedVisits.length,
         recentEncounterCount: recentEncounters.length,
-        // Clinical settings — manual takes precedence, then inferred from visit pattern
+        // Visit frequency — manual takes precedence, then inferred from visit pattern
         visit_frequency: cs?.visit_frequency || inferredFreq,
         visit_frequency_manual: cs?.visit_frequency || null,
         visit_frequency_inferred: inferredFreq,
-        loc: effectiveLoc,
-        loc_manual: manualLoc,
-        loc_derived: derivedLoc,
+        // LOC — purely clinician-assigned (independent of treatment level)
+        loc: loc,
         loc_notes: cs?.loc_notes || null,
         frequency_notes: cs?.frequency_notes || null,
         settings_assigned_by: cs?.assigned_by || null,
@@ -356,8 +352,7 @@ export default function ClinicalProgressionPage() {
     overdue: patients.filter(p => p.isOverdue).length,
     highRisk: patients.filter(p => p.loc === 5).length,
     noLoc: patients.filter(p => !p.loc).length,
-    manualLocCount: patients.filter(p => p.loc_manual).length,
-    derivedLocCount: patients.filter(p => !p.loc_manual && p.loc_derived).length,
+    assignedLocCount: patients.filter(p => p.loc).length,
     manualFreqCount: patients.filter(p => p.visit_frequency_manual).length,
     inferredFreqCount: patients.filter(p => !p.visit_frequency_manual && p.visit_frequency_inferred).length,
     byLevel: LEVELS.reduce((acc,l) => ({ ...acc, [l.key]: patients.filter(p=>p.currentLevel===l.key).length }), {}),
@@ -463,9 +458,8 @@ export default function ClinicalProgressionPage() {
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
               <div style={{ fontSize:13, fontWeight:700 }}>Level of Care (LOC) Distribution</div>
               <div style={{ fontSize:10, color:'var(--gray)' }}>
-                {stats.manualLocCount > 0 && <span>{stats.manualLocCount} manually assigned · </span>}
-                {stats.derivedLocCount > 0 && <span>{stats.derivedLocCount} auto-derived from treatment level · </span>}
-                {stats.noLoc > 0 && <span style={{ color:'#D97706' }}>{stats.noLoc} unassigned</span>}
+                {stats.assignedLocCount > 0 && <span>{stats.assignedLocCount} clinician-assigned · </span>}
+                {stats.noLoc > 0 && <span style={{ color:'#D97706' }}>{stats.noLoc} awaiting clinician assessment</span>}
               </div>
             </div>
             <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
@@ -485,7 +479,7 @@ export default function ClinicalProgressionPage() {
                 onClick={() => setFilterLoc(filterLoc==='0'?'ALL':'0')}>
                 <div style={{ fontSize:12, fontWeight:800, color:'#6B7280' }}>Unassigned</div>
                 <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', color:'#6B7280' }}>{stats.noLoc}</div>
-                <div style={{ fontSize:9, color:'#6B7280', marginTop:2 }}>No visits or level</div>
+                <div style={{ fontSize:9, color:'#6B7280', marginTop:2 }}>Needs clinician assessment</div>
               </div>
             </div>
           </div>
@@ -644,7 +638,6 @@ export default function ClinicalProgressionPage() {
                             <>
                               <div style={{ fontSize:20, fontWeight:900, color:lCfg.color }}>{lCfg.label} — {lCfg.full}</div>
                               <div style={{ fontSize:11, color:lCfg.color, marginTop:3 }}>{lCfg.desc}</div>
-                              {!p.loc_manual && p.loc_derived && <div style={{ fontSize:10, color:'var(--gray)', marginTop:4 }}>Auto-derived from treatment level · Edit to override</div>}
                               {p.loc_notes && <div style={{ fontSize:11, color:'var(--gray)', marginTop:6, fontStyle:'italic' }}>{p.loc_notes}</div>}
                             </>
                           ) : (
