@@ -314,6 +314,9 @@ function AddEditModal(props) {
   async function handleSave() {
     setSaving(true);
     var data = Object.assign({}, form);
+    // Strip client-side computed fields that don't exist in the DB
+    delete data._urgency;
+    delete data.pd;
     ['dob','soc_date','auth_submitted_date','auth_needed_by','auth_approved_date','auth_expiry_date'].forEach(function(f) { if (!data[f]) data[f] = null; });
     ['visits_authorized','visits_used','evals_authorized','evals_used','reassessments_authorized','reassessments_used'].forEach(function(f) { data[f] = parseInt(data[f]) || 0; });
     var result = rec && rec.id
