@@ -128,7 +128,7 @@ export async function runAuthAlertEngine() {
  
   // Pull both currently-active auths (for renewal/critical tasks) AND just-expired auths (for expired tasks)
   var activeRes = await supabase.from('auth_tracker')
-    .select('id, patient_name, insurance, region, auth_status, visits_authorized, visits_used, auth_expiry_date, is_currently_active')
+    .select('id, patient_name, insurance, insurance_type, region, auth_status, visits_authorized, visits_used, auth_expiry_date, is_currently_active')
     .in('auth_status', ['active', 'renewal_needed'])
     .eq('is_currently_active', true);
  
@@ -142,6 +142,8 @@ export async function runAuthAlertEngine() {
   var tasksToInsert = [];
  
   (activeRes.data || []).forEach(function(r) {
+    // PPO plans don't require authorization — skip alert generation
+    if ((r.insurance_type || '').toLowerCase() === 'ppo') return;
     var remaining = Math.max((r.visits_authorized || 0) - (r.visits_used || 0), 0);
     var expDays = r.auth_expiry_date ? Math.round((new Date(r.auth_expiry_date) - today) / (1000*60*60*24)) : null;
     var coord = REGION_COORD[r.region] || null;

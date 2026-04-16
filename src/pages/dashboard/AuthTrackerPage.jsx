@@ -61,7 +61,13 @@ function rawVisitsRemaining(rec) {
   return Math.max((rec.visits_authorized || 0) - (rec.visits_used || 0), 0);
 }
  
+function isPPO(rec) {
+  return (rec.insurance_type || '').toLowerCase() === 'ppo';
+}
+
 function getUrgency(rec) {
+  // PPO plans don't require authorization — always green
+  if (isPPO(rec)) return 'ok';
   var remaining = visitsRemaining(rec);
   var rawRemaining = rawVisitsRemaining(rec);
   var expDays = daysUntil(rec.auth_expiry_date);
@@ -298,7 +304,8 @@ function AddEditModal(props) {
     var u = Object.assign({}, form);
     u[field] = val;
     if (field === 'insurance_type') {
-      if (val === 'medicare') { u.visits_authorized = 20; u.evals_authorized = 1; u.reassessments_authorized = 0; }
+      if (val === 'ppo') { u.auth_status = 'active'; u.notes = (u.notes ? u.notes + '\n' : '') + 'PPO — No authorization required.'; }
+      else if (val === 'medicare') { u.visits_authorized = 20; u.evals_authorized = 1; u.reassessments_authorized = 0; }
       else if (form.insurance_type === 'medicare') { u.visits_authorized = 24; u.evals_authorized = 2; u.reassessments_authorized = 3; }
     }
     setForm(u);
@@ -367,6 +374,7 @@ function AddEditModal(props) {
               <select style={INP} value={form.insurance_type || 'standard'} onChange={function(e){set('insurance_type',e.target.value)}}>
                 <option value="standard">Standard (24 visits)</option>
                 <option value="medicare">Medicare (20 visits)</option>
+                <option value="ppo">PPO (No Auth Required)</option>
               </select>
             </div>
             <div><label style={LBL}>Auth Number</label><input style={INP} value={form.auth_number || ''} onChange={function(e){set('auth_number',e.target.value)}} /></div>
@@ -519,6 +527,7 @@ export default function AuthTrackerPage() {
     if (activeTab === 'expiring') list = list.filter(function(r) { var d = daysUntil(r.auth_expiry_date); return d !== null && d <= 30 && d >= 0; });
     if (activeTab === 'denied') list = list.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; });
     if (activeTab === 'queued') list = list.filter(function(r) { return r.alert_predecessor_pending === true; });
+    if (activeTab === 'ppo') list = list.filter(function(r) { return isPPO(r); });
     if (search) {
       var q = search.toLowerCase();
       list = list.filter(function(r) {
@@ -551,12 +560,15 @@ export default function AuthTrackerPage() {
     return list;
   }, [records, search, statusFilter, regionFilter, insuranceFilter, sortBy, activeTab]);
  
-  var critical   = records.filter(function(r) { return getUrgency(r) === 'critical'; }).length;
-  var pending    = records.filter(function(r) { return r.auth_status === 'pending' || r.auth_status === 'submitted'; }).length;
-  var expiring30 = records.filter(function(r) { var d = daysUntil(r.auth_expiry_date); return d !== null && d <= 30 && d >= 0; }).length;
-  var denied     = records.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; }).length;
+  // Exclude PPO patients from actionable counts — they don't require auth
+  var nonPPO     = records.filter(function(r) { return !isPPO(r); });
+  var ppoCount   = records.length - nonPPO.length;
+  var critical   = nonPPO.filter(function(r) { return getUrgency(r) === 'critical'; }).length;
+  var pending    = nonPPO.filter(function(r) { return r.auth_status === 'pending' || r.auth_status === 'submitted'; }).length;
+  var expiring30 = nonPPO.filter(function(r) { var d = daysUntil(r.auth_expiry_date); return d !== null && d <= 30 && d >= 0; }).length;
+  var denied     = nonPPO.filter(function(r) { return r.auth_status === 'denied' || r.auth_status === 'appealing'; }).length;
   var active     = records.filter(function(r) { return r.auth_status === 'active'; }).length;
-  var queued     = records.filter(function(r) { return r.alert_predecessor_pending === true; }).length;
+  var queued     = nonPPO.filter(function(r) { return r.alert_predecessor_pending === true; }).length;
  
   var SEL = { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)', color: 'var(--black)', outline: 'none' };
   var tabs = [
@@ -567,6 +579,7 @@ export default function AuthTrackerPage() {
     { key: 'pending',  label: 'Pending / Submitted',count: pending,    color: '#92400E' },
     { key: 'expiring', label: 'Expiring (30 days)', count: expiring30, color: '#F59E0B' },
     { key: 'denied',   label: 'Denied / Appeal',    count: denied,     color: '#6D28D9' },
+    { key: 'ppo',      label: '✅ PPO (No Auth)',    count: ppoCount,   color: '#059669' },
   ];
   var GRID = '2fr 0.5fr 0.8fr 0.85fr 1.05fr 1fr 0.85fr 0.7fr';
  
@@ -720,7 +733,11 @@ export default function AuthTrackerPage() {
  
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.insurance}</div>
-                        <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{r.insurance_type === 'medicare' ? 'Medicare' : 'Standard'}</div>
+                        {isPPO(r) ? (
+                          <div style={{ fontSize: 9, fontWeight: 700, color: '#065F46', background: '#ECFDF5', padding: '1px 6px', borderRadius: 4, marginTop: 2, display: 'inline-block' }}>PPO — No Auth Req.</div>
+                        ) : (
+                          <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{r.insurance_type === 'medicare' ? 'Medicare' : 'Standard'}</div>
+                        )}
                       </div>
  
                       <div>
