@@ -111,7 +111,7 @@ function RegionRow({ region, active, inactiveActive, onHold, pending, completedV
           </div>
           <span style={{ fontSize:11, fontWeight:700, color:barColor, minWidth:28 }}>{activityRate}%</span>
         </div>
-        {inactiveActive > 0 && <div style={{ fontSize:9, color:'#DC2626', marginTop:2 }}>{inactiveActive} not seen 14d+</div>}
+        {inactiveActive > 0 && <div style={{ fontSize:9, color:'#DC2626', marginTop:2 }}>{inactiveActive} overdue 60d+</div>}
       </div>
       <div style={{ fontSize:13, fontWeight:inactiveActive>10?700:400, color:inactiveActive>10?'#DC2626':'var(--gray)' }}>{inactiveActive}</div>
       <div style={{ fontSize:13, color:'var(--gray)' }}>{onHold}</div>
@@ -185,7 +185,8 @@ export default function DirectorDashboard({ onNavigate }) {
     if (!census.length) return null;
 
     const active = census.filter(p => /active/i.test(p.status || ''));
-    const inactiveActive = active.filter(p => !p.last_visit_date || (p.days_since_last_visit || 0) > 14);
+    // Overdue threshold: 60 days (matches longest legitimate cadence — 1em2 monthly frequency)
+    const inactiveActive = active.filter(p => !p.last_visit_date || (p.days_since_last_visit || 0) > 60);
     const onHoldPts = census.filter(p => /on.?hold/i.test(p.status || ''));
     const pendingStart = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status || ''));
 
@@ -394,7 +395,7 @@ export default function DirectorDashboard({ onNavigate }) {
         <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
           <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <div style={{ fontSize:13, fontWeight:800, color:'#0F1117' }}>Region Health & Revenue Gap</div>
-            <div style={{ fontSize:11, color:'var(--gray)' }}>Activity rate = active patients seen within 14 days</div>
+            <div style={{ fontSize:11, color:'var(--gray)' }}>Activity rate = active patients seen within 60 days</div>
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'0.5fr 0.7fr 1.2fr 0.7fr 0.7fr 0.7fr 0.9fr', padding:'7px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', gap:8 }}>
             <span>Region</span><span>Active</span><span>Activity Rate</span><span>Inactive</span><span>On Hold</span><span>Pending</span><span>Rev Gap/Wk</span>
@@ -406,7 +407,7 @@ export default function DirectorDashboard({ onNavigate }) {
             <span style={{ fontWeight:700 }}>Total</span>
             <span style={{ color:'var(--gray)' }}>{m.active} active</span>
             <span style={{ color:'var(--gray)' }}></span>
-            <span style={{ color:'#DC2626', fontWeight:700 }}>{m.inactiveActive.length} not seen 14d+</span>
+            <span style={{ color:'#DC2626', fontWeight:700 }}>{m.inactiveActive.length} overdue 60d+</span>
             <span style={{ color:'var(--gray)' }}>{m.onHoldPts.length}</span>
             <span style={{ color:'var(--gray)' }}>{m.pendingStart.length}</span>
             <span style={{ color:'#DC2626', fontWeight:700 }}>-{fmt$(totalInactiveGap)}/wk</span>

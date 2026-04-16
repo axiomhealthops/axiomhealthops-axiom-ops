@@ -110,7 +110,8 @@ export default function ExecutiveReportPage() {
 
     // Census
     const activePatients = census.filter(p => /active/i.test(p.status || ''));
-    const inactiveActive = activePatients.filter(p => (p.days_since_last_visit || 999) > 14);
+    // Overdue threshold: 60 days (matches longest legitimate cadence — 1em2 monthly frequency)
+    const inactiveActive = activePatients.filter(p => (p.days_since_last_visit || 999) > 60);
     const onHold         = census.filter(p => /on.?hold/i.test(p.status || ''));
     const socPending     = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status || ''));
     const inactiveRevGap = inactiveActive.length * BLENDED_RATE * 2;

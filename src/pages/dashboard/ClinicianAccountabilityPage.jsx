@@ -47,7 +47,8 @@ function CliniciansTab({ clinicians, visits, census }) {
 
     // Build inactive patient map: which clinician last saw each inactive active patient
     const inactiveMap = {};
-    census.filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 14).forEach(p => {
+    // Overdue threshold: 60 days (matches longest legitimate cadence — 1em2 monthly frequency)
+    census.filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 60).forEach(p => {
       // Normalize the clinician name for matching
       const rawClinician = p.last_visit_clinician || '';
       const normalizedClinician = rawClinician.includes(',') 
@@ -189,7 +190,7 @@ function CliniciansTab({ clinicians, visits, census }) {
               {isExpanded && cl.inactivePatients.length > 0 && (
                 <div style={{ background: '#FEF2F2', borderBottom: '2px solid #FECACA', padding: '12px 24px' }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: '#DC2626', marginBottom: 8 }}>
-                    ⚠ {cl.inactivePatients.length} active patient{cl.inactivePatients.length > 1 ? 's' : ''} last seen by {cl.full_name} — no visit in 14+ days
+                    ⚠ {cl.inactivePatients.length} active patient{cl.inactivePatients.length > 1 ? 's' : ''} last seen by {cl.full_name} — overdue 60+ days
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                     {cl.inactivePatients.map(p => (
@@ -209,7 +210,7 @@ function CliniciansTab({ clinicians, visits, census }) {
               )}
               {isExpanded && cl.inactivePatients.length === 0 && (
                 <div style={{ background: '#ECFDF5', borderBottom: '1px solid #A7F3D0', padding: '10px 24px', fontSize: 11, color: '#065F46', fontWeight: 600 }}>
-                  ✅ All assigned patients seen within 14 days — clean caseload
+                  ✅ All assigned patients seen within 60 days — clean caseload
                 </div>
               )}
             </div>
@@ -228,7 +229,7 @@ function InactivePatientsTab({ census, clinicians }) {
 
   const inactiveActive = useMemo(() =>
     census
-      .filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 14)
+      .filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 60)
       .sort((a, b) => (b.days_since_last_visit || 999) - (a.days_since_last_visit || 999)),
     [census]);
 
@@ -387,7 +388,7 @@ export default function ClinicianAccountabilityPage() {
     </div>
   );
 
-  const inactiveCount = census.filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 14).length;
+  const inactiveCount = census.filter(p => /active/i.test(p.status || '') && (p.days_since_last_visit || 999) > 60).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>

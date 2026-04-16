@@ -55,7 +55,9 @@ export default function RMDailyDashboard() {
 
   const metrics = useMemo(() => {
     const active = census.filter(p => /active/i.test(p.status||''));
-    const inactiveActive = active.filter(p => (p.days_since_last_visit||999) > 14);
+    // Overdue threshold: 60 days (matches longest legitimate cadence — 1em2 monthly frequency).
+    // Anyone seen within 60d is likely on-schedule regardless of prescribed frequency.
+    const inactiveActive = active.filter(p => (p.days_since_last_visit||999) > 60);
     const completed = visits.filter(v => /completed/i.test(v.status||''));
     const cancelled = visits.filter(v => /cancel/i.test(v.status||'')||/cancel/i.test(v.event_type||''));
     const missed = visits.filter(v => /missed/i.test(v.status||''));
@@ -100,7 +102,7 @@ export default function RMDailyDashboard() {
 
   const filteredPatients = useMemo(() => {
     let list = census;
-    if (activeTab === 'inactive') list = census.filter(p => /active/i.test(p.status||'') && (p.days_since_last_visit||999)>14);
+    if (activeTab === 'inactive') list = census.filter(p => /active/i.test(p.status||'') && (p.days_since_last_visit||999)>60);
     if (activeTab === 'on_hold') list = census.filter(p => /on.?hold/i.test(p.status||''));
     if (activeTab === 'pipeline') list = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status||''));
     if (activeTab === 'all_patients') list = census;
@@ -137,7 +139,7 @@ export default function RMDailyDashboard() {
         <div style={{ background:'#FEF2F2', borderBottom:'2px solid #FECACA', padding:'7px 20px', display:'flex', alignItems:'center', gap:10 }}>
           <span>🚨</span>
           <span style={{ fontSize:12, fontWeight:700, color:'#DC2626' }}>
-            {metrics.inactiveActive} active patients not seen 14+ days — ${Math.round(metrics.inactiveRevGap/1000)}K/wk revenue gap in your region
+            {metrics.inactiveActive} active patients overdue (60d+ since last visit) — ${Math.round(metrics.inactiveRevGap/1000)}K/wk revenue gap in your region
           </span>
           <button onClick={() => setActiveTab('inactive')} style={{ marginLeft:'auto', fontSize:10, fontWeight:700, color:'#DC2626', background:'white', border:'1px solid #FECACA', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>View Patients</button>
         </div>
@@ -158,7 +160,7 @@ export default function RMDailyDashboard() {
               { label:'Active Patients', val:metrics.activePatients, color:'#059669', bg:'#ECFDF5' },
               { label:'Visits This Week', val:metrics.completedVisits, color:'#1565C0', bg:'#EFF6FF' },
               { label:'Capacity Used', val:metrics.utilization+'%', color:pctColor(metrics.utilization), bg:'var(--card-bg)' },
-              { label:'🔴 Inactive Active', val:metrics.inactiveActive, color:'#DC2626', bg:'#FEF2F2' },
+              { label:'🔴 Overdue (60d+)', val:metrics.inactiveActive, color:'#DC2626', bg:'#FEF2F2' },
               { label:'🔄 On Hold', val:metrics.onHold, color:'#7C3AED', bg:'#F5F3FF' },
               { label:'⏳ Pipeline', val:metrics.socPending, color:'#D97706', bg:'#FEF3C7' },
             ].map(c => (
@@ -174,7 +176,7 @@ export default function RMDailyDashboard() {
             {[
               { k:'overview',     l:'📊 Overview' },
               { k:'clinicians',   l:`👤 My Clinicians (${clinicians.length})` },
-              { k:'inactive',     l:`🚨 Inactive (${metrics.inactiveActive})` },
+              { k:'inactive',     l:`🚨 Overdue 60d+ (${metrics.inactiveActive})` },
               { k:'on_hold',      l:`🔄 On Hold (${metrics.onHold})` },
               { k:'pipeline',     l:`⏳ Pipeline (${metrics.socPending})` },
               { k:'all_patients', l:'All Patients' },
@@ -281,7 +283,7 @@ export default function RMDailyDashboard() {
                 </div>
                 {filteredPatients.length === 0 ? (
                   <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
-                    {activeTab==='inactive'?'✅ All active patients seen within 14 days!':'No patients in this category.'}
+                    {activeTab==='inactive'?'✅ No patients overdue — everyone seen within 60 days.':'No patients in this category.'}
                   </div>
                 ) : filteredPatients.map((p, i) => {
                   const days = p.days_since_last_visit;
