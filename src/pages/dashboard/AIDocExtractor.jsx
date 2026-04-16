@@ -255,7 +255,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
           referral_document_path: filePath || null,
           referral_document_name: file?.name || null,
         };
-        const { error: dbErr } = await supabase.from('intake_referrals').insert(payload);
+        const { error: dbErr } = await supabase.from('intake_referrals').upsert(payload, { onConflict: 'patient_name,date_received' });
         if (dbErr) throw new Error(dbErr.message);
       } else {
         // Auth mode — save to auth_tracker

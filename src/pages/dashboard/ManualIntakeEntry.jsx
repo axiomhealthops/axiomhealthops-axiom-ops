@@ -121,7 +121,7 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
       referral_document_name,
     };
 
-    const { error } = await supabase.from('intake_referrals').insert(payload);
+    const { error } = await supabase.from('intake_referrals').upsert(payload, { onConflict: 'patient_name,date_received' });
     setSaving(false);
     if (error) { setErrors({ submit: error.message }); return; }
     onSaved?.();
