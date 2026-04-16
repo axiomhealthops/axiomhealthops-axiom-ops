@@ -277,11 +277,26 @@ export default function VisitSchedulePage() {
   }, [regionScope.loading, fetchVisits]);
 
   var withDates = useMemo(function() {
-    return visits.map(function(v) {
-      // visits from Supabase have visit_date as ISO string (YYYY-MM-DD)
+    var parsed = visits.map(function(v) {
       var pd = v.visit_date ? new Date(v.visit_date + 'T00:00:00') : null;
       return Object.assign({}, v, { pd: pd, raw_date: v.visit_date });
     }).filter(function(v) { return v.pd && !isNaN(v.pd); });
+
+    // ── Deduplicate: when a Completed/Cancelled "(PDF)" record exists for
+    //    the same patient+date+clinician+base_event, drop the stale Scheduled row.
+    //    This fixes inflated counts and stale "Scheduled" badges on finished visits.
+    var STATUS_RANK = { completed: 3, cancelled: 2, missed: 1, scheduled: 0 };
+    function rank(s) { return STATUS_RANK[(s || '').toLowerCase()] !== undefined ? STATUS_RANK[(s || '').toLowerCase()] : -1; }
+    function baseEvent(et) { return (et || '').replace(/\s*\(PDF\)\s*$/i, '').trim(); }
+    function dedupKey(v) {
+      return [v.patient_name || '', v.visit_date || '', v.staff_name_normalized || v.staff_name || '', baseEvent(v.event_type)].join('||').toLowerCase();
+    }
+    var best = {};
+    parsed.forEach(function(v) {
+      var k = dedupKey(v);
+      if (!best[k] || rank(v.status) > rank(best[k].status)) best[k] = v;
+    });
+    return Object.values(best);
   }, [visits]);
  
   var allClinicians = useMemo(function() {
