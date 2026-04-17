@@ -280,7 +280,9 @@ function DocumentPanel(props) {
 // ── Add/Edit Modal ────────────────────────────────────────────────────
 function AddEditModal(props) {
   var rec = props.record;
+  var allRecords = props.allRecords || [];
   var [saving, setSaving] = useState(false);
+  var [dupWarning, setDupWarning] = useState(null);
 
   // Escape-to-close (disabled while saving)
   useEffect(function() {
@@ -298,6 +300,7 @@ function AddEditModal(props) {
     auth_status: 'pending', pcp_name: '', pcp_phone: '', pcp_fax: '', pcp_facility: '',
     therapy_type: 'LYMPHEDEMA', frequency: '', assigned_to: '', notes: '', denial_reason: '',
     request_category: 'initial', cpt_codes: '', diagnosis_code: '', requesting_provider: '', requesting_provider_npi: '',
+    auth_discipline: '',
   });
  
   function set(field, val) {
@@ -311,8 +314,26 @@ function AddEditModal(props) {
     setForm(u);
   }
  
+  function checkForDuplicates() {
+    if (!allRecords || !allRecords.length) return null;
+    var dupes = allRecords.filter(function(a) {
+      if (rec && a.id === rec.id) return false;
+      var nameMatch = a.patient_name && form.patient_name &&
+        a.patient_name.toLowerCase().trim() === form.patient_name.toLowerCase().trim();
+      var authNumMatch = form.auth_number && a.auth_number &&
+        a.auth_number.trim().toLowerCase() === form.auth_number.trim().toLowerCase();
+      var dobMatch = a.dob && form.dob && a.dob === form.dob;
+      if (authNumMatch && form.auth_number.trim()) return true;
+      if (nameMatch && dobMatch && form.auth_discipline && a.auth_discipline === form.auth_discipline) return true;
+      return false;
+    });
+    return dupes.length > 0 ? dupes : null;
+  }
+
   async function handleSave() {
     setSaving(true);
+    var dupes = checkForDuplicates();
+    if (dupes && !dupWarning) { setDupWarning(dupes); setSaving(false); return; }
     var data = Object.assign({}, form);
     // Strip client-side computed fields that don't exist in the DB
     delete data._urgency;
@@ -394,7 +415,23 @@ function AddEditModal(props) {
             </div>
             <div><label style={LBL}>Frequency</label><input style={INP} value={form.frequency || ''} onChange={function(e){set('frequency',e.target.value)}} placeholder="e.g. 2x/week" /></div>
           </div>
- 
+
+          <div style={{ marginBottom: 20 }}>
+            <label style={LBL}>Auth Discipline</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+              {[{k:'PT',l:'PT',c:'#1565C0',bg:'#EFF6FF'},{k:'OT',l:'OT',c:'#7C3AED',bg:'#EDE9FE'},{k:'PT/OT',l:'PT/OT',c:'#059669',bg:'#ECFDF5'},{k:'PTA',l:'PTA',c:'#0891B2',bg:'#ECFEFF'},{k:'COTA',l:'COTA',c:'#DB2777',bg:'#FDF2F8'}].map(function(d) {
+                var sel = form.auth_discipline === d.k;
+                return (
+                  <button key={d.k} type="button" onClick={function(){set('auth_discipline', sel ? '' : d.k)}}
+                    style={{ padding:'6px 14px', borderRadius:6, border:'2px solid '+(sel?d.c:'var(--border)'), background:sel?d.bg:'var(--card-bg)', fontSize:12, fontWeight:700, color:sel?d.c:'var(--gray)', cursor:'pointer', whiteSpace:'nowrap' }}>
+                    {d.l}
+                  </button>
+                );
+              })}
+            </div>
+            {!form.auth_discipline && <div style={{ fontSize: 10, color: '#D97706', marginTop: 6, fontWeight: 500 }}>⚠ Discipline not set — specify PT or OT so clinician assignments are correct</div>}
+          </div>
+
           <div style={SEC}>Visit Tracking</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
             {[['visits_authorized','Visits Authorized'],['visits_used','Visits Used'],['evals_authorized','Evals Authorized'],['evals_used','Evals Used'],['reassessments_authorized','Reassessments Auth.'],['reassessments_used','Reassessments Used']].map(function(item){
@@ -468,6 +505,24 @@ function AddEditModal(props) {
               </div>
             </div>
           </div>
+
+          {dupWarning && (
+            <div style={{ background: '#FFFBEB', border: '2px solid #F59E0B', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#92400E', marginBottom: 8 }}>⚠️ Possible Duplicate Detected</div>
+              <div style={{ fontSize: 11, color: '#78350F', marginBottom: 8 }}>The following existing record(s) look similar:</div>
+              {dupWarning.map(function(d) {
+                return (
+                  <div key={d.id} style={{ background: '#FEF3C7', borderRadius: 6, padding: '8px 12px', marginBottom: 6, fontSize: 11 }}>
+                    <strong>{d.patient_name}</strong> — Auth #{d.auth_number || 'N/A'} · {d.auth_discipline || 'No discipline'} · {d.auth_status} · Expires {d.auth_expiry_date || 'N/A'}
+                  </div>
+                );
+              })}
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button onClick={handleSave} style={{ padding: '6px 14px', background: '#D97706', color: '#fff', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Save Anyway — Not a Duplicate</button>
+                <button onClick={function() { setDupWarning(null); }} style={{ padding: '6px 14px', background: 'none', border: '1px solid #D97706', borderRadius: 6, fontSize: 11, fontWeight: 600, color: '#92400E', cursor: 'pointer' }}>Cancel — I'll Review</button>
+              </div>
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <button onClick={props.onClose} disabled={saving} style={{ padding: '10px 20px', background: 'none', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--gray)', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.5 : 1 }}>Cancel</button>
@@ -584,7 +639,7 @@ export default function AuthTrackerPage() {
     { key: 'denied',   label: 'Denied / Appeal',    count: denied,     color: '#6D28D9' },
     { key: 'ppo',      label: '✅ PPO (No Auth)',    count: ppoCount,   color: '#059669' },
   ];
-  var GRID = '2fr 0.5fr 0.8fr 0.85fr 1.05fr 1fr 0.85fr 0.7fr';
+  var GRID = '2fr 0.5fr 0.45fr 0.8fr 0.85fr 1.05fr 1fr 0.85fr 0.7fr';
  
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -692,7 +747,7 @@ export default function AuthTrackerPage() {
           {!loading && filtered.length > 0 && (
             <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ display: 'grid', gridTemplateColumns: GRID, padding: '8px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                <span>Patient</span><span>Rgn</span><span>Insurance</span>
+                <span>Patient</span><span>Rgn</span><span>Disc.</span><span>Insurance</span>
                 <span>SOC Date</span><span>Auth Expiry</span>
                 <span>Visits Remaining</span><span>Status</span><span>Actions</span>
               </div>
@@ -733,7 +788,13 @@ export default function AuthTrackerPage() {
                         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray)' }}>Rgn {r.region || '?'}</div>
                         {r.region && COORD_MAP[r.region] && <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>{COORD_MAP[r.region].split(' ')[0]}</div>}
                       </div>
- 
+
+                      {(function() { var _dc = {PT:'#1565C0',OT:'#7C3AED','PT/OT':'#059669',PTA:'#0891B2',COTA:'#DB2777'}; var _bg = {PT:'#EFF6FF',OT:'#EDE9FE','PT/OT':'#ECFDF5',PTA:'#ECFEFF',COTA:'#FDF2F8'}; return (
+                        <span style={{ fontSize: 9, fontWeight: 800, color: _dc[r.auth_discipline]||'#9CA3AF', background: r.auth_discipline?_bg[r.auth_discipline]||'#F3F4F6':'#F3F4F6', padding: '2px 6px', borderRadius: 4, textAlign: 'center', alignSelf: 'center' }}>
+                          {r.auth_discipline || '\u2014'}
+                        </span>
+                      ); })()}
+
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>{r.insurance}</div>
                         {isPPO(r) ? (
@@ -825,6 +886,7 @@ export default function AuthTrackerPage() {
       {showModal && (
         <AddEditModal
           record={editRecord}
+          allRecords={records}
           onClose={function() { setShowModal(false); setEditRecord(null); }}
           onSave={function() { setShowModal(false); setEditRecord(null); fetchRecords(); }}
         />
