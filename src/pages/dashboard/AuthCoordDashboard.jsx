@@ -20,10 +20,11 @@ function urgencyColor(days) {
   return '#059669';
 }
  
-function AuthEditModal({ auth, onClose, onSaved, profileName }) {
+function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
   const [form, setForm] = useState({
     auth_status: auth.auth_status || 'pending',
     auth_number: auth.auth_number || '',
+    auth_discipline: auth.auth_discipline || '',
     auth_submitted_date: auth.auth_submitted_date || '',
     auth_approved_date: auth.auth_approved_date || '',
     auth_expiry_date: auth.auth_expiry_date || '',
@@ -35,6 +36,7 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const [dupWarning, setDupWarning] = useState(null);
 
   // Escape-to-close (disabled while saving)
   useEffect(() => {
@@ -43,10 +45,29 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, saving]);
  
+  // ── Duplicate detection ──────────────────────────────────────────────────
+  function checkForDuplicates() {
+    if (!allAuths || !allAuths.length) return null;
+    const dupes = allAuths.filter(a => {
+      if (a.id === auth.id) return false; // skip self
+      const nameMatch = a.patient_name && auth.patient_name &&
+        a.patient_name.toLowerCase().trim() === auth.patient_name.toLowerCase().trim();
+      const authNumMatch = form.auth_number && a.auth_number &&
+        a.auth_number.trim().toLowerCase() === form.auth_number.trim().toLowerCase();
+      const dobMatch = a.dob && auth.dob && a.dob === auth.dob;
+      // Flag if: same auth number, OR same patient + same DOB + same discipline
+      if (authNumMatch && form.auth_number.trim()) return true;
+      if (nameMatch && dobMatch && form.auth_discipline && a.auth_discipline === form.auth_discipline) return true;
+      return false;
+    });
+    return dupes.length > 0 ? dupes : null;
+  }
+
   async function save() {
     setSaving(true);
     setSaveError(null);
- 
+    setDupWarning(null);
+
     // Client-side validation — catches the data integrity issues the audit surfaced
     const va = form.visits_authorized ? parseInt(form.visits_authorized) : null;
     const vu = form.visits_used ? parseInt(form.visits_used) : null;
@@ -72,9 +93,18 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
         setSaving(false); return;
       }
     }
- 
+
+    // ── Duplicate check before saving ──
+    const dupes = checkForDuplicates();
+    if (dupes && !dupWarning) {
+      setDupWarning(dupes);
+      setSaving(false);
+      return; // user must confirm to proceed
+    }
+
     const { error, rowCount } = await safeUpdate('auth_tracker', {
       ...form,
+      auth_discipline: form.auth_discipline || null,
       visits_authorized: va,
       visits_used: vu,
       auth_submitted_date: form.auth_submitted_date || null,
@@ -138,6 +168,28 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
             </div>
           </div>
  
+          <div style={{ gridColumn:'1/-1' }}>
+            <label style={{ fontSize:11, fontWeight:700, display:'block', marginBottom:8 }}>Auth Discipline</label>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {[
+                { k: 'PT',    l: 'PT',    c: '#1565C0', bg: '#EFF6FF', desc: 'Physical Therapy' },
+                { k: 'OT',    l: 'OT',    c: '#7C3AED', bg: '#EDE9FE', desc: 'Occupational Therapy' },
+                { k: 'PT/OT', l: 'PT/OT', c: '#059669', bg: '#ECFDF5', desc: 'Both PT & OT' },
+                { k: 'PTA',   l: 'PTA',   c: '#0891B2', bg: '#ECFEFF', desc: 'PT Assistant' },
+                { k: 'COTA',  l: 'COTA',  c: '#DB2777', bg: '#FDF2F8', desc: 'OT Assistant' },
+              ].map(d => (
+                <button key={d.k} onClick={() => setForm(f=>({...f, auth_discipline:f.auth_discipline===d.k?'':d.k}))}
+                  title={d.desc}
+                  style={{ padding:'6px 12px', borderRadius:6, border:`2px solid ${form.auth_discipline===d.k?d.c:'var(--border)'}`, background:form.auth_discipline===d.k?d.bg:'var(--card-bg)', fontSize:11, fontWeight:700, color:form.auth_discipline===d.k?d.c:'var(--gray)', cursor:'pointer', whiteSpace:'nowrap' }}>
+                  {d.l}
+                </button>
+              ))}
+            </div>
+            {!form.auth_discipline && (
+              <div style={{ fontSize:10, color:'#D97706', marginTop:6, fontWeight:500 }}>⚠ Discipline not set — specify PT or OT so clinician assignments are correct</div>
+            )}
+          </div>
+
           {[
             { label:'Auth Number', field:'auth_number', type:'text', placeholder:'Auth #...' },
             { label:'Assigned To', field:'assigned_to', type:'text', placeholder:'Coordinator name...' },
@@ -168,6 +220,28 @@ function AuthEditModal({ auth, onClose, onSaved, profileName }) {
           {saveError && (
             <div style={{ background:'#FEF2F2', border:'1px solid #FCA5A5', color:'#991B1B', padding:'8px 12px', borderRadius:6, fontSize:12, fontWeight:600 }}>
               ⚠ {saveError}
+            </div>
+          )}
+          {dupWarning && (
+            <div style={{ background:'#FEF3C7', border:'1px solid #FCD34D', color:'#92400E', padding:'10px 12px', borderRadius:8, fontSize:12 }}>
+              <div style={{ fontWeight:700, marginBottom:6 }}>⚠ Potential Duplicate Detected</div>
+              <div style={{ fontSize:11, marginBottom:8 }}>
+                {dupWarning.map((d, i) => (
+                  <div key={i} style={{ padding:'4px 0', borderBottom: i < dupWarning.length-1 ? '1px solid #FDE68A' : 'none' }}>
+                    <strong>{d.patient_name}</strong> — Auth #{d.auth_number || 'N/A'} · {d.auth_discipline || 'No discipline'} · {d.auth_status} · Expires {d.auth_expiry_date || 'N/A'}
+                  </div>
+                ))}
+              </div>
+              <div style={{ display:'flex', gap:6 }}>
+                <button onClick={() => { setDupWarning(null); setSaving(true); save(); }}
+                  style={{ padding:'5px 12px', background:'#92400E', color:'#fff', border:'none', borderRadius:6, fontSize:11, fontWeight:700, cursor:'pointer' }}>
+                  Save Anyway — Not a Duplicate
+                </button>
+                <button onClick={() => setDupWarning(null)}
+                  style={{ padding:'5px 12px', background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:6, fontSize:11, fontWeight:600, cursor:'pointer' }}>
+                  Cancel — I'll Review
+                </button>
+              </div>
             </div>
           )}
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
@@ -336,8 +410,8 @@ export default function AuthCoordDashboard() {
  
           {/* Auth Table */}
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-            <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.4fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.7fr 1fr', padding:'8px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
-              <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Auth #</span><span>Expires</span><span>Days Left</span><span>Visits Auth</span><span>Visits Left</span><span>Assigned To</span>
+            <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.4fr 0.5fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.7fr 1fr', padding:'8px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
+              <span>Patient</span><span>Rgn</span><span>Disc.</span><span>Insurance</span><span>Auth #</span><span>Expires</span><span>Days Left</span><span>Visits Auth</span><span>Visits Left</span><span>Assigned To</span>
             </div>
             {filtered.length === 0 ? (
               <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
@@ -348,7 +422,7 @@ export default function AuthCoordDashboard() {
               const rowBg = a.daysUntilExpiry !== null && a.daysUntilExpiry <= 7 ? '#FFF5F5' : a.daysUntilExpiry !== null && a.daysUntilExpiry <= 14 ? '#FFFBEB' : i%2===0?'var(--card-bg)':'var(--bg)';
               return (
                 <div key={a.id} onClick={() => setEditAuth(a)}
-                  style={{ display:'grid', gridTemplateColumns:'1.8fr 0.4fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.7fr 1fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8, cursor:'pointer' }}
+                  style={{ display:'grid', gridTemplateColumns:'1.8fr 0.4fr 0.5fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.7fr 1fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8, cursor:'pointer' }}
                   onMouseEnter={e => e.currentTarget.style.background='#EFF6FF'}
                   onMouseLeave={e => e.currentTarget.style.background=rowBg}>
                   <div>
@@ -356,6 +430,11 @@ export default function AuthCoordDashboard() {
                     <div style={{ fontSize:9, color:'var(--gray)' }}>{a.pcp_name || '—'}</div>
                   </div>
                   <span style={{ fontSize:11, fontWeight:700, color:'var(--gray)' }}>{a.region}</span>
+                  {(() => { const _dc = {PT:'#1565C0',OT:'#7C3AED','PT/OT':'#059669',PTA:'#0891B2',COTA:'#DB2777'}; const _bg = {PT:'#EFF6FF',OT:'#EDE9FE','PT/OT':'#ECFDF5',PTA:'#ECFEFF',COTA:'#FDF2F8'}; return (
+                    <span style={{ fontSize:9, fontWeight:800, color:_dc[a.auth_discipline]||'#9CA3AF', background:a.auth_discipline?_bg[a.auth_discipline]||'#F3F4F6':'#F3F4F6', padding:'2px 6px', borderRadius:4, textAlign:'center' }}>
+                      {a.auth_discipline || '—'}
+                    </span>
+                  ); })()}
                   <span style={{ fontSize:11 }}>{a.insurance}</span>
                   <span style={{ fontSize:11, fontFamily:'DM Mono, monospace', color:a.auth_number?'var(--black)':'#9CA3AF', fontStyle:a.auth_number?'normal':'italic' }}>
                     {a.auth_number || 'Not entered'}
@@ -407,6 +486,7 @@ export default function AuthCoordDashboard() {
       {editAuth && (
         <AuthEditModal
           auth={editAuth}
+          allAuths={auths}
           profileName={profile?.full_name || profile?.email}
           onClose={() => setEditAuth(null)}
           onSaved={() => { setEditAuth(null); load(); }}
