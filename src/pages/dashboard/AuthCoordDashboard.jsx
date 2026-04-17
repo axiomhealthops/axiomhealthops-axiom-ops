@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase, safeUpdate } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
@@ -250,6 +251,9 @@ function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
               style={{ padding:'8px 22px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:saving?'wait':'pointer', opacity:saving?0.7:1 }}>
               {saving ? 'Saving…' : 'Save Changes'}
             </button>
+          </div>
+          <div style={{ marginTop:16 }}>
+            <PatientNotesPanel patientName={auth.patient_name} maxHeight="280px" />
           </div>
         </div>
       </div>

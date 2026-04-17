@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import ManualIntakeEntry from './ManualIntakeEntry';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 
 // ── helpers ──────────────────────────────────────────────────────────
 function sd(v) {
@@ -1595,7 +1596,9 @@ export default function IntakeDashboardPage() {
                         );
                       })
                 )
-              ) : null
+              ) : null,
+
+              React.createElement(PatientNotesPanel, { patientName: r.patient_name, maxHeight: '280px' })
             )
           )
         );

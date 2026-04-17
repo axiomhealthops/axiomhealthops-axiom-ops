@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -43,8 +44,8 @@ function NoteModal({ patient, onClose, onSaved, coordId }) {
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
-      <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:480, boxShadow:'0 24px 60px rgba(0,0,0,0.35)' }}>
-        <div style={{ padding:'16px 22px', background:'#1565C0', borderRadius:'14px 14px 0 0', display:'flex', justifyContent:'space-between' }}>
+      <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:680, maxHeight:'90vh', overflow:'auto', boxShadow:'0 24px 60px rgba(0,0,0,0.35)' }}>
+        <div style={{ padding:'16px 22px', background:'#1565C0', borderRadius:'14px 14px 0 0', display:'flex', justifyContent:'space-between', position:'sticky', top:0, zIndex:10 }}>
           <div>
             <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>{patient.patient_name}</div>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.6)', marginTop:2 }}>Rgn {patient.region} · {patient.status} · {patient.insurance}</div>
@@ -80,6 +81,9 @@ function NoteModal({ patient, onClose, onSaved, coordId }) {
             style={{ padding:'7px 18px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:700, cursor:'pointer', opacity:note.trim()?1:0.5 }}>
             {saving ? 'Saving…' : 'Log Contact'}
           </button>
+        </div>
+        <div style={{ padding:'0 22px 22px' }}>
+          <PatientNotesPanel patientName={patient.patient_name} maxHeight="300px" />
         </div>
       </div>
     </div>

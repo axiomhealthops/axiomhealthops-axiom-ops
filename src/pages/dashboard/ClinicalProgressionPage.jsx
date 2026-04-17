@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
@@ -712,6 +713,9 @@ export default function ClinicalProgressionPage() {
                       {p.settings_assigned_by && (
                         <div style={{ marginTop:8, fontSize:10, color:'var(--gray)' }}>LOC/Frequency assigned by {p.settings_assigned_by}</div>
                       )}
+                      <div style={{ marginTop:16 }}>
+                        <PatientNotesPanel patientName={p.patient_name} maxHeight="280px" />
+                      </div>
                     </div>
                   )}
                 </div>

@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 
 const REASONS = ['goals_met','patient_request','insurance_exhausted','non_compliance','moved','deceased','hospitalized','physician_order','other'];
 const OUTCOMES = ['independent','improved','referred_out','readmit_possible','no_change','unknown'];
@@ -104,6 +105,7 @@ function DischargeModal({ discharge, onClose, onSaved, profile }) {
               </div>
             )}
           </div>
+          <PatientNotesPanel patientName={discharge.patient_name} maxHeight="280px" />
         </div>
         <div style={{padding:'14px 22px',borderTop:'1px solid var(--border)',display:'flex',justifyContent:'flex-end',gap:8,background:'var(--bg)'}}>
           <button onClick={onClose} style={{padding:'8px 16px',border:'1px solid var(--border)',borderRadius:7,fontSize:13,background:'var(--card-bg)',cursor:'pointer'}}>Cancel</button>

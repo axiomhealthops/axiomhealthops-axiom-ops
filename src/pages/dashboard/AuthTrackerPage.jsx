@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import AIDocExtractor from './AIDocExtractor';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
@@ -873,6 +874,11 @@ export default function AuthTrackerPage() {
  
                         {/* Document upload panel */}
                         <DocumentPanel authId={r.id} patientName={r.patient_name} />
+
+                        {/* Chart Notes */}
+                        <div style={{ marginTop: 16 }}>
+                          <PatientNotesPanel patientName={r.patient_name} maxHeight="280px" />
+                        </div>
                       </div>
                     )}
                   </div>

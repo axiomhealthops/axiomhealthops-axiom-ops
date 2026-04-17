@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -94,6 +95,7 @@ function ReferralModal({ referral, onClose, onSaved, profile }) {
             <input type="date" value={firstAppt} onChange={e => setFirstAppt(e.target.value)}
               style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }} />
           </div>
+          <PatientNotesPanel patientName={referral.patient_name} maxHeight="280px" />
         </div>
         {saveError && (
           <div style={{ padding:'8px 22px', background:'#FEF2F2', borderTop:'1px solid #FECACA' }}>

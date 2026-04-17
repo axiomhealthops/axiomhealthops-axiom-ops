@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 
 const BLENDED_RATE = 185;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
@@ -74,6 +75,7 @@ function ActionModal({ patient, onClose, onSaved }) {
               placeholder="Scheduling barrier, patient contact attempt, insurance issue, waiting on clinician assignment..."
               style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', boxSizing: 'border-box', resize: 'vertical', minHeight: 80, background: 'var(--card-bg)' }} />
           </div>
+          <PatientNotesPanel patientName={patient.patient_name} maxHeight="280px" />
         </div>
         <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: 8, background: 'var(--bg)' }}>
           <button onClick={onClose} style={{ padding: '8px 16px', border: '1px solid var(--border)', borderRadius: 7, fontSize: 13, background: 'var(--card-bg)', cursor: 'pointer' }}>Cancel</button>

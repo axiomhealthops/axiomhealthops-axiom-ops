@@ -1,5 +1,6 @@
 import React from 'react';
 import AlertsBell from './AlertsBell';
+import MentionsBell from './MentionsBell';
  
 export default function TopBar(props) {
   var title = props.title || '';
@@ -52,6 +53,7 @@ export default function TopBar(props) {
             {actions}
           </div>
         )}
+        <MentionsBell />
         <AlertsBell />
         <div style={{
           fontSize: 12,

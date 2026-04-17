@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const WOUND_TYPES = [
@@ -487,6 +488,8 @@ function PatientDetail({ patient, assessments, onAssess, onClose }) {
             <div style={{ fontSize: 12, color: 'var(--black)', lineHeight: 1.5 }}>{patient.last_assessment_notes}</div>
           </div>
         )}
+
+        <PatientNotesPanel patientName={patient.patient_name} maxHeight="280px" />
 
         {/* Assessment history */}
         <div>

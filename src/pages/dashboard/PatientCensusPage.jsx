@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
+import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
@@ -416,6 +417,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
           {TAB('referral','Referral')}
           {TAB('auth','Authorization')}
           {TAB('history','Visit History')}
+          {TAB('notes','Chart Notes')}
         </div>
 
         {/* Tab content */}
@@ -560,6 +562,13 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* CHART NOTES */}
+          {tab === 'notes' && (
+            <div style={{ padding: '4px 0' }}>
+              <PatientNotesPanel patientName={patient.patient_name} maxHeight="450px" />
             </div>
           )}
 
