@@ -5,7 +5,7 @@ import AIDocExtractor from './AIDocExtractor';
 
 const REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
 const INSURANCES = ['Humana','CarePlus','FHCP','Devoted','Health First','Aetna','Medicare','Simply','Cigna','United Healthcare','Other'];
-const REFERRAL_TYPES = ['New Referral','Re-Referral','Continuation'];
+const REFERRAL_TYPES = ['New Referral','Continuation','Resumption of Care'];
 const STATUSES = ['Pending','Accepted','Denied','On Hold'];
 const CHART_STATUSES = ['Chart Pending','Chart Received','Chart Incomplete','Ready for Auth'];
 

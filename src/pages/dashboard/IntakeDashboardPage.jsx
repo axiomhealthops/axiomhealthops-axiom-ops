@@ -413,14 +413,15 @@ export default function IntakeDashboardPage() {
     const thisMonthRecs = records.filter(r => monthKey(r.date_received) === thisMonth);
 
     // Patient classification breakdown
-    const newPatients = records.filter(r => r.referral_type === 'New Patient');
-    const existingPatients = records.filter(r => r.referral_type === 'Existing Patient' || r.referral_type === 'Resumption Referral');
-    const insuranceChange = records.filter(r => r.referral_type === 'Patient Switched Insurance');
+    const newPatients = records.filter(r => r.referral_type === 'New Referral' || r.referral_type === 'New Patient');
+    const continuationPatients = records.filter(r => r.referral_type === 'Continuation' || r.referral_type === 'Existing Patient');
+    const resumptionPatients = records.filter(r => r.referral_type === 'Resumption of Care' || r.referral_type === 'Resumption Referral' || r.referral_type === 'Re-Referral');
     const unclassified = records.filter(r => !r.referral_type);
-    const thisMonthNew = thisMonthRecs.filter(r => r.referral_type === 'New Patient');
-    const thisMonthExisting = thisMonthRecs.filter(r => r.referral_type === 'Existing Patient' || r.referral_type === 'Resumption Referral');
+    const thisMonthNew = thisMonthRecs.filter(r => r.referral_type === 'New Referral' || r.referral_type === 'New Patient');
+    const thisMonthContinuation = thisMonthRecs.filter(r => r.referral_type === 'Continuation' || r.referral_type === 'Existing Patient');
+    const thisMonthResumption = thisMonthRecs.filter(r => r.referral_type === 'Resumption of Care' || r.referral_type === 'Resumption Referral' || r.referral_type === 'Re-Referral');
 
-    return { total, accepted, denied, acceptRate, months, byRegion, byInsurance, byDiagnosis, denialReasons, typeMap, chartStatuses, thisMonthRecs, newPatients, existingPatients, insuranceChange, unclassified, thisMonthNew, thisMonthExisting };
+    return { total, accepted, denied, acceptRate, months, byRegion, byInsurance, byDiagnosis, denialReasons, typeMap, chartStatuses, thisMonthRecs, newPatients, continuationPatients, resumptionPatients, unclassified, thisMonthNew, thisMonthContinuation, thisMonthResumption };
   }, [records]);
 
   // ── filtered table ──────────────────────────────────────────────────
@@ -598,9 +599,9 @@ export default function IntakeDashboardPage() {
         {/* Patient Classification Banner */}
         <div style={{ display: 'flex', gap: 0, background: '#F8FAFF', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           {[
-            { label: '🆕 New Patient', count: stats.newPatients.length, accepted: stats.newPatients.filter(r=>r.referral_status==='Accepted').length, color: '#1565C0', bg: '#EFF6FF', type: 'New Patient' },
-            { label: '🔄 Resumption / Existing', count: stats.existingPatients.length, accepted: stats.existingPatients.filter(r=>r.referral_status==='Accepted').length, color: '#065F46', bg: '#ECFDF5', type: 'Existing Patient' },
-            { label: '🔀 Insurance Change', count: stats.insuranceChange.length, accepted: stats.insuranceChange.filter(r=>r.referral_status==='Accepted').length, color: '#7C3AED', bg: '#F5F3FF', type: 'Patient Switched Insurance' },
+            { label: '🆕 New Referral', count: stats.newPatients.length, accepted: stats.newPatients.filter(r=>r.referral_status==='Accepted').length, color: '#1565C0', bg: '#EFF6FF', type: 'New Referral' },
+            { label: '🔄 Continuation', count: stats.continuationPatients.length, accepted: stats.continuationPatients.filter(r=>r.referral_status==='Accepted').length, color: '#065F46', bg: '#ECFDF5', type: 'Continuation' },
+            { label: '🔁 Resumption of Care', count: stats.resumptionPatients.length, accepted: stats.resumptionPatients.filter(r=>r.referral_status==='Accepted').length, color: '#7C3AED', bg: '#F5F3FF', type: 'Resumption of Care' },
             { label: '❌ Non-Admit', count: records.filter(r=>r.referral_type==='Non Admit').length, accepted: 0, color: '#DC2626', bg: '#FEF2F2', type: 'Non Admit' },
           ].map(item => (
             <div key={item.label} onClick={() => { setTypeFilter(typeFilter===item.type?'ALL':item.type); setActiveTab('patients'); }}

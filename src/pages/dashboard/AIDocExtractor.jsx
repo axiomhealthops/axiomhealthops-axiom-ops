@@ -48,7 +48,7 @@ INSURANCE — CRITICAL FOR ACCEPTANCE AND PAYOR TRACKING:
   "pcp_name": "primary care physician name",
   "pcp_phone": "PCP phone number",
   "pcp_fax": "PCP fax number",
-  "referral_type": "New Referral or Re-Referral",
+  "referral_type": "New Referral, Continuation, or Resumption of Care. Use 'New Referral' for first-time patients. Use 'Continuation' for existing active patients getting a new referral. Use 'Resumption of Care' for patients previously discharged or on hold 30+ days who are returning.",
   "notes": "any other clinically relevant notes"
 }
 
