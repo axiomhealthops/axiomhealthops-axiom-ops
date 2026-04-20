@@ -10,7 +10,8 @@ function isRA(e) { return /reassess|re-assess|30.day/i.test(e||''); }
 function fmtDate(d) { return d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—'; }
 function daysUntil(d) {
   if (!d) return null;
-  return Math.round((new Date(d) - new Date()) / 86400000);
+  var now = new Date(); now.setHours(0,0,0,0);
+  return Math.round((new Date(d + 'T00:00:00') - now) / 86400000);
 }
 
 // NOTE: EditField MUST be defined at module scope. When defined inside

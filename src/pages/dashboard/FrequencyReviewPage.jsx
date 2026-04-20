@@ -50,7 +50,7 @@ function driftDirection(prescribed, current) {
 
 function fmtDate(d) {
   if (!d) return '—';
-  const x = new Date(d);
+  const x = new Date(d + 'T00:00:00');
   if (isNaN(x)) return d;
   return `${x.getMonth() + 1}/${x.getDate()}/${String(x.getFullYear()).slice(2)}`;
 }

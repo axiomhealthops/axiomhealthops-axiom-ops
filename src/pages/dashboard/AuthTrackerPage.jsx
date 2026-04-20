@@ -35,12 +35,12 @@ function getStatus(s) { return STATUSES.find(function(x) { return x.value === s;
 function daysUntil(dateStr) {
   if (!dateStr) return null;
   var now = new Date(); now.setHours(0,0,0,0);
-  return Math.round((new Date(dateStr) - now) / (1000*60*60*24));
+  return Math.round((new Date(dateStr + 'T00:00:00') - now) / (1000*60*60*24));
 }
- 
+
 function fmtDate(dateStr) {
   if (!dateStr) return null;
-  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
 }
  
 function fmtFileSize(bytes) {

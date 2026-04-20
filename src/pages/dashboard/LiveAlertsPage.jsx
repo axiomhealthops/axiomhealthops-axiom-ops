@@ -13,8 +13,8 @@ const ALERT_TYPES = {
 
 function daysBetween(dateStr) {
   if (!dateStr) return null;
-  const d = new Date(dateStr);
-  const now = new Date();
+  const d = new Date(dateStr + 'T00:00:00');
+  const now = new Date(); now.setHours(0,0,0,0);
   return Math.round((d - now) / (1000 * 60 * 60 * 24));
 }
 

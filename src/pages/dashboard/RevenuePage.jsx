@@ -18,7 +18,7 @@ function isMissed(status) {
 }
 
 function weekStart(date) {
-  const d = new Date(date);
+  const d = new Date(date + 'T00:00:00');
   const day = d.getDay();
   const diff = d.getDate() - day + (day === 0 ? -6 : 1);
   d.setDate(diff);

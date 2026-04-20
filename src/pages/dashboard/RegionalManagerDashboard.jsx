@@ -24,7 +24,7 @@ function isMissed(s,e) { return /missed/i.test(s||'') && !isCancelled(e,s); }
 function isEval(e) { return /eval/i.test(e||''); }
 
 function getWeekStart(date) {
-  const d = new Date(date);
+  const d = new Date(date + 'T00:00:00');
   const day = d.getDay();
   d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
   d.setHours(0,0,0,0);
@@ -32,7 +32,7 @@ function getWeekStart(date) {
 }
 
 function getQuarter(date) {
-  const d = new Date(date);
+  const d = new Date(date + 'T00:00:00');
   const q = Math.floor(d.getMonth() / 3);
   return `Q${q+1} ${d.getFullYear()}`;
 }
