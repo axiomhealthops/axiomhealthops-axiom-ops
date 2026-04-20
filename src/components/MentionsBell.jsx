@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { useRealtimeTable } from '../hooks/useRealtimeTable';
 import { useAuth } from '../hooks/useAuth';
 
 /**
@@ -32,11 +33,8 @@ export default function MentionsBell() {
       .then(({ data }) => setNotifs(data || []));
   }
 
-  useEffect(() => {
-    fetchNotifs();
-    const interval = setInterval(fetchNotifs, 30000);
-    return () => clearInterval(interval);
-  }, [profile?.id]);
+  useEffect(() => { fetchNotifs(); }, [profile?.id]);
+  useRealtimeTable('note_notifications', fetchNotifs);
 
   useEffect(() => {
     function handleClick(e) {

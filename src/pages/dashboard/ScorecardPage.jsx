@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const RATE = 230;
 function isEval(e) { return /eval/i.test(e||''); }
@@ -38,7 +39,7 @@ export default function ScorecardPage() {
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('30'); // days
 
-  useEffect(() => {
+  function load() {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 90);
     const cutStr = cutoff.toISOString().slice(0,10);
@@ -53,7 +54,10 @@ export default function ScorecardPage() {
       setAuth(a);
       setLoading(false);
     });
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+  useRealtimeTable(['visit_schedule_data', 'auth_tracker', 'intake_referrals'], load);
 
   const scores = useMemo(() => {
     const days = parseInt(period);

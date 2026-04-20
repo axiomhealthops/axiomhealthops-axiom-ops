@@ -24,6 +24,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const APPROVER_ROLES = ['super_admin', 'admin', 'assoc_director'];
 
@@ -83,6 +84,7 @@ export default function FrequencyReviewPage() {
   }, [profile]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable('census_data', load);
 
   const filtered = useMemo(() => rows.filter(r => {
     if (filterRegion !== 'ALL' && r.region !== filterRegion) return false;

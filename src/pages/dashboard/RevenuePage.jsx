@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const RATE = 230; // $ per billable visit
 
@@ -34,7 +35,7 @@ export default function RevenuePage() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('clinician'); // clinician | region | insurance
 
-  useEffect(() => {
+  function load() {
     // Revenue needs ALL visits (historical included), so use fetchAllPages
     // to iterate past the 1000-row PostgREST cap. .limit(10000) was silently
     // truncated — the page was under-reporting revenue by any history beyond
@@ -45,7 +46,10 @@ export default function RevenuePage() {
         .not('visit_date', 'is', null)
         .order('visit_date', { ascending: false })
     ).then((rows) => { setVisits(rows); setLoading(false); });
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+  useRealtimeTable('visit_schedule_data', load);
 
   const stats = useMemo(() => {
     // Deduplicate evals: PT + PTA same patient + same date = 1 billable visit

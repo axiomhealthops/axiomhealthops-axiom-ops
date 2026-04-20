@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const RATE = 230;
 const VALID_REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
@@ -91,7 +92,7 @@ export default function RegionalManagerDashboard() {
 
   const canEditGoals = ['super_admin','ceo','admin'].includes(profile?.role);
 
-  useEffect(() => {
+  function load() {
     // All paginated — visits and intake both exceed 1000 rows.
     Promise.all([
       fetchAllPages(supabase.from('visit_schedule_data').select('*').not('visit_date','is',null)),
@@ -104,7 +105,10 @@ export default function RegionalManagerDashboard() {
       setClinicians(c); setAuth(a);
       setGoals(g); setLoading(false);
     });
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+  useRealtimeTable(['visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals'], load);
 
   // Date boundaries
   const now = new Date();

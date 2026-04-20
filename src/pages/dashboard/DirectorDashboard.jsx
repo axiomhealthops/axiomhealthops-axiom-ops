@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import TopBar from '../../components/TopBar';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const BLENDED_RATE = 230;
 const WEEKLY_TARGET = 750;
@@ -180,6 +181,7 @@ export default function DirectorDashboard({ onNavigate }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_renewal_tasks', 'on_hold_recovery', 'patient_discharges', 'clinicians', 'waitlist_assignments'], load);
 
   const metrics = useMemo(() => {
     if (!census.length) return null;

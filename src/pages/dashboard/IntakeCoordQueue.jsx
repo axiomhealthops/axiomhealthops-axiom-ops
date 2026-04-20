@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -143,6 +144,7 @@ export default function IntakeCoordQueue() {
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable('intake_referrals', load);
 
   const enriched = useMemo(() => referrals.map(r => ({
     ...r,

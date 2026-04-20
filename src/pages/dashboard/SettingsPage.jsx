@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const ROLES = ['super_admin','admin','regional_manager','auth_coordinator','intake_coordinator','care_coordinator','clinician'];
 const ROLE_LABELS = { super_admin:'Super Admin', admin:'Director / Admin', regional_manager:'Regional Manager', auth_coordinator:'Auth Coordinator', intake_coordinator:'Intake Coordinator', care_coordinator:'Care Coordinator', clinician:'Clinician' };
@@ -13,13 +14,14 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
 
-  useEffect(() => { loadPages(); }, []);
-
   async function loadPages() {
     const { data } = await supabase.from('page_permissions').select('*').order('sort_order');
     setPages(data || []);
     setLoading(false);
   }
+
+  useEffect(() => { loadPages(); }, []);
+  useRealtimeTable('page_permissions', loadPages);
 
   async function toggle(pageKey, role) {
     const page = pages.find(p => p.page_key === pageKey);

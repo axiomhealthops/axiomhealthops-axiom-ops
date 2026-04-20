@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const CONTACT_TYPES = ['PCP','Podiatrist','Hospital','Specialist','Wound Care','Orthopedic','Vascular','Cardiology','Neurology','Assisted Living','SNF','Home Health Agency','Other'];
 const ENCOUNTER_TYPES = ['In-Person Visit','Phone Call','Drop-In','Lunch & Learn','Event','Email','Referral Received','Follow-Up','Other'];
@@ -247,6 +248,7 @@ export default function MarketingCRMPage() {
   }
 
   useEffect(() => { load(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+  useRealtimeTable(['marketing_contacts', 'marketing_encounters'], load);
 
   const filteredContacts = useMemo(() => contacts.filter(c => {
     if (filterType !== 'ALL' && c.contact_type !== filterType) return false;

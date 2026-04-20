@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const BLENDED_RATE = 185;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
@@ -124,6 +125,7 @@ export default function ClinicianAssignmentPage() {
   }, [weekStart, weekEnd]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['census_data', 'clinicians', 'visit_schedule_data'], load);
 
   // ── Clinician summary with patients ───────────────────────────────────────
   const clinicianSummary = useMemo(() => {

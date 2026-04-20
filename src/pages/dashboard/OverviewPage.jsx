@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import StatCard from '../../components/StatCard';
 import { supabase, fetchAllPages } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import { METRICS, REGIONS } from '../../lib/constants';
 
 const RATE = 230;
@@ -48,18 +49,9 @@ export default function OverviewPage() {
   const [freshness, setFreshness] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  function load() {
     const [wStart, wEnd] = weekBounds();
-    // All four tables paginated via fetchAllPages since census / auth /
-    // visits can each grow past the 1000-row PostgREST cap. data_freshness
-    // is 3 rows so pagination is a no-op for it.
     Promise.all([
-      // IMPORTANT: Do NOT exclude PDF rows. In Pariox exports, PDF rows are
-      // the canonical completed-visit record — the schedule board keeps the
-      // original "Scheduled" row around after the visit happens, and the PDF
-      // is added as proof of completion. Excluding PDFs was causing Overview
-      // to report ~1/3 of actual completed visits.
-      // Dedupe happens below in visitStats by (patient, date, staff).
       fetchAllPages(
         supabase.from('visit_schedule_data')
           .select('patient_name,visit_date,status,event_type,region,discipline,insurance,staff_name')
@@ -82,7 +74,10 @@ export default function OverviewPage() {
       setFreshness(f);
       setLoading(false);
     });
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+  useRealtimeTable(['visit_schedule_data', 'auth_tracker', 'census_data', 'data_freshness'], load);
 
   // Visit stats — group by (patient, date, staff) triple and resolve each
   // group to a single status. This matches Pariox's actual semantics:

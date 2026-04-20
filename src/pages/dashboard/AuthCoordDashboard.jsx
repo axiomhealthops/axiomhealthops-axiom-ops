@@ -4,6 +4,7 @@ import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase, safeUpdate } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
  
 function fmtDate(d) {
   if (!d) return '—';
@@ -289,6 +290,7 @@ export default function AuthCoordDashboard() {
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['auth_tracker', 'auth_renewal_tasks'], load);
  
   const enriched = useMemo(() => auths.map(a => ({
     ...a,

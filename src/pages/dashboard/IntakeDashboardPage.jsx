@@ -6,6 +6,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import ManualIntakeEntry from './ManualIntakeEntry';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 // ── helpers ──────────────────────────────────────────────────────────
 function sd(v) {
@@ -310,6 +311,7 @@ export default function IntakeDashboardPage() {
   }
 
   useEffect(() => { fetchRecords(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+  useRealtimeTable(['intake_referrals', 'auth_tracker', 'visit_schedule_data', 'data_freshness'], load);
 
   // ── open patient profile ───────────────────────────────────────────
   async function openPatientProfile(record) {

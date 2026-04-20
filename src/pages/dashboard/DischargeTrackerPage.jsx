@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const REASONS = ['goals_met','patient_request','insurance_exhausted','non_compliance','moved','deceased','hospitalized','physician_order','other'];
 const OUTCOMES = ['independent','improved','referred_out','readmit_possible','no_change','unknown'];
@@ -146,6 +147,7 @@ export default function DischargeTrackerPage() {
   }, [regionScope.isAllAccess, regionScope.loading, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable('patient_discharges', load);
 
   const enriched = useMemo(() => discharges.map(d => ({
     ...d,

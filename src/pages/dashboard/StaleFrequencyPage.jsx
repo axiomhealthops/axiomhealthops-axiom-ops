@@ -27,6 +27,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const STABILITY_DAYS = 90;
 const MIN_WEEKLY_FOR_FLAG = 1.5;
@@ -99,6 +100,7 @@ export default function StaleFrequencyPage() {
   }
 
   useEffect(() => { loadData(); }, []);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'intake_referrals', 'patient_clinical_settings'], load);
 
   // Build insurance lookup: prefer most-recent auth record, fall back to
   // most-recent intake record, fall back to census_data.insurance.

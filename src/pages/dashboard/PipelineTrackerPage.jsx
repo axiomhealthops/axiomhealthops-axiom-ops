@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const BLENDED_RATE = 185;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
@@ -154,6 +155,7 @@ export default function PipelineTrackerPage() {
   }, [regionScope.isAllAccess, regionScope.loading, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['census_data', 'intake_referrals'], load);
 
   const filtered = useMemo(() => {
     return patients.filter(p => {

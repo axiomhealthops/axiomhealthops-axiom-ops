@@ -4,6 +4,7 @@ import TopBar from '../../components/TopBar';
 import { REGIONS } from '../../lib/constants';
 import { parseVisitDate, toDateStr, formatShortDate, getWeekDays, getMonthDays } from '../../lib/dateUtils';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
  
 var SC = {
   completed: { bg: '#ECFDF5', color: '#065F46', border: '#6EE7B7' },
@@ -275,6 +276,7 @@ export default function VisitSchedulePage() {
     if (regionScope.loading) return;
     fetchVisits(anchor);
   }, [regionScope.loading, fetchVisits]);
+  useRealtimeTable('visit_schedule_data', fetchVisits);
 
   var withDates = useMemo(function() {
     var parsed = visits.map(function(v) {

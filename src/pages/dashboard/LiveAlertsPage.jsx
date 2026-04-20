@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const ALERT_TYPES = {
   auth_expiring:    { label: 'Auth Expiring',      color: '#DC2626', bg: '#FEF2F2', icon: '⏰' },
@@ -25,7 +26,7 @@ export default function LiveAlertsPage() {
   const [filter, setFilter] = useState('ALL');
   const [search, setSearch] = useState('');
 
-  useEffect(() => {
+  function load() {
     const d7 = new Date(); d7.setDate(d7.getDate() - 7);
     const d7s = d7.toISOString().slice(0, 10);
     Promise.all([
@@ -38,7 +39,10 @@ export default function LiveAlertsPage() {
       setVisits(v.data || []);
       setLoading(false);
     });
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+  useRealtimeTable(['auth_tracker', 'visit_schedule_data'], load);
 
   const alerts = useMemo(() => {
     const items = [];

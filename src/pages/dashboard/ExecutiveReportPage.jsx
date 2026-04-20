@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const BLENDED_RATE = 185;
 const WEEKLY_CAPACITY = 1175;
@@ -88,6 +89,7 @@ export default function ExecutiveReportPage() {
   }, [week.start, week.end, prevWeek.start]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals', 'auth_renewal_tasks'], load);
 
   const stats = useMemo(() => {
     const thisWeekVisits = visits.filter(v => v.visit_date >= week.start && v.visit_date <= week.end);

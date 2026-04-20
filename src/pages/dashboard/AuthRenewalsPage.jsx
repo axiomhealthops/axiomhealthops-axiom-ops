@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const STATUS_CFG = {
   open:        { label:'Open',       color:'#DC2626', bg:'#FEF2F2' },
@@ -137,6 +138,7 @@ export default function AuthRenewalsPage() {
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable('auth_renewal_tasks', load);
 
   const filtered = useMemo(() => tasks.filter(t => {
     if (filterStatus !== 'ALL' && t.task_status !== filterStatus) return false;

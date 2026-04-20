@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
@@ -173,6 +174,7 @@ export default function SchedulingAlertsPage() {
   }, [myRegions]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable('patient_clinical_settings', load);
 
   const stats = useMemo(() => {
     const active = patients;

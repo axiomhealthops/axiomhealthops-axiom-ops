@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -106,6 +107,7 @@ export default function MedicareTrackerPage() {
   useEffect(() => {
     loadFlags();
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'medicare_visit_flags'], load);
 
   async function acknowledge(flag, type) {
     const now = new Date().toISOString();

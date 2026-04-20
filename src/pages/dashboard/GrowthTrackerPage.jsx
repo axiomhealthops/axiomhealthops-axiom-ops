@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 function monthKey(d) { return d ? String(d).slice(0,7) : null; }
 function fmtMonth(k) {
@@ -19,7 +20,7 @@ export default function GrowthTrackerPage() {
   const [auth, setAuth] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  function load() {
     Promise.all([
       supabase.from('intake_referrals').select('referral_status,date_received,region,insurance').not('date_received','is',null),
       supabase.from('visit_schedule_data').select('visit_date,status,event_type,region').not('visit_date','is',null),
@@ -30,7 +31,10 @@ export default function GrowthTrackerPage() {
       setAuth(a.data||[]);
       setLoading(false);
     });
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+  useRealtimeTable(['intake_referrals', 'auth_tracker', 'visit_schedule_data'], load);
 
   const stats = useMemo(() => {
     // Monthly intake trend

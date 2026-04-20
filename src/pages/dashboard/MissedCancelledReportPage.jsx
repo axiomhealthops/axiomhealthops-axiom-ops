@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
@@ -169,6 +170,8 @@ export default function MissedCancelledReportPage() {
       {label}<SortIcon field={field} />
     </div>
   );
+
+  useRealtimeTable('visit_schedule_data', load);
 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>

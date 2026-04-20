@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth.jsx';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const PRIORITY_STYLES = {
   high: { bg: '#FEF2F2', color: '#991B1B' },
@@ -17,6 +18,7 @@ export default function ActionListPage() {
   const [form, setForm] = useState({ title: '', description: '', priority: 'medium', due_date: '', region: '' });
 
   useEffect(() => { fetchItems(); }, []);
+  useRealtimeTable('action_items', fetchItems);
 
   async function fetchItems() {
     const { data } = await supabase.from('action_items').select('*').order('created_at', { ascending: false });

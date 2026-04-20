@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { REGIONS } from '../../lib/constants';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
  
 var TARGETS = { ft: 25, pt: 15, prn: 10 };
 var TYPE_LABELS = { ft: 'Full Time', pt: 'Part Time', prn: 'PRN / 1099' };
@@ -85,25 +86,16 @@ export default function ProductivityPage() {
   var weekRange = useMemo(weekBounds, []);
   var weekStart = weekRange[0], weekEnd = weekRange[1];
 
-  useEffect(function() {
+  function load() {
     var clinPromise = supabase.from('clinicians')
       .select('id, full_name, discipline, employment_type, region, notes, pariox_name, is_active')
       .eq('is_active', true)
       .order('region')
       .order('full_name');
 
-    // Fetch THIS WEEK's visits from Supabase, paginated to bypass the
-    // PostgREST 1000-row cap. Filter PDF docs server-side so they don't
-    // double-count against per-clinician totals.
     var fetchVisits = function() {
       var all = [];
       var PAGE = 1000;
-      // IMPORTANT: we INCLUDE Cancelled/Attempted/Missed events in the
-      // fetch so we can detect them during dedupe. Walker, Alice
-      // typically has TWO rows on her cancelled days — a "Cancelled
-      // Treatment" row AND a stale "Lymphedema Visit - Level 3" row
-      // that Pariox left behind. Matching Pariox's display total means
-      // excluding BOTH when any cancellation exists for that day.
       var pull = function(from) {
         return supabase.from('visit_schedule_data')
           .select('staff_name_normalized,visit_date,status,event_type,patient_name')
@@ -125,7 +117,10 @@ export default function ProductivityPage() {
       setVisits(results[1] || []);
       setLoading(false);
     });
-  }, [weekStart, weekEnd]);
+  }
+
+  useEffect(function() { load(); }, [weekStart, weekEnd]);
+  useRealtimeTable(['clinicians', 'visit_schedule_data'], load);
  
   var nameMap = useMemo(function() { return buildNameMap(clinicians); }, [clinicians]);
  

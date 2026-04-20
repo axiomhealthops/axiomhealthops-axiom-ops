@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const BLENDED_RATE = 185;
 
@@ -173,6 +174,7 @@ export default function DailyReportsPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable('daily_reports', load);
 
   const today = new Date().toISOString().slice(0, 10);
   const alreadySubmittedToday = reports.some(r =>

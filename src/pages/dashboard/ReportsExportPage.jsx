@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import * as XLSX from 'xlsx';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
  
 const RATE = 230;
 const REGIONAL_MANAGERS = {
@@ -635,6 +636,8 @@ export default function ReportsExportPage() {
   const categories = ['ALL', ...new Set(REPORTS.map(r => r.category))];
   const filtered = REPORTS.filter(r => categoryFilter === 'ALL' || r.category === categoryFilter);
  
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals'], load);
+
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="Reports & Export" subtitle="Loading data…" />

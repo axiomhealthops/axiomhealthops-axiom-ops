@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 // NOTE: A ZIP_REGION_MAP constant previously lived here but was unused
 // throughout the codebase. It is removed to unblock the build (it had
@@ -254,6 +255,7 @@ export default function WaitlistPage() {
   }, [regionScope.isAllAccess, regionScope.loading, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['waitlist_assignments', 'intake_referrals', 'clinicians', 'visit_schedule_data'], load);
 
   // Build enriched patient list
   const patients = useMemo(() => {

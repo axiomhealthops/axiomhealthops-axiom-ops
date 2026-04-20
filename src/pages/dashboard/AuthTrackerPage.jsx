@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase, fetchAllPages } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import AIDocExtractor from './AIDocExtractor';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
  
@@ -571,6 +572,7 @@ export default function AuthTrackerPage() {
   }
 
   useEffect(function() { fetchRecords(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+  useRealtimeTable(['auth_tracker', 'census_data'], fetchRecords);
  
   async function deleteRecord(id) {
     if (!window.confirm('Delete this auth record?')) return;

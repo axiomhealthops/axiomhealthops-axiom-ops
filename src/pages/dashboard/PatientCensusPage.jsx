@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase } from '../../lib/supabase';
@@ -632,9 +633,8 @@ export default function PatientCensusPage({ intent } = {}) {
   // Coord/etc. only see rows for their assigned regions.
   const { regions: allowedRegions, isAllAccess, loading: regionsLoading, applyToQuery } = useAssignedRegions();
 
-  useEffect(() => {
+  function load() {
     if (regionsLoading) return;
-    // Fail closed: user with no assigned regions sees nothing.
     if (!isAllAccess && (!allowedRegions || allowedRegions.length === 0)) {
       setCensus([]); setVisits([]); setAuthData([]); setIntakeData([]);
       setLoading(false);
@@ -651,7 +651,10 @@ export default function PatientCensusPage({ intent } = {}) {
       setAuthData(a.data||[]); setIntakeData(i.data||[]);
       setLoading(false);
     });
-  }, [isAllAccess, regionsLoading, JSON.stringify(allowedRegions)]);
+  }
+
+  useEffect(() => { load(); }, [isAllAccess, regionsLoading, JSON.stringify(allowedRegions)]);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'intake_referrals'], load);
 
   // Sort distinct values first, THEN prepend 'ALL' so "All Regions" stays at the
   // top of the dropdown regardless of the letters used for region codes.

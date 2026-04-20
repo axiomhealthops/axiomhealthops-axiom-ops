@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 // Regional Managers (not care coordinators)
 const REGIONAL_MANAGERS = {
@@ -24,7 +25,7 @@ export default function RegionsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedRegion, setSelectedRegion] = useState(null);
 
-  useEffect(() => {
+  function load() {
     Promise.all([
       fetchAllPages(supabase.from('clinicians').select('*').eq('is_active', true).order('full_name')),
       fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region,insurance').not('visit_date','is',null)),
@@ -37,7 +38,10 @@ export default function RegionsPage() {
       setAuth(a);
       setLoading(false);
     });
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+  useRealtimeTable(['clinicians', 'visit_schedule_data', 'auth_tracker', 'intake_referrals'], load);
 
   const regions = useMemo(() => {
     return REGION_ORDER.map(region => {

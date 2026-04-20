@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -163,6 +164,7 @@ export default function CareCoordMyPatients() {
   }, [myRegions]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['census_data', 'auth_tracker', 'care_coord_notes', 'intake_referrals', 'patient_clinical_settings'], load);
 
   // ── Enrich census ──────────────────────────────────────────────────────────
   const enrichedCensus = useMemo(() => {

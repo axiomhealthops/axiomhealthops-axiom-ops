@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const ROLES = ['super_admin','admin','assoc_director','regional_manager','auth_coordinator','intake_coordinator','care_coordinator','telehealth','clinician'];
 const ROLE_LABELS = { super_admin:'Super Admin', admin:'Director / Admin', assoc_director:'Assoc. Director of Clinical Ops', regional_manager:'Regional Manager', telehealth:'Telehealth PT/OT', auth_coordinator:'Auth Coordinator', intake_coordinator:'Intake Coordinator', care_coordinator:'Care Coordinator', clinician:'Clinician' };
@@ -297,8 +298,6 @@ export default function UserManagementPage() {
   const isSuperAdmin = profile?.role === 'super_admin';
   const isAdmin = profile?.role === 'admin' || isSuperAdmin;
 
-  useEffect(() => { loadData(); }, []);
-
   async function loadData() {
     const [{ data:u }, { data:p }, { data:o }, { data:authUsers }] = await Promise.all([
       supabase.from('coordinators').select('*').order('full_name'),
@@ -316,6 +315,9 @@ export default function UserManagementPage() {
     setOverrides(map);
     setLoading(false);
   }
+
+  useEffect(() => { loadData(); }, []);
+  useRealtimeTable(['coordinators', 'page_permissions', 'user_page_overrides'], loadData);
 
   async function addUser() {
     if (!newUser.full_name || !newUser.email) { setMsg('Name and email required'); return; }

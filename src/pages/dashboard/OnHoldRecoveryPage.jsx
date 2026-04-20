@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 const REGIONAL_MANAGERS = {
@@ -241,6 +242,7 @@ export default function OnHoldRecoveryPage() {
   }
 
   useEffect(() => { load(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+  useRealtimeTable(['on_hold_recovery', 'census_data'], load);
 
   const filtered = useMemo(() => {
     return records.filter(r => {

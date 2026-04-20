@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const WOUND_TYPES = [
@@ -560,6 +561,7 @@ export default function SwiftTeamDashboard() {
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['swift_team_patients', 'swift_wound_assessments', 'census_data'], load);
 
   const assessmentMap = useMemo(() => {
     const map = {};

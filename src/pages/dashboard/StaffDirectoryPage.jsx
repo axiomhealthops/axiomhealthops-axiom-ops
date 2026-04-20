@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const REGION_ORDER = ['A','B','C','G','H','J','M','N','T','V'];
 const REGIONAL_MANAGERS = {
@@ -147,12 +148,15 @@ export default function StaffDirectoryPage() {
   const [editing, setEditing] = useState(null);
   const [showInactive, setShowInactive] = useState(false);
 
-  useEffect(() => {
+  function load() {
     Promise.all([
       fetchAllPages(supabase.from('clinicians').select('*').order('full_name')),
       fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region')),
     ]).then(([c, v]) => { setClinicians(c); setVisits(v); setLoading(false); });
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+  useRealtimeTable(['clinicians', 'visit_schedule_data'], load);
 
   async function handleSave(id, updates) {
     await supabase.from('clinicians').update(updates).eq('id', id);

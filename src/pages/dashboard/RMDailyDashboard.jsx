@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const BLENDED_RATE = 185;
 
@@ -63,6 +64,7 @@ export default function RMDailyDashboard() {
   }, [myRegions]);
 
   useEffect(() => { load(); }, [load]);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'on_hold_recovery'], load);
 
   const metrics = useMemo(() => {
     const active = census.filter(p => /active/i.test(p.status||''));

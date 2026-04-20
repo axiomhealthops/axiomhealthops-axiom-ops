@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const RATE = 230;
 
@@ -63,7 +64,7 @@ export default function MyRegionPage() {
   const managerName = profile?.full_name || 'Regional Manager';
   const regionLabel = myRegions.length > 0 ? `Region${myRegions.length > 1 ? 's' : ''} ${myRegions.join(', ')}` : 'No regions assigned';
 
-  useEffect(() => {
+  function load() {
     if (myRegions.length === 0) { setLoading(false); return; }
     Promise.all([
       supabase.from('visit_schedule_data').select('*').in('region', myRegions).not('visit_date','is',null),
@@ -77,7 +78,10 @@ export default function MyRegionPage() {
       setAuthData(a.data||[]); setIntake(i.data||[]); setOnHold(oh.data||[]);
       setLoading(false);
     });
-  }, [myRegions.join(',')]);
+  }
+
+  useEffect(() => { load(); }, [myRegions.join(',')]);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals', 'on_hold_recovery'], load);
 
   // ── Week boundaries ────────────────────────────────────────────
   const now = new Date();

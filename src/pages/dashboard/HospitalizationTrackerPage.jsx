@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const LYMPH_BENCHMARK = 1;   // <1% target
 const OTHER_BENCHMARK = 5;   // <5% target
@@ -273,6 +274,7 @@ export default function HospitalizationTrackerPage() {
   }
 
   useEffect(() => { load(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+  useRealtimeTable(['census_data', 'hospitalizations'], load);
 
   const censusNames = useMemo(() => [...new Set((census||[]).map(c => c.patient_name).filter(Boolean))], [census]);
 
