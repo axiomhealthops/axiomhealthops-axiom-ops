@@ -341,6 +341,7 @@ export default function OpsReportsPage() {
       supabase.from('daily_ops_reports')
         .select('*')
         .eq('report_date', dateFilter)
+        .neq('report_type', 'overload_check_only')
         .order('created_at', { ascending: false }),
       supabase.from('coordinator_overload_alerts')
         .select('*')
