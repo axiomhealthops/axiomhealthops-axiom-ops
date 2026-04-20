@@ -69,6 +69,7 @@ If a field is not found, use null. Do not invent data.
   "dob": "YYYY-MM-DD",
   "member_id": "insurance member/policy ID",
   "insurance": "insurance carrier name (Humana, CarePlus, Aetna, FHCP, Medicare, etc.)",
+  "insurance_type": "IMPORTANT — Classify the insurance plan type. Look at the FULL plan name, product description, and any mentions of PPO, HMO, Medicare, Medicaid on the document. Use one of: 'ppo' (any PPO/Preferred Provider Organization plan — e.g. Aetna PPO, Cigna PPO, BCBS PPO), 'hmo' (HMO plans), 'medicare' (original Medicare Part A/B, Medicare Advantage, or any plan with 'Medicare' in name), 'medicaid' (Medicaid/state plans), 'standard' (commercial plans that require auth and are NOT PPO). If unsure, use 'standard'.",
   "auth_number": "authorization number",
   "auth_status": "Approved or Denied or Pending",
   "visits_authorized": "number of visits authorized (integer)",
@@ -273,12 +274,25 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
           isRenewal = existingAuths && existingAuths.length > 0;
         }
 
+        // --- Insurance-type heuristic fallback ---
+        // If the AI didn't extract insurance_type (or defaulted to null),
+        // infer from the carrier name + any plan keywords in the extracted fields.
+        let inferredInsType = editedData.insurance_type;
+        if (!inferredInsType || inferredInsType === 'standard') {
+          const haystack = `${editedData.insurance || ''} ${editedData.notes || ''} ${editedData.therapy_type || ''}`.toLowerCase();
+          if (/\bppo\b|preferred\s*provider/i.test(haystack))   inferredInsType = 'ppo';
+          else if (/\bmedicare\b|medicare\s*advantage/i.test(haystack)) inferredInsType = 'medicare';
+          else if (/\bmedicaid\b/i.test(haystack))              inferredInsType = 'medicaid';
+          else if (/\bhmo\b/i.test(haystack))                   inferredInsType = 'hmo';
+          else inferredInsType = editedData.insurance_type || 'standard';
+        }
+
         const payload = {
           patient_name: patientName,
           dob: editedData.dob || null,
           member_id: editedData.member_id || null,
           insurance: editedData.insurance || 'Unknown',
-          insurance_type: editedData.insurance_type || 'standard',
+          insurance_type: inferredInsType,
           auth_number: editedData.auth_number || null,
           auth_status: editedData.auth_status || 'pending',
           visits_authorized: parseInt(editedData.visits_authorized) || 24,
