@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import { useAuth } from '../../hooks/useAuth';
 import AIDocExtractor from './AIDocExtractor';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
  
@@ -540,6 +541,7 @@ function AddEditModal(props) {
  
 // ── Main Page ─────────────────────────────────────────────────────────
 export default function AuthTrackerPage() {
+  var { profile } = useAuth();
   var [records, setRecords] = useState([]);
   var [loading, setLoading] = useState(true);
   var [search, setSearch] = useState('');
@@ -897,6 +899,7 @@ export default function AuthTrackerPage() {
         <AddEditModal
           record={editRecord}
           allRecords={records}
+          profileName={profile?.full_name || profile?.email}
           onClose={function() { setShowModal(false); setEditRecord(null); }}
           onSave={function() { setShowModal(false); setEditRecord(null); fetchRecords(); }}
         />

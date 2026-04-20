@@ -1388,7 +1388,7 @@ export default function IntakeDashboardPage() {
                         setRecords(function(prev) { return prev.map(function(rec) { return rec.id === r.id ? Object.assign({}, rec, { insurance: newIns }) : rec; }); });
                       }} onBlur={async function(e) {
                         var newIns = e.target.value;
-                        await supabase.from('intake_referrals').update({ insurance: newIns, updated_at: new Date().toISOString() }).eq('id', r.id);
+                        await supabase.from('intake_referrals').update({ insurance: newIns, updated_at: new Date().toISOString(), updated_by: profile?.full_name || profile?.email || null }).eq('id', r.id);
                       }} style={{ fontSize: 11, color: 'var(--black)', border: '1px solid transparent', borderRadius: 4, padding: '2px 4px', outline: 'none', background: 'transparent', width: '100%', boxSizing: 'border-box' }}
                       onFocus={function(e) { e.target.style.border = '1px solid var(--border)'; e.target.style.background = 'var(--card-bg)'; }}
                       onMouseOut={function(e) { if (document.activeElement !== e.target) { e.target.style.border = '1px solid transparent'; e.target.style.background = 'transparent'; } }}
@@ -1396,7 +1396,7 @@ export default function IntakeDashboardPage() {
                       <span style={{ fontSize: 11, color: 'var(--black)' }}>{(r.diagnosis || '—').slice(0, 50)}</span>
                       <select value={st} onChange={async function(e) {
                         var newStatus = e.target.value;
-                        var { error } = await supabase.from('intake_referrals').update({ referral_status: newStatus, updated_at: new Date().toISOString() }).eq('id', r.id);
+                        var { error } = await supabase.from('intake_referrals').update({ referral_status: newStatus, updated_at: new Date().toISOString(), updated_by: profile?.full_name || profile?.email || null }).eq('id', r.id);
                         if (error) { alert('Error updating status: ' + error.message); return; }
                         setRecords(function(prev) { return prev.map(function(rec) { return rec.id === r.id ? Object.assign({}, rec, { referral_status: newStatus }) : rec; }); });
                       }} style={{ fontSize: 10, fontWeight: 700, color: stColor, background: stBg, padding: '2px 4px', borderRadius: 6, border: '1px solid ' + stBg, cursor: 'pointer', outline: 'none', appearance: 'none', WebkitAppearance: 'none', textAlign: 'center', minWidth: 70 }}>

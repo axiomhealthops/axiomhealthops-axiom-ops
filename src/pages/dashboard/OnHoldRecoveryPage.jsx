@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
@@ -40,7 +41,7 @@ function daysAgo(dateStr) {
 }
 
 // ── Action Modal ─────────────────────────────────────────────────────────────
-function ActionModal({ record, onClose, onSaved }) {
+function ActionModal({ record, onClose, onSaved, profileName }) {
   const [form, setForm] = useState({
     last_contact_date: record.last_contact_date || new Date().toISOString().slice(0,10),
     last_contact_notes: record.last_contact_notes || '',
@@ -62,6 +63,7 @@ function ActionModal({ record, onClose, onSaved }) {
       follow_up_due: form.follow_up_due || null,
       recovery_date: form.recovery_status === 'recovered' ? (form.recovery_date || new Date().toISOString().slice(0,10)) : null,
       updated_at: new Date().toISOString(),
+      updated_by: profileName || null,
     };
     await supabase.from('on_hold_recovery').update(payload).eq('id', record.id);
     setSaving(false);
@@ -161,6 +163,7 @@ function ActionModal({ record, onClose, onSaved }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function OnHoldRecoveryPage() {
+  const { profile } = useAuth();
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeRecord, setActiveRecord] = useState(null);
@@ -505,6 +508,7 @@ export default function OnHoldRecoveryPage() {
       {activeRecord && (
         <ActionModal
           record={activeRecord}
+          profileName={profile?.full_name || profile?.email}
           onClose={() => setActiveRecord(null)}
           onSaved={() => { setActiveRecord(null); load(); }}
         />
