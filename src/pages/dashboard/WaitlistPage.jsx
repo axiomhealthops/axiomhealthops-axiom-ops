@@ -60,9 +60,9 @@ function AssignModal({ patient, clinicians, onClose, onSaved, profile }) {
   });
   const [saving, setSaving] = useState(false);
 
-  // Filter clinicians to same region as patient
+  // Filter clinicians to same region as patient (supports comma-separated multi-region, e.g. "M,N")
   const regionClinicians = clinicians.filter(c =>
-    c.region === patient.region || c.region === 'All'
+    c.region === 'All' || c.region === patient.region || (c.region && c.region.split(',').map(r => r.trim()).includes(patient.region))
   ).sort((a, b) => (b.capacity || 0) - (a.capacity || 0));
 
   async function save() {
@@ -283,9 +283,9 @@ export default function WaitlistPage() {
       const ir = intakeMap[iKey] || {};
       const daysOnWaitlist = w.waitlisted_since ? daysAgo(w.waitlisted_since) : null;
 
-      // Find best matched clinician candidates (same region, has capacity)
+      // Find best matched clinician candidates (same region, has capacity — supports multi-region e.g. "M,N")
       const regionClinicians = enrichedClinicians
-        .filter(c => (c.region === w.region || c.region === 'All') && c.capacity > 0)
+        .filter(c => (c.region === 'All' || c.region === w.region || (c.region && c.region.split(',').map(r => r.trim()).includes(w.region))) && c.capacity > 0)
         .sort((a, b) => b.capacity - a.capacity);
 
       return {

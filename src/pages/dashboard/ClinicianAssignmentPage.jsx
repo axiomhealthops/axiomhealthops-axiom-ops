@@ -16,7 +16,7 @@ function ReassignModal({ patient, clinicians, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
 
   const currentClin = patient.last_visit_clinician || '—';
-  const filteredClins = clinicians.filter(c => c.region === patient.region && c.full_name !== currentClin);
+  const filteredClins = clinicians.filter(c => (c.region === patient.region || c.region === 'All' || (c.region && c.region.split(',').map(r => r.trim()).includes(patient.region))) && c.full_name !== currentClin);
 
   async function save() {
     if (!selectedClin) return;
