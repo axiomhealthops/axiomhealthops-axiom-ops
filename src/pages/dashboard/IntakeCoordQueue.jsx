@@ -72,7 +72,7 @@ function ReferralModal({ referral, onClose, onSaved, profile }) {
             <label style={{ fontSize:11, fontWeight:700, display:'block', marginBottom:4 }}>Chart Status</label>
             <select value={chartStatus} onChange={e => setChartStatus(e.target.value)}
               style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
-              {['','Pending Intake Call','Chart In Review','Pending Auth','Auth In Process','Auth Approved','Denied Referral','On Hold','Scheduled','Active','Discharged'].map(s =>
+              {['','Pending Intake Call','Chart In Review','Pending HH Discharge','Pending Auth','Auth In Process','Auth Approved','SOC Pending','Waitlist','Denied Referral','On Hold','Scheduled','Active','Discharged'].map(s =>
                 <option key={s} value={s}>{s || '— Select —'}</option>
               )}
             </select>
