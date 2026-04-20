@@ -10,6 +10,38 @@ if (!SUPABASE_ANON_KEY) {
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /**
+ * Log a coordinator action to the activity log.
+ * Non-blocking — errors are silently swallowed so a logging failure
+ * never breaks the actual save operation.
+ *
+ * @param {object} opts
+ * @param {string} opts.coordinatorId - UUID from coordinators table
+ * @param {string} opts.coordinatorName - display name
+ * @param {string} opts.coordinatorRole - role key (auth_coordinator, etc.)
+ * @param {string} opts.actionType - e.g. 'auth_updated', 'referral_accepted'
+ * @param {string} opts.actionDetail - human-readable description
+ * @param {string} [opts.patientName] - patient involved
+ * @param {string} opts.tableName - source table
+ * @param {string} [opts.recordId] - PK of the affected row
+ * @param {object} [opts.metadata] - extra data (old/new values, etc.)
+ */
+export function logActivity(opts) {
+  supabase.from('coordinator_activity_log').insert({
+    coordinator_id: opts.coordinatorId || null,
+    coordinator_name: opts.coordinatorName || 'Unknown',
+    coordinator_role: opts.coordinatorRole || 'unknown',
+    action_type: opts.actionType,
+    action_detail: opts.actionDetail || null,
+    patient_name: opts.patientName || null,
+    table_name: opts.tableName,
+    record_id: opts.recordId || null,
+    metadata: opts.metadata || {},
+  }).then(({ error }) => {
+    if (error) console.warn('[logActivity] Failed:', error.message);
+  });
+}
+
+/**
  * Defensive update wrapper.
  *
  * Why this exists:

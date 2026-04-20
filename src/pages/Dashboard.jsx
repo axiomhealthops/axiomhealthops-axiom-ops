@@ -46,6 +46,7 @@ import DischargeTrackerPage from './dashboard/DischargeTrackerPage';
 import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
 import StaleFrequencyPage from './dashboard/StaleFrequencyPage';
 import FrequencyReviewPage from './dashboard/FrequencyReviewPage';
+import OpsReportsPage from './dashboard/OpsReportsPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -92,6 +93,7 @@ const PAGE_COMPONENTS = {
   'clinical-progression':   ClinicalProgressionPage,
   'stale-frequency':        StaleFrequencyPage,
   'frequency-review':       FrequencyReviewPage,
+  'ops-reports':             OpsReportsPage,
 };
 
 function AccessDenied() {

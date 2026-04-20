@@ -342,6 +342,8 @@ function AddEditModal(props) {
     delete data.pd;
     ['dob','soc_date','auth_submitted_date','auth_needed_by','auth_approved_date','auth_expiry_date'].forEach(function(f) { if (!data[f]) data[f] = null; });
     ['visits_authorized','visits_used','evals_authorized','evals_used','reassessments_authorized','reassessments_used'].forEach(function(f) { data[f] = parseInt(data[f]) || 0; });
+    data.updated_by = props.profileName || null;
+    data.updated_at = new Date().toISOString();
     var result = rec && rec.id
       ? await supabase.from('auth_tracker').update(data).eq('id', rec.id)
       : await supabase.from('auth_tracker').insert([data]);

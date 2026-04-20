@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
-import { supabase, safeUpdate } from '../../lib/supabase';
+import { supabase, safeUpdate, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -113,6 +113,7 @@ function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
       auth_approved_date: form.auth_approved_date || null,
       auth_expiry_date: form.auth_expiry_date || null,
       updated_at: new Date().toISOString(),
+      updated_by: profileName || null,
     }, { id: auth.id });
  
     if (error) {
