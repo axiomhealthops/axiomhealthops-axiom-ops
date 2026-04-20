@@ -16,6 +16,7 @@ const REPORT_META = {
   morning_overview: { label: 'Morning Overview', icon: '☀️', color: '#2563EB', bg: '#EFF6FF', tagline: 'Tasks & assignments for today' },
   midday_snapshot:  { label: 'Midday Snapshot',  icon: '🕛', color: '#059669', bg: '#ECFDF5', tagline: 'Progress check — completed vs. open' },
   eod_review:       { label: 'End-of-Day Review', icon: '🌙', color: '#7C3AED', bg: '#F5F3FF', tagline: 'Full daily wrap-up & tomorrow\'s carry-over' },
+  live_snapshot:    { label: 'Live Snapshot',     icon: '⚡', color: '#DC2626', bg: '#FEF2F2', tagline: 'On-demand real-time report' },
 };
 
 /* ── Formatters ───────────────────────────────────────── */
@@ -445,6 +446,22 @@ export default function OpsReportsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedReport, setSelectedReport] = useState(null);
   const [dateFilter, setDateFilter] = useState(new Date().toISOString().slice(0, 10));
+  const [generating, setGenerating] = useState(false);
+
+  async function generateNow() {
+    setGenerating(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('daily-ops-report', {
+        body: { report_type: 'live_snapshot' },
+      });
+      if (error) console.warn('Generate report error:', error);
+      // Realtime subscription will auto-reload, but force it just in case
+      setTimeout(load, 1500);
+    } catch (e) {
+      console.warn('Generate report failed:', e);
+    }
+    setGenerating(false);
+  }
 
   function load() {
     setLoading(true);
@@ -530,13 +547,30 @@ export default function OpsReportsPage() {
           </div>
         )}
 
-        {/* Date selector */}
+        {/* Date selector + Generate button */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray)' }}>Report Date:</span>
           <select value={dateFilter} onChange={e => setDateFilter(e.target.value)}
             style={{ padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, background: 'var(--card-bg)' }}>
             {dates.map(d => <option key={d} value={d}>{fmtDate(d)}</option>)}
           </select>
+          <button
+            onClick={generateNow}
+            disabled={generating}
+            style={{
+              padding: '6px 14px', fontSize: 12, fontWeight: 700,
+              background: generating ? '#9CA3AF' : '#2563EB', color: '#fff',
+              border: 'none', borderRadius: 6, cursor: generating ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', gap: 6,
+              transition: 'background 0.15s',
+            }}
+          >
+            {generating ? (
+              <><span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} /> Generating...</>
+            ) : (
+              <><span style={{ fontSize: 14 }}>⚡</span> Generate Live Report</>
+            )}
+          </button>
           <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--gray)' }}>{reports.length} report{reports.length === 1 ? '' : 's'} for this date</div>
         </div>
 
@@ -614,6 +648,14 @@ export default function OpsReportsPage() {
       </div>
     </div>
   );
+}
+
+/* ── Spinner keyframe (injected once) ─────────────────── */
+if (typeof document !== 'undefined' && !document.getElementById('ops-spin-style')) {
+  const st = document.createElement('style');
+  st.id = 'ops-spin-style';
+  st.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+  document.head.appendChild(st);
 }
 
 /* ── Shared styles ────────────────────────────────────── */
