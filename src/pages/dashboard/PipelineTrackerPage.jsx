@@ -20,19 +20,55 @@ function staleness(days) {
   return { color: '#059669', bg: '#ECFDF5', label: '🟢 Recent' };
 }
 
+const PIPELINE_STATUSES = [
+  'SOC Pending',
+  'Eval Pending',
+  'Active',
+  'Auth Pending',
+  'Active - Auth Pendin',
+  'On Hold',
+  'On Hold - Pt Request',
+  'On Hold - MD Request',
+  'On Hold - Facility',
+  'Hospitalized',
+  'Waitlist',
+  'Discharge',
+  'Discharge - Change I',
+  'Non-Admit',
+];
+
 function ActionModal({ patient, onClose, onSaved }) {
   const [notes, setNotes] = useState(patient.pipeline_notes || '');
   const [assignedTo, setAssignedTo] = useState(patient.pipeline_assigned_to || '');
   const [targetDate, setTargetDate] = useState(patient.target_start_date || '');
+  const [status, setStatus] = useState(patient.status || '');
+  const [nonAdmitReason, setNonAdmitReason] = useState('');
   const [saving, setSaving] = useState(false);
 
   async function save() {
     setSaving(true);
-    await supabase.from('census_data').update({
+    const update = {
       pipeline_notes: notes,
       pipeline_assigned_to: assignedTo,
       target_start_date: targetDate || null,
-    }).eq('patient_name', patient.patient_name);
+    };
+    // Only update status if it changed
+    if (status && status !== patient.status) {
+      update.status = status;
+    }
+    await supabase.from('census_data').update(update).eq('patient_name', patient.patient_name);
+
+    // If Non-Admit, also update intake referral to Denied + Non Admit type
+    if (status === 'Non-Admit') {
+      const reason = nonAdmitReason || 'Non-Admit from pipeline';
+      await supabase.from('intake_referrals').update({
+        referral_status: 'Denied',
+        referral_type: 'Non Admit',
+        chart_status: 'Denied Referral',
+        denial_reason: reason,
+      }).eq('patient_name', patient.patient_name);
+    }
+
     setSaving(false);
     onSaved();
   }
@@ -57,6 +93,44 @@ function ActionModal({ patient, onClose, onSaved }) {
               <div style={{ color: 'var(--gray)' }}>{patient.referral_source}</div>
               {patient.pcp_name && <div style={{ color: 'var(--gray)', marginTop: 2 }}>PCP: {patient.pcp_name}</div>}
               {patient.diagnosis && <div style={{ color: 'var(--gray)', marginTop: 2 }}>Dx: {patient.diagnosis}</div>}
+            </div>
+          )}
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 4 }}>Patient Status</label>
+            <select value={status} onChange={e => setStatus(e.target.value)}
+              style={{ width: '100%', padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', background: 'var(--card-bg)', boxSizing: 'border-box' }}>
+              {!PIPELINE_STATUSES.includes(patient.status) && <option value={patient.status}>{patient.status}</option>}
+              {PIPELINE_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {status !== patient.status && (
+              <div style={{ fontSize: 10, color: '#D97706', fontWeight: 600, marginTop: 4 }}>
+                Status will change from "{patient.status}" to "{status}"
+              </div>
+            )}
+          </div>
+          {status === 'Non-Admit' && (
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 4 }}>Non-Admit Reason</label>
+              <select value={nonAdmitReason} onChange={e => setNonAdmitReason(e.target.value)}
+                style={{ width: '100%', padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', background: 'var(--card-bg)', boxSizing: 'border-box' }}>
+                <option value="">Select reason...</option>
+                <option value="Out of Area">Out of Area</option>
+                <option value="In network but Non-lymphedema">In network but Non-lymphedema</option>
+                <option value="Non-lymphedema and we don't accept patient insurance">Non-lymphedema wrong insurance</option>
+                <option value="Lymphedema but we don't accept patient insurance">Lymphedema wrong insurance</option>
+                <option value="Out of Network">Out of Network</option>
+                <option value="Area is closed already due to no staff available">Area closed - no staff</option>
+                <option value="Hospice Care">Hospice Care</option>
+                <option value="Patient declined services">Patient declined services</option>
+                <option value="Unable to contact patient">Unable to contact patient</option>
+                <option value="Denied in portal">Denied in portal</option>
+                <option value="Other">Other</option>
+              </select>
+              {nonAdmitReason === 'Out of Area' && (
+                <div style={{ fontSize: 10, color: '#B45309', marginTop: 4, background: '#FEF3C7', padding: '6px 8px', borderRadius: 6 }}>
+                  This will be tracked for expansion planning. Ensure zip code/city/county is captured in the intake record.
+                </div>
+              )}
             </div>
           )}
           <div>
