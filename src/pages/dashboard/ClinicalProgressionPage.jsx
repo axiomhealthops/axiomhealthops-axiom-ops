@@ -197,7 +197,7 @@ export default function ClinicalProgressionPage() {
   }, [regionScope.isAllAccess, regionScope.loading, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-  useRealtimeTable(['census_data', 'patient_clinical_settings', 'visit_schedule_data'], load);
+  useRealtimeTable(['census_data', 'patient_clinical_settings', 'visit_schedule_data'], loadAll);
 
   // Priority for level resolution when multiple visits exist on the same date.
   // Treatment visits (Level N) take priority over Reassessments/Evaluations

@@ -100,7 +100,7 @@ export default function StaleFrequencyPage() {
   }
 
   useEffect(() => { loadData(); }, []);
-  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'intake_referrals', 'patient_clinical_settings'], load);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'intake_referrals', 'patient_clinical_settings'], loadData);
 
   // Build insurance lookup: prefer most-recent auth record, fall back to
   // most-recent intake record, fall back to census_data.insurance.

@@ -119,7 +119,6 @@ function UploadCard(props) {
       .limit(1)
       .then(function(res) {
         if (res.data && res.data.length > 0) setLastUpload(res.data[0]);
-  useRealtimeTable(['census_data', 'visit_schedule_data', 'data_freshness'], load);
       });
   }, []);
  

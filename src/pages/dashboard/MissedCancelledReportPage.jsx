@@ -95,7 +95,7 @@ export default function MissedCancelledReportPage() {
   // assigned regions consistently.
   const regionScope = useAssignedRegions();
 
-  useEffect(() => {
+  function fetchMissedCancelled() {
     if (regionScope.loading) return;
     if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setVisits([]); setLoading(false); return;
@@ -106,6 +106,10 @@ export default function MissedCancelledReportPage() {
       .order('visit_date', { ascending: false });
     query = regionScope.applyToQuery(query);
     query.then(({ data }) => { setVisits(data || []); setLoading(false); });
+  }
+
+  useEffect(() => {
+    fetchMissedCancelled();
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   // Derived filter options
@@ -171,7 +175,7 @@ export default function MissedCancelledReportPage() {
     </div>
   );
 
-  useRealtimeTable('visit_schedule_data', load);
+  useRealtimeTable('visit_schedule_data', fetchMissedCancelled);
 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>

@@ -107,7 +107,7 @@ export default function MedicareTrackerPage() {
   useEffect(() => {
     loadFlags();
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
-  useRealtimeTable(['census_data', 'visit_schedule_data', 'medicare_visit_flags'], load);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'medicare_visit_flags'], loadFlags);
 
   async function acknowledge(flag, type) {
     const now = new Date().toISOString();

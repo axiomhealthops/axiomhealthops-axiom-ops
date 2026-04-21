@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import AIDocExtractor from './AIDocExtractor';
-import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
 const INSURANCES = ['Humana','CarePlus','FHCP','Devoted','Health First','Aetna','Medicare','Simply','Cigna','United Healthcare','Other'];
@@ -25,8 +24,6 @@ function F({ label, children, err }) {
   );
 }
 function I({ name, value, onChange, err, ...props }) {
-  useRealtimeTable('intake_referrals', load);
-
   return (
     <input name={name} value={value||''} onChange={e => onChange(name, e.target.value)} {...props}
       style={{ width:'100%', padding:'8px 10px', border:`1px solid ${err?'#DC2626':'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', background:'var(--card-bg)', ...props.style }} />
