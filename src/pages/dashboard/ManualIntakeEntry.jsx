@@ -70,6 +70,8 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
   const [errors, setErrors] = useState({});
   const [step, setStep] = useState(1);
   const [showAI, setShowAI] = useState(false);
+  const [aiApplied, setAiApplied] = useState(false);
+  const [aiFile, setAiFile] = useState(null);
 
   // Defensive escape hatch — if anything in the modal ever gets stuck (save
   // error, network hang, stale state), users can always Esc out. Skip the
@@ -108,21 +110,22 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
     let referral_document_path = null;
     let referral_document_name = null;
 
-    // Upload file first if one is attached
-    if (file) {
+    // Upload file first if one is attached (manual upload or AI extractor file)
+    const fileToUpload = file || aiFile;
+    if (fileToUpload) {
       const safeName = form.patient_name.replace(/[^a-zA-Z0-9]/g, '_');
-      const ext = file.name.split('.').pop();
+      const ext = fileToUpload.name.split('.').pop();
       const path = `referrals/${today}/${safeName}_${Date.now()}.${ext}`;
       const { data: uploadData, error: uploadErr } = await supabase.storage
         .from('referral-documents')
-        .upload(path, file, { cacheControl: '3600', upsert: false });
+        .upload(path, fileToUpload, { cacheControl: '3600', upsert: false });
       if (uploadErr) {
         setErrors({ submit: 'File upload failed: ' + uploadErr.message });
         setSaving(false);
         return;
       }
       referral_document_path = uploadData.path;
-      referral_document_name = file.name;
+      referral_document_name = fileToUpload.name;
     }
 
     const payload = {
@@ -170,7 +173,7 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
           <AIDocExtractor
             mode="intake"
             onClose={() => setShowAI(false)}
-            onExtracted={(data) => {
+            onExtracted={(data, docFile) => {
               // Auto-fill the form with extracted data
               setForm(p => ({
                 ...p,
@@ -195,7 +198,10 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
                 referral_type: data.referral_type || p.referral_type,
                 notes: data.notes || p.notes,
               }));
+              if (docFile) setAiFile(docFile);
+              setAiApplied(true);
               setShowAI(false);
+              setStep(1); // Go back to step 1 so user can see filled data + select region
             }}
           />
         )}
@@ -213,6 +219,13 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
         {/* Body */}
         <div style={{ flex:1, overflowY:'auto', padding:24 }}>
           {errors.submit && <div style={{ background:'#FEF2F2', border:'1px solid #FCA5A5', borderRadius:8, padding:'10px 14px', marginBottom:16, fontSize:12, color:'#DC2626' }}>{errors.submit}</div>}
+
+          {aiApplied && (
+            <div style={{ background:'#ECFDF5', border:'1px solid #A7F3D0', borderRadius:8, padding:'10px 14px', marginBottom:16, fontSize:12, color:'#065F46', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span><strong>✓ AI extracted data applied.</strong> Please review the fields, select a <strong>Region</strong>, then submit.</span>
+              <button onClick={() => setAiApplied(false)} style={{ background:'none', border:'none', color:'#065F46', cursor:'pointer', fontSize:14 }}>×</button>
+            </div>
+          )}
 
           {/* STEP 1: Patient */}
           {step === 1 && (

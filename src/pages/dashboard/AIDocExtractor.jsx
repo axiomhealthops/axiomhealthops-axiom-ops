@@ -211,6 +211,12 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
     setExtracting(false);
   }
 
+  function handleApplyToForm() {
+    // For intake mode: don't save directly — pass data back to the form
+    // so the user can review, add region, and submit through normal flow
+    onExtracted?.(editedData, file);
+  }
+
   async function handleSaveToSupabase() {
     if (!editedData) return;
     setSaving(true);
@@ -230,35 +236,12 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
       }
 
       if (mode === 'intake') {
-        const payload = {
-          date_received: new Date().toISOString().slice(0,10),
-          patient_name: editedData.patient_name || null,
-          dob: editedData.dob || null,
-          phone: editedData.phone || null,
-          contact_number: editedData.phone || null,
-          location: editedData.address || null,
-          city: editedData.city || null,
-          zip_code: editedData.zip_code || null,
-          county: editedData.county || null,
-          insurance: editedData.insurance || null,
-          policy_number: editedData.policy_number || null,
-          secondary_insurance: editedData.secondary_insurance || null,
-          diagnosis: editedData.diagnosis || null,
-          diagnosis_clean: editedData.diagnosis?.split('(')[0]?.trim() || null,
-          referral_source: editedData.referral_source || null,
-          referral_source_phone: editedData.referral_source_phone || null,
-          referral_source_fax: editedData.referral_source_fax || null,
-          pcp_name: editedData.pcp_name || null,
-          pcp_phone: editedData.pcp_phone || null,
-          pcp_fax: editedData.pcp_fax || null,
-          referral_type: editedData.referral_type || 'New Referral',
-          referral_status: 'Pending',
-          notes: editedData.notes || null,
-          referral_document_path: filePath || null,
-          referral_document_name: file?.name || null,
-        };
-        const { error: dbErr } = await supabase.from('intake_referrals').upsert(payload, { onConflict: 'patient_name,date_received' });
-        if (dbErr) throw new Error(dbErr.message);
+        // Intake mode: pass data to form instead of saving directly.
+        // This ensures the user reviews data, selects region (required),
+        // and submits through the validated ManualIntakeEntry flow.
+        handleApplyToForm();
+        setSaving(false);
+        return;
       } else {
         // Auth mode — save to auth_tracker
         const patientName = editedData.patient_name || null;
@@ -465,7 +448,11 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
         {editedData && (
           <div style={{ padding:'14px 24px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--bg)' }}>
             <div style={{ fontSize:12, color:'var(--gray)' }}>
-              {saved ? <span style={{ color:'#065F46', fontWeight:700 }}>✓ Saved to Supabase successfully</span> : 'Review extracted fields, edit as needed, then save to database'}
+              {saved
+                ? <span style={{ color:'#065F46', fontWeight:700 }}>✓ Saved successfully</span>
+                : mode === 'intake'
+                  ? 'Review extracted fields, edit as needed, then apply to the referral form'
+                  : 'Review extracted fields, edit as needed, then save to database'}
             </div>
             <div style={{ display:'flex', gap:8 }}>
               {!saved && (
@@ -474,10 +461,17 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
                     style={{ padding:'8px 14px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>
                     Re-upload
                   </button>
-                  <button onClick={handleSaveToSupabase} disabled={saving}
-                    style={{ padding:'8px 20px', background:cfg.color, color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:saving?'wait':'pointer' }}>
-                    {saving ? 'Saving…' : `✓ Save to ${mode === 'intake' ? 'Intake' : 'Auth Tracker'}`}
-                  </button>
+                  {mode === 'intake' ? (
+                    <button onClick={handleApplyToForm}
+                      style={{ padding:'8px 20px', background:'#065F46', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+                      ✓ Apply to Referral Form
+                    </button>
+                  ) : (
+                    <button onClick={handleSaveToSupabase} disabled={saving}
+                      style={{ padding:'8px 20px', background:cfg.color, color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:saving?'wait':'pointer' }}>
+                      {saving ? 'Saving…' : '✓ Save to Auth Tracker'}
+                    </button>
+                  )}
                 </>
               )}
               {saved && (
