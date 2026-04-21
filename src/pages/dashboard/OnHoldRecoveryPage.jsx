@@ -61,11 +61,25 @@ function ActionModal({ record, onClose, onSaved, profileName }) {
       last_contact_date: form.last_contact_date || null,
       expected_return_date: form.expected_return_date || null,
       follow_up_due: form.follow_up_due || null,
-      recovery_date: form.recovery_status === 'recovered' ? (form.recovery_date || new Date().toISOString().slice(0,10)) : null,
+      recovery_date: (form.recovery_status === 'recovered' || form.recovery_status === 'discharged')
+        ? (form.recovery_date || new Date().toISOString().slice(0,10)) : null,
       updated_at: new Date().toISOString(),
       updated_by: profileName || null,
     };
     await supabase.from('on_hold_recovery').update(payload).eq('id', record.id);
+
+    // When marking as Discharged or Recovered, also update census_data so the
+    // sync logic doesn't re-insert the patient as a new on-hold record
+    if (form.recovery_status === 'discharged') {
+      await supabase.from('census_data')
+        .update({ status: 'Discharge', updated_at: new Date().toISOString() })
+        .eq('patient_name', record.patient_name);
+    } else if (form.recovery_status === 'recovered') {
+      await supabase.from('census_data')
+        .update({ status: 'Active', updated_at: new Date().toISOString() })
+        .eq('patient_name', record.patient_name);
+    }
+
     setSaving(false);
     onSaved();
   }
@@ -196,14 +210,16 @@ export default function OnHoldRecoveryPage() {
         .select('patient_name, recovery_status')
     );
 
-    const existingActive = new Set(
-      (existing || []).filter(r => r.recovery_status === 'on_hold').map(r => r.patient_name)
+    // Track ALL patients that already have an on_hold_recovery record (any status)
+    // so we don't re-insert discharged or recovered patients as new on-hold rows
+    const existingAll = new Set(
+      (existing || []).map(r => r.patient_name)
     );
 
-    // Insert new patients appearing on hold
-    const newOnes = (census || []).filter(c => !existingActive.has(c.patient_name));
+    // Insert new patients appearing on hold (only if they have NO existing record at all)
+    const newOnes = (census || []).filter(c => !existingAll.has(c.patient_name));
     if (newOnes.length > 0) {
-      await supabase.from('on_hold_recovery').insert(newOnes.map(c => ({
+      await supabase.from('on_hold_recovery').upsert(newOnes.map(c => ({
         patient_name: c.patient_name,
         region: c.region,
         hold_type: c.status,
@@ -212,7 +228,7 @@ export default function OnHoldRecoveryPage() {
         recovery_status: 'on_hold',
         hold_reason: c.status,
         priority: 'normal',
-      })));
+      })), { onConflict: 'patient_name', ignoreDuplicates: true });
     }
 
     // Mark as recovered if no longer on hold in census
@@ -269,10 +285,12 @@ export default function OnHoldRecoveryPage() {
 
   const active = records.filter(r => r.recovery_status === 'on_hold');
   const recovered = records.filter(r => r.recovery_status === 'recovered');
+  const discharged = records.filter(r => r.recovery_status === 'discharged');
   const overdue = active.filter(r => (r.days_on_hold || 0) >= 30);
   const followUpDue = active.filter(r => r.follow_up_due && r.follow_up_due <= new Date().toISOString().slice(0,10));
   const noContact = active.filter(r => !r.last_contact_date);
-  const recoveryRate = records.length > 0 ? Math.round(recovered.length / records.length * 100) : 0;
+  const resolvedCount = recovered.length + discharged.length;
+  const recoveryRate = records.length > 0 ? Math.round(resolvedCount / records.length * 100) : 0;
 
   function toggleSort(field) {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -295,14 +313,14 @@ export default function OnHoldRecoveryPage() {
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar
         title="On-Hold Recovery"
-        subtitle={`${active.length} active · ${recovered.length} recovered · ${recoveryRate}% recovery rate`}
+        subtitle={`${active.length} active · ${recovered.length} recovered · ${discharged.length} discharged · ${recoveryRate}% resolution rate`}
       />
       <div style={{ flex:1, overflow:'auto' }}>
 
         {/* Filters */}
         <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)', background:'var(--card-bg)', display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
           <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:7, overflow:'hidden' }}>
-            {[['on_hold','On Hold'],['recovered','Recovered'],['ALL','All']].map(([k,l]) => (
+            {[['on_hold','On Hold'],['recovered','Recovered'],['discharged','Discharged'],['ALL','All']].map(([k,l]) => (
               <button key={k} onClick={() => setFilterStatus(k)}
                 style={{ padding:'6px 12px', border:'none', fontSize:11, fontWeight:filterStatus===k?700:400, cursor:'pointer',
                   background:filterStatus===k?'#0F1117':'var(--card-bg)', color:filterStatus===k?'#fff':'var(--gray)' }}>
