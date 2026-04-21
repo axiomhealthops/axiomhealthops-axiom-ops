@@ -240,6 +240,12 @@ export default function ActionListPage({ onNavigate }) {
   const [loadingLive, setLoadingLive] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
 
+  // Action responses (tracks Start/Done/Dismiss + notes on auto items)
+  const [actionResponses, setActionResponses] = useState({});
+  const [expandedAction, setExpandedAction] = useState(null);
+  const [noteText, setNoteText] = useState('');
+  const [savingResponse, setSavingResponse] = useState(false);
+
   // UI
   const [showForm, setShowForm] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
@@ -250,6 +256,65 @@ export default function ActionListPage({ onNavigate }) {
     const { data } = await supabase.from('action_items').select('*').order('created_at', { ascending: false });
     setManualItems(data || []);
     setLoadingManual(false);
+  }
+
+  // Fetch action responses (tracks user interaction with auto items)
+  async function fetchResponses() {
+    const { data } = await supabase.from('action_responses').select('*').order('updated_at', { ascending: false });
+    const map = {};
+    (data || []).forEach(r => { map[r.action_key] = r; });
+    setActionResponses(map);
+  }
+
+  // Set status on an auto-generated action
+  async function setActionStatus(actionKey, status, notes) {
+    setSavingResponse(true);
+    const existing = actionResponses[actionKey];
+    const payload = {
+      action_key: actionKey,
+      status,
+      notes: notes || existing?.notes || null,
+      responded_by: profile?.id || null,
+      responder_name: profile?.full_name || profile?.email || 'Unknown',
+      updated_at: new Date().toISOString(),
+    };
+    if (existing) {
+      await supabase.from('action_responses').update(payload).eq('id', existing.id);
+    } else {
+      await supabase.from('action_responses').insert([payload]);
+    }
+    await fetchResponses();
+    setSavingResponse(false);
+    if (status === 'completed' || status === 'dismissed') {
+      setExpandedAction(null);
+      setNoteText('');
+    }
+  }
+
+  // Save notes and mark complete
+  async function handleMarkComplete(actionKey) {
+    await setActionStatus(actionKey, 'completed', noteText);
+  }
+
+  // Save just the note without changing status
+  async function handleSaveNote(actionKey) {
+    const existing = actionResponses[actionKey];
+    setSavingResponse(true);
+    const payload = {
+      action_key: actionKey,
+      status: existing?.status || 'started',
+      notes: noteText,
+      responded_by: profile?.id || null,
+      responder_name: profile?.full_name || profile?.email || 'Unknown',
+      updated_at: new Date().toISOString(),
+    };
+    if (existing) {
+      await supabase.from('action_responses').update(payload).eq('id', existing.id);
+    } else {
+      await supabase.from('action_responses').insert([payload]);
+    }
+    await fetchResponses();
+    setSavingResponse(false);
   }
 
   // Fetch live data for auto-generation
@@ -279,8 +344,8 @@ export default function ActionListPage({ onNavigate }) {
     setLoadingLive(false);
   }, []);
 
-  useEffect(() => { fetchManual(); loadLive(); }, [loadLive]);
-  useRealtimeTable('action_items', fetchManual);
+  useEffect(() => { fetchManual(); fetchResponses(); loadLive(); }, [loadLive]);
+  useRealtimeTable(['action_items', 'action_responses'], () => { fetchManual(); fetchResponses(); });
 
   // Build auto actions from live data
   const autoActions = useMemo(() => {
@@ -288,10 +353,14 @@ export default function ActionListPage({ onNavigate }) {
     return buildAutoActions(liveData);
   }, [liveData]);
 
-  // Combined list
+  // Combined list — hide auto items that have been completed or dismissed
   const allItems = useMemo(() => {
+    const openAuto = autoActions.filter(a => {
+      const resp = actionResponses[a.id];
+      return !resp || (resp.status !== 'completed' && resp.status !== 'dismissed');
+    });
     const manualOpen = manualItems.filter(i => i.status !== 'completed').map(i => ({ ...i, auto: false }));
-    const combined = [...autoActions, ...manualOpen];
+    const combined = [...openAuto, ...manualOpen];
     const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
     combined.sort((a, b) => {
       const pa = priorityOrder[a.priority] ?? 2;
@@ -300,9 +369,17 @@ export default function ActionListPage({ onNavigate }) {
       return (b.revenue_impact || 0) - (a.revenue_impact || 0);
     });
     return combined;
-  }, [autoActions, manualItems]);
+  }, [autoActions, manualItems, actionResponses]);
 
   const completedItems = manualItems.filter(i => i.status === 'completed');
+
+  // Resolved auto items (completed or dismissed today)
+  const resolvedAutoItems = useMemo(() => {
+    return autoActions.filter(a => {
+      const resp = actionResponses[a.id];
+      return resp && (resp.status === 'completed' || resp.status === 'dismissed');
+    }).map(a => ({ ...a, response: actionResponses[a.id] }));
+  }, [autoActions, actionResponses]);
 
   // Filtered
   const filtered = activeTab === 'all' ? allItems
@@ -437,20 +514,45 @@ export default function ActionListPage({ onNavigate }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {filtered.map((item, idx) => {
               const cat = CATEGORY_META[item.category] || CATEGORY_META.manual;
+              const resp = item.auto ? actionResponses[item.id] : null;
+              const isExpanded = expandedAction === item.id;
+              const itemStatus = resp?.status || 'open';
               return (
                 <div key={item.id || `auto-${idx}`} style={{ background: 'var(--card-bg)', border: `1px solid ${item.priority === 'critical' ? '#FECACA' : 'var(--border)'}`, borderLeft: `4px solid ${cat.color}`, borderRadius: 10, padding: '14px 18px', transition: 'box-shadow 0.15s ease' }}
                   onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)'}
                   onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}>
-                  {/* Top row: category + priority + revenue */}
+                  {/* Top row: category + priority + revenue + action buttons */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontSize: 14 }}>{cat.icon}</span>
                       <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{cat.label}</span>
                       {item.auto && <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 4, background: '#E0F2FE', color: '#0369A1', fontWeight: 600 }}>LIVE</span>}
+                      {item.auto && itemStatus === 'started' && <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 4, background: '#FEF3C7', color: '#92400E', fontWeight: 600 }}>IN PROGRESS</span>}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <RevenueBadge amount={item.revenue_impact} />
                       <PriorityPill priority={item.priority} />
+                      {/* Action buttons for auto items */}
+                      {item.auto && (
+                        <div style={{ display: 'flex', gap: 6, marginLeft: 6 }}>
+                          {itemStatus !== 'started' && (
+                            <button onClick={() => setActionStatus(item.id, 'started')}
+                              disabled={savingResponse}
+                              style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, border: '1px solid #10B981', borderRadius: 6, background: '#fff', color: '#10B981', cursor: 'pointer' }}>
+                              Start
+                            </button>
+                          )}
+                          <button onClick={() => { setExpandedAction(isExpanded ? null : item.id); setNoteText(resp?.notes || ''); }}
+                            style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, border: 'none', borderRadius: 6, background: '#10B981', color: '#fff', cursor: 'pointer' }}>
+                            ✓ Done
+                          </button>
+                          <button onClick={() => setActionStatus(item.id, 'dismissed')}
+                            disabled={savingResponse}
+                            style={{ padding: '4px 12px', fontSize: 11, fontWeight: 500, border: '1px solid var(--border)', borderRadius: 6, background: '#fff', color: 'var(--gray)', cursor: 'pointer' }}>
+                            Dismiss
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -466,6 +568,45 @@ export default function ActionListPage({ onNavigate }) {
                       {item.description && <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 4, lineHeight: 1.5 }}>{item.description}</div>}
                     </div>
                   </div>
+
+                  {/* Staff tag */}
+                  {item.staff_name && (
+                    <div style={{ marginTop: 8 }}>
+                      <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--gray)', background: 'var(--bg)', padding: '3px 10px', borderRadius: 999, border: '1px solid var(--border)' }}>Patient: {item.staff_name}</span>
+                    </div>
+                  )}
+
+                  {/* Expanded notes + mark complete panel */}
+                  {item.auto && isExpanded && (
+                    <div style={{ marginTop: 12, padding: '12px 0 0', borderTop: '1px solid var(--border)' }}>
+                      <textarea
+                        value={noteText}
+                        onChange={e => setNoteText(e.target.value)}
+                        placeholder={`message sent to ${item.staff_name || 'staff'}`}
+                        rows={3}
+                        style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, resize: 'vertical', fontFamily: 'inherit', background: 'var(--bg)', color: 'var(--black)', outline: 'none', boxSizing: 'border-box' }}
+                      />
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <button onClick={() => handleMarkComplete(item.id)}
+                          disabled={savingResponse}
+                          style={{ padding: '8px 18px', fontSize: 13, fontWeight: 600, border: 'none', borderRadius: 8, background: '#1565C0', color: '#fff', cursor: savingResponse ? 'not-allowed' : 'pointer', opacity: savingResponse ? 0.6 : 1 }}>
+                          {savingResponse ? 'Saving…' : 'Mark Complete'}
+                        </button>
+                        <button onClick={() => { setExpandedAction(null); setNoteText(''); }}
+                          style={{ padding: '8px 18px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 8, background: 'none', color: 'var(--gray)', cursor: 'pointer' }}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Show existing note if not expanded */}
+                  {item.auto && !isExpanded && resp?.notes && (
+                    <div style={{ marginTop: 8, padding: '8px 12px', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, fontSize: 12, color: '#166534' }}>
+                      <strong>Note:</strong> {resp.notes}
+                      <span style={{ fontSize: 10, color: '#6B7280', marginLeft: 8 }}>— {resp.responder_name}, {new Date(resp.updated_at).toLocaleDateString()}</span>
+                    </div>
+                  )}
 
                   {/* Bottom meta row */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
@@ -489,6 +630,35 @@ export default function ActionListPage({ onNavigate }) {
                 <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 4 }}>All clear — revenue operations are running smoothly</div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Resolved Auto Actions */}
+        {resolvedAutoItems.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={S.sectionLabel}>Resolved Actions ({resolvedAutoItems.length})</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {resolvedAutoItems.map(item => {
+                const cat = CATEGORY_META[item.category] || CATEGORY_META.manual;
+                return (
+                  <div key={item.id} style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 16px', opacity: 0.55 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: 14, color: item.response.status === 'completed' ? 'var(--green)' : 'var(--gray)' }}>{item.response.status === 'completed' ? '✓' : '—'}</span>
+                        <span style={{ textDecoration: 'line-through', color: 'var(--gray)', fontSize: 13 }}>{item.title}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 10, color: item.response.status === 'completed' ? '#059669' : '#9CA3AF', fontWeight: 600, textTransform: 'uppercase' }}>{item.response.status}</span>
+                        <button onClick={() => setActionStatus(item.id, 'open')} style={{ background: 'none', border: 'none', color: 'var(--light-gray)', cursor: 'pointer', fontSize: 11 }}>↩ reopen</button>
+                      </div>
+                    </div>
+                    {item.response.notes && (
+                      <div style={{ fontSize: 11, color: '#6B7280', marginTop: 4, paddingLeft: 24 }}>{item.response.notes} — <em>{item.response.responder_name}</em></div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
