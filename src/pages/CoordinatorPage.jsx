@@ -44,29 +44,80 @@ function TaskCard(props) {
   var [completing, setCompleting] = useState(false);
   var [notes, setNotes] = useState('');
   var [showNotes, setShowNotes] = useState(false);
- 
+  var isAuto = task.auto_generated;
+
   async function markComplete() {
+    setCompleting(true);
     var n = notes || null;
-    await supabase.from('coordinator_tasks').update({
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      completion_notes: n,
-    }).eq('id', task.id);
+    if (isAuto) {
+      // Auto-generated tasks don't exist in coordinator_tasks — persist to action_responses
+      var existing = props.autoResponses && props.autoResponses[task.id];
+      if (existing) {
+        await supabase.from('action_responses').update({
+          status: 'completed', notes: n, updated_at: new Date().toISOString(),
+        }).eq('action_key', task.id);
+      } else {
+        await supabase.from('action_responses').insert({
+          action_key: task.id, status: 'completed', notes: n,
+          responder_name: props.coordName || 'Coordinator',
+        });
+      }
+    } else {
+      await supabase.from('coordinator_tasks').update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        completion_notes: n,
+      }).eq('id', task.id);
+    }
+    setCompleting(false);
+    setShowNotes(false);
+    setNotes('');
     props.onRefresh();
   }
- 
+
   async function markDismiss() {
-    await supabase.from('coordinator_tasks').update({ status: 'dismissed' }).eq('id', task.id);
+    if (isAuto) {
+      var existing = props.autoResponses && props.autoResponses[task.id];
+      if (existing) {
+        await supabase.from('action_responses').update({
+          status: 'dismissed', updated_at: new Date().toISOString(),
+        }).eq('action_key', task.id);
+      } else {
+        await supabase.from('action_responses').insert({
+          action_key: task.id, status: 'dismissed',
+          responder_name: props.coordName || 'Coordinator',
+        });
+      }
+    } else {
+      await supabase.from('coordinator_tasks').update({ status: 'dismissed' }).eq('id', task.id);
+    }
     props.onRefresh();
   }
- 
+
   async function markInProgress() {
-    await supabase.from('coordinator_tasks').update({ status: 'in_progress' }).eq('id', task.id);
+    if (isAuto) {
+      var existing = props.autoResponses && props.autoResponses[task.id];
+      if (existing) {
+        await supabase.from('action_responses').update({
+          status: 'started', updated_at: new Date().toISOString(),
+        }).eq('action_key', task.id);
+      } else {
+        await supabase.from('action_responses').insert({
+          action_key: task.id, status: 'started',
+          responder_name: props.coordName || 'Coordinator',
+        });
+      }
+    } else {
+      await supabase.from('coordinator_tasks').update({ status: 'in_progress' }).eq('id', task.id);
+    }
     props.onRefresh();
   }
  
   var isOverdue = task.due_date && new Date(task.due_date) < new Date();
- 
+  var autoResp = isAuto && props.autoResponses ? props.autoResponses[task.id] : null;
+  var effectiveStatus = isAuto ? (autoResp ? autoResp.status : 'open') : task.status;
+  var isInProgress = effectiveStatus === 'in_progress' || effectiveStatus === 'started';
+
   return (
     <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: '14px 16px', borderLeft: '4px solid ' + pc.color }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
@@ -75,7 +126,7 @@ function TaskCard(props) {
             <span style={{ fontSize: 14 }}>{tc.icon}</span>
             <span style={{ fontSize: 11, fontWeight: 700, color: tc.color, background: tc.bg, padding: '2px 7px', borderRadius: 999 }}>{tc.label}</span>
             <span style={{ fontSize: 10, fontWeight: 700, color: pc.color, background: pc.bg, padding: '2px 7px', borderRadius: 999 }}>{pc.label}</span>
-            {task.status === 'in_progress' && (
+            {isInProgress && (
               <span style={{ fontSize: 10, fontWeight: 700, color: '#1E40AF', background: '#DBEAFE', padding: '2px 7px', borderRadius: 999 }}>In Progress</span>
             )}
           </div>
@@ -102,7 +153,7 @@ function TaskCard(props) {
         </div>
  
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
-          {task.status === 'open' && (
+          {effectiveStatus === 'open' && (
             <button onClick={markInProgress}
               style={{ padding: '5px 10px', background: '#EFF6FF', color: '#1E40AF', border: '1px solid #BFDBFE', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
               Start
@@ -129,9 +180,9 @@ function TaskCard(props) {
             style={{ width: '100%', padding: '8px 10px', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 12, outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
           />
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button onClick={markComplete}
-              style={{ padding: '6px 16px', background: '#065F46', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-              Mark Complete
+            <button onClick={markComplete} disabled={completing}
+              style={{ padding: '6px 16px', background: completing ? '#9CA3AF' : '#065F46', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: completing ? 'wait' : 'pointer' }}>
+              {completing ? 'Saving...' : 'Mark Complete'}
             </button>
             <button onClick={function() { setShowNotes(false); }}
               style={{ padding: '6px 12px', background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>
@@ -231,11 +282,12 @@ export default function CoordinatorPage(props) {
  
   var [tasks, setTasks] = useState([]);
   var [authRecords, setAuthRecords] = useState([]);
+  var [autoResponses, setAutoResponses] = useState({});
   var [loading, setLoading] = useState(true);
   var [activeTab, setActiveTab] = useState('today');
   var [showModal, setShowModal] = useState(false);
   var [typeFilter, setTypeFilter] = useState('ALL');
- 
+
   function fetchTasks() {
     Promise.all([
       supabase.from('coordinator_tasks')
@@ -248,9 +300,16 @@ export default function CoordinatorPage(props) {
         .select('id, patient_name, insurance, region, auth_status, visits_authorized, visits_used, auth_expiry_date, soc_date')
         .in('region', regions)
         .in('auth_status', ['active', 'pending', 'renewal_needed']),
+      supabase.from('action_responses')
+        .select('*')
+        .like('action_key', 'auto_%'),
     ]).then(function(results) {
       setTasks(results[0].data || []);
       setAuthRecords(results[1].data || []);
+      // Build map of auto task responses keyed by action_key
+      var respMap = {};
+      (results[2].data || []).forEach(function(r) { respMap[r.action_key] = r; });
+      setAutoResponses(respMap);
       setLoading(false);
     });
   }
@@ -324,9 +383,13 @@ export default function CoordinatorPage(props) {
     return generated;
   }, [authRecords]);
  
-  // Merge manual tasks + auto tasks
+  // Merge manual tasks + auto tasks, filtering out completed/dismissed auto tasks
   var allTasks = useMemo(function() {
-    var combined = tasks.concat(autoTasks);
+    var filteredAuto = autoTasks.filter(function(t) {
+      var resp = autoResponses[t.id];
+      return !resp || (resp.status !== 'completed' && resp.status !== 'dismissed');
+    });
+    var combined = tasks.concat(filteredAuto);
     if (typeFilter !== 'ALL') combined = combined.filter(function(t) { return t.task_type === typeFilter; });
     combined.sort(function(a, b) {
       var pa = PRIORITY_ORDER[a.priority] ?? 9;
@@ -334,7 +397,7 @@ export default function CoordinatorPage(props) {
       return pa - pb;
     });
     return combined;
-  }, [tasks, autoTasks, typeFilter]);
+  }, [tasks, autoTasks, typeFilter, autoResponses]);
  
   var todayTasks = allTasks.filter(function(t) {
     return t.priority === 'critical' || t.priority === 'high' || t.task_type === 'auth_expired';
@@ -458,7 +521,7 @@ export default function CoordinatorPage(props) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {displayTasks.map(function(task) {
               return (
-                <TaskCard key={task.id} task={task} onRefresh={fetchTasks} />
+                <TaskCard key={task.id} task={task} onRefresh={fetchTasks} autoResponses={autoResponses} coordName={coordName} />
               );
             })}
           </div>
