@@ -254,6 +254,7 @@ export default function IntakeDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [denialReasonFilter, setDenialReasonFilter] = useState('ALL');
   const [regionFilter, setRegionFilter] = useState('ALL');
   const [insuranceFilter, setInsuranceFilter] = useState('ALL');
   const [monthFilter, setMonthFilter] = useState('ALL');
@@ -424,13 +425,50 @@ export default function IntakeDashboardPage() {
     const thisMonthContinuation = thisMonthRecs.filter(r => r.referral_type === 'Continuation' || r.referral_type === 'Existing Patient');
     const thisMonthResumption = thisMonthRecs.filter(r => r.referral_type === 'Resumption of Care' || r.referral_type === 'Resumption Referral' || r.referral_type === 'Re-Referral');
 
-    return { total, accepted, denied, acceptRate, months, byRegion, byInsurance, byDiagnosis, denialReasons, typeMap, chartStatuses, thisMonthRecs, newPatients, continuationPatients, resumptionPatients, unclassified, thisMonthNew, thisMonthContinuation, thisMonthResumption };
+    // Out of Area (OOA) stats — for expansion planning
+    const ooa = records.filter(r =>
+      r.region === 'OOA' ||
+      (r.denial_reason || '').toLowerCase().includes('out of area')
+    );
+    const ooaByZip = {};
+    const ooaByCounty = {};
+    const ooaByCity = {};
+    ooa.forEach(r => {
+      if (r.zip_code) ooaByZip[r.zip_code] = (ooaByZip[r.zip_code] || 0) + 1;
+      if (r.county) ooaByCounty[r.county] = (ooaByCounty[r.county] || 0) + 1;
+      if (r.city) ooaByCity[r.city] = (ooaByCity[r.city] || 0) + 1;
+    });
+    const ooaTopZips = Object.entries(ooaByZip).sort((a, b) => b[1] - a[1]).slice(0, 15);
+    const ooaTopCounties = Object.entries(ooaByCounty).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const ooaTopCities = Object.entries(ooaByCity).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    // OOA monthly trend
+    const ooaMonthMap = {};
+    ooa.forEach(r => {
+      const k = monthKey(r.date_received);
+      if (!k) return;
+      ooaMonthMap[k] = (ooaMonthMap[k] || 0) + 1;
+    });
+    const ooaMonths = Object.keys(ooaMonthMap).sort().map(k => ({ key: k, label: fmtMonth(k), count: ooaMonthMap[k] }));
+    // OOA by insurance
+    const ooaInsByIns = {};
+    ooa.forEach(r => {
+      const k = r.insurance || 'Unknown';
+      ooaInsByIns[k] = (ooaInsByIns[k] || 0) + 1;
+    });
+    const ooaTopInsurance = Object.entries(ooaInsByIns).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+    return { total, accepted, denied, acceptRate, months, byRegion, byInsurance, byDiagnosis, denialReasons, typeMap, chartStatuses, thisMonthRecs, newPatients, continuationPatients, resumptionPatients, unclassified, thisMonthNew, thisMonthContinuation, thisMonthResumption, ooa, ooaTopZips, ooaTopCounties, ooaTopCities, ooaMonths, ooaTopInsurance };
   }, [records]);
 
   // ── filtered table ──────────────────────────────────────────────────
   const filtered = useMemo(() => {
     let list = records;
-    if (statusFilter !== 'ALL') list = list.filter(r => r.referral_status === statusFilter);
+    if (statusFilter === 'OOA') {
+      list = list.filter(r => r.region === 'OOA' || (r.denial_reason || '').toLowerCase().includes('out of area'));
+    } else if (statusFilter !== 'ALL') {
+      list = list.filter(r => r.referral_status === statusFilter);
+    }
+    if (denialReasonFilter !== 'ALL') list = list.filter(r => (r.denial_reason || '').includes(denialReasonFilter));
     if (regionFilter !== 'ALL') list = list.filter(r => r.region === regionFilter);
     if (insuranceFilter !== 'ALL') list = list.filter(r => r.insurance === insuranceFilter);
     if (typeFilter !== 'ALL') list = list.filter(r => r.referral_type === typeFilter);
@@ -461,7 +499,7 @@ export default function IntakeDashboardPage() {
       return 0;
     });
     return list;
-  }, [records, statusFilter, regionFilter, insuranceFilter, typeFilter, monthFilter, search, sortField]);
+  }, [records, statusFilter, denialReasonFilter, regionFilter, insuranceFilter, typeFilter, monthFilter, search, sortField]);
 
   const uniqueRegions = [...new Set(records.map(r => r.region).filter(Boolean))].sort();
   const uniqueInsurances = [...new Set(records.map(r => r.insurance).filter(Boolean))].sort();
@@ -532,6 +570,7 @@ export default function IntakeDashboardPage() {
     { key: 'diagnoses', label: 'Diagnoses' },
     { key: 'denials',   label: 'Denial Analysis' },
     { key: 'audit',     label: '🔍 Denial Audit' },
+    { key: 'ooa',       label: '📍 Out of Area' },
     { key: 'payor',     label: '⚡ Payor Opportunity' },
     { key: 'patients',  label: 'Patient Table' },
   ];
@@ -585,6 +624,7 @@ export default function IntakeDashboardPage() {
             { label: '🔄 Continuation / Resumption', val: (stats.continuationPatients.length + stats.resumptionPatients.length).toLocaleString(), color: '#065F46', sub: stats.continuationPatients.length + ' continuation · ' + stats.resumptionPatients.length + ' resumption', bg: '#ECFDF5', action: () => { setTypeFilter('Continuation'); setStatusFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
             { label: 'Accepted',           val: stats.accepted.toLocaleString(),           color: 'var(--green)', sub: stats.acceptRate + '% accept rate', action: () => { setStatusFilter('Accepted'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
             { label: 'Denied',             val: stats.denied.toLocaleString(),             color: '#DC2626',      sub: (100 - stats.acceptRate) + '% deny rate', alert: true, action: () => { setStatusFilter('Denied'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
+            { label: 'Out of Area',        val: stats.ooa.length.toLocaleString(),         color: '#B45309',      sub: stats.ooaTopZips.length + ' zip codes · expansion pipeline', bg: '#FFFBEB', action: () => { setStatusFilter('OOA'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
             { label: 'This Month',         val: stats.thisMonthRecs.length,                color: '#7C3AED',      sub: stats.thisMonthNew.length + ' new · ' + stats.thisMonthContinuation.length + ' cont · ' + stats.thisMonthResumption.length + ' resumption', action: () => { setMonthFilter(new Date().toISOString().slice(0,7)); setStatusFilter('ALL'); setTypeFilter('ALL'); setSearch(''); setActiveTab('patients'); } },
           ].map(tile => (
             <div key={tile.label} onClick={tile.action}
@@ -863,7 +903,8 @@ export default function IntakeDashboardPage() {
                   { label: 'Non-lymphedema (in-network)', count: records.filter(r => r.denial_reason === 'In network but Non-lymphedema').length, color: '#DC2626' },
                   { label: 'Wrong insurance (non-lymphedema)', count: records.filter(r => r.denial_reason === 'Non-lymphedema and we don\'t accept patient insurance').length, color: '#F59E0B' },
                   { label: 'Lymphedema but wrong insurance', count: records.filter(r => r.denial_reason === 'Lymphedema but we don\'t accept patient insurance').length, color: '#7C3AED' },
-                  { label: 'Other reasons', count: records.filter(r => r.referral_status === 'Denied' && r.denial_reason && !['In network but Non-lymphedema','Non-lymphedema and we don\'t accept patient insurance','Lymphedema but we don\'t accept patient insurance'].includes(r.denial_reason)).length, color: '#6B7280' },
+                  { label: 'Out of Area (expansion pipeline)', count: stats.ooa.length, color: '#B45309' },
+                  { label: 'Other reasons', count: records.filter(r => r.referral_status === 'Denied' && r.denial_reason && !['In network but Non-lymphedema','Non-lymphedema and we don\'t accept patient insurance','Lymphedema but we don\'t accept patient insurance'].includes(r.denial_reason) && !(r.denial_reason || '').toLowerCase().includes('out of area')).length, color: '#6B7280' },
                 ].map(item => (
                   <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ fontSize: 12, color: 'var(--black)' }}>{item.label}</div>
@@ -1144,6 +1185,143 @@ export default function IntakeDashboardPage() {
             );
           })()}
 
+          {/* OUT OF AREA / EXPANSION PLANNING TAB */}
+          {activeTab === 'ooa' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              {/* Header banner */}
+              <div style={{ background: 'linear-gradient(135deg, #78350F 0%, #B45309 100%)', borderRadius: 12, padding: 24, color: '#fff' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7, marginBottom: 6 }}>Out of Area — Expansion Pipeline</div>
+                <div style={{ fontSize: 26, fontWeight: 700, fontFamily: 'DM Mono, monospace', marginBottom: 8 }}>{stats.ooa.length} Referrals Outside Service Area</div>
+                <div style={{ fontSize: 13, opacity: 0.85, maxWidth: 700, lineHeight: 1.6 }}>
+                  These are patients who needed our services but were outside the areas we cover. Each one represents demand for AxiomHealth in new geographies. Use this data to prioritize expansion areas by volume and insurance type.
+                </div>
+                <div style={{ display: 'flex', gap: 20, marginTop: 16 }}>
+                  {[
+                    { label: 'Unique Zip Codes', val: stats.ooaTopZips.length, note: 'requesting service', bg: 'rgba(180,83,9,0.3)' },
+                    { label: 'Unique Counties', val: stats.ooaTopCounties.length, note: 'with demand', bg: 'rgba(180,83,9,0.3)' },
+                    { label: 'Est. Lost Revenue', val: '$' + (stats.ooa.length * 230 * 12).toLocaleString(), note: '@$230/visit × 12 avg visits', bg: 'rgba(255,255,255,0.12)' },
+                  ].map(t => (
+                    <div key={t.label} style={{ background: t.bg, borderRadius: 10, padding: '12px 16px', minWidth: 140 }}>
+                      <div style={{ fontSize: 9, opacity: 0.7, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.label}</div>
+                      <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'DM Mono, monospace', marginTop: 4 }}>{t.val}</div>
+                      <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>{t.note}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                {/* Top Zip Codes */}
+                <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Demand by Zip Code</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Top zip codes requesting service — prioritize expansion here</div>
+                  {stats.ooaTopZips.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--gray)', padding: 20, textAlign: 'center' }}>No zip code data captured yet. Ensure intake team records zip/city/county for OOA referrals.</div>
+                  ) : stats.ooaTopZips.map(([zip, count]) => (
+                    <HBar key={zip} label={zip} value={count}
+                      max={stats.ooaTopZips[0]?.[1] || 1} color='#B45309'
+                      subLabel={count === 1 ? '1 referral' : count + ' referrals'} />
+                  ))}
+                </div>
+
+                {/* Top Counties */}
+                <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Demand by County</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Counties with highest OOA volume — staffing expansion targets</div>
+                  {stats.ooaTopCounties.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--gray)', padding: 20, textAlign: 'center' }}>No county data captured yet.</div>
+                  ) : stats.ooaTopCounties.map(([county, count]) => (
+                    <HBar key={county} label={county} value={count}
+                      max={stats.ooaTopCounties[0]?.[1] || 1} color='#92400E'
+                      subLabel={count === 1 ? '1 referral' : count + ' referrals'} />
+                  ))}
+                </div>
+
+                {/* Top Cities */}
+                <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>Demand by City</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Cities generating the most OOA referrals</div>
+                  {stats.ooaTopCities.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--gray)', padding: 20, textAlign: 'center' }}>No city data captured yet.</div>
+                  ) : stats.ooaTopCities.map(([city, count]) => (
+                    <HBar key={city} label={city} value={count}
+                      max={stats.ooaTopCities[0]?.[1] || 1} color='#D97706'
+                      subLabel={count === 1 ? '1 referral' : count + ' referrals'} />
+                  ))}
+                </div>
+
+                {/* OOA by Insurance */}
+                <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>OOA by Insurance</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Insurance carriers on OOA referrals — already credentialed payors = easier expansion</div>
+                  {stats.ooaTopInsurance.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--gray)', padding: 20, textAlign: 'center' }}>No insurance data on OOA referrals.</div>
+                  ) : stats.ooaTopInsurance.map(([ins, count]) => (
+                    <HBar key={ins} label={ins} value={count}
+                      max={stats.ooaTopInsurance[0]?.[1] || 1} color='#1565C0'
+                      subLabel={count === 1 ? '1 referral' : count + ' referrals'} />
+                  ))}
+                </div>
+              </div>
+
+              {/* OOA Monthly Trend */}
+              {stats.ooaMonths.length > 0 && (
+                <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)', marginBottom: 4 }}>OOA Referral Trend</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray)', marginBottom: 16 }}>Monthly volume of out-of-area referrals — rising trend signals growing demand</div>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 100 }}>
+                    {stats.ooaMonths.map(m => {
+                      const maxOoa = Math.max(...stats.ooaMonths.map(x => x.count));
+                      const h = maxOoa > 0 ? (m.count / maxOoa) * 90 : 0;
+                      return (
+                        <div key={m.key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'center', height: 90 }}>
+                            <div style={{ width: '60%', maxWidth: 18, height: h, background: '#B45309', borderRadius: '3px 3px 0 0', alignSelf: 'flex-end', minHeight: m.count > 0 ? 2 : 0 }} />
+                          </div>
+                          <div style={{ fontSize: 9, color: 'var(--gray)', textAlign: 'center' }}>{m.label}</div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: '#B45309', textAlign: 'center', fontFamily: 'DM Mono, monospace' }}>{m.count}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* OOA Patient List */}
+              <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--black)' }}>All Out of Area Referrals</div>
+                    <div style={{ fontSize: 11, color: 'var(--gray)' }}>{stats.ooa.length} referrals — historical record for future expansion planning</div>
+                  </div>
+                  <button onClick={() => { setStatusFilter('OOA'); setActiveTab('patients'); }}
+                    style={{ padding: '6px 14px', background: '#B45309', color: '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    View in Patient Table
+                  </button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.6fr 0.8fr 1fr 1.2fr 1fr', padding: '8px 20px', background: 'var(--bg)', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <span>Patient</span><span>Date</span><span>Region</span><span>Insurance</span><span>Location</span><span>Denial Reason</span>
+                </div>
+                {stats.ooa.slice(0, 50).map((r, i) => (
+                  <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.6fr 0.8fr 1fr 1.2fr 1fr', padding: '10px 20px', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)', alignItems: 'center', cursor: 'pointer' }}
+                    onClick={() => openPatientProfile(r)}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#1565C0' }}>{r.patient_name || '—'}</span>
+                    <span style={{ fontSize: 11, color: 'var(--gray)', fontFamily: 'DM Mono, monospace' }}>{(r.date_received || '').slice(0, 10)}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: r.region === 'OOA' ? '#B45309' : 'var(--gray)' }}>{r.region || '—'}</span>
+                    <span style={{ fontSize: 11, color: 'var(--black)' }}>{r.insurance || '—'}</span>
+                    <span style={{ fontSize: 11, color: 'var(--black)' }}>{r.city || r.zip_code || r.county || r.location || '—'}</span>
+                    <span style={{ fontSize: 10, color: '#B45309', fontWeight: 500 }}>{(r.denial_reason || '—').slice(0, 40)}</span>
+                  </div>
+                ))}
+                {stats.ooa.length > 50 && (
+                  <div style={{ padding: '12px 20px', textAlign: 'center', fontSize: 12, color: 'var(--gray)' }}>
+                    Showing 50 of {stats.ooa.length} — click "View in Patient Table" for full list with filters
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* PAYOR OPPORTUNITY TAB */}
           {activeTab === 'payor' && (() => {
             // Lymphedema OON = confirmed lymphedema diagnosis, denied only due to OON insurance
@@ -1332,6 +1510,16 @@ export default function IntakeDashboardPage() {
                   <option value="ALL">All Statuses</option>
                   <option value="Accepted">Accepted</option>
                   <option value="Denied">Denied</option>
+                  <option value="OOA">Out of Area</option>
+                </select>
+                <select value={denialReasonFilter} onChange={e => setDenialReasonFilter(e.target.value)} style={SEL}>
+                  <option value="ALL">All Denial Reasons</option>
+                  <option value="Out of Area">Out of Area</option>
+                  <option value="In network but Non-lymphedema">Non-lymphedema (in-network)</option>
+                  <option value="Lymphedema but we don't accept">Lymphedema wrong insurance</option>
+                  <option value="Non-lymphedema and we don't accept">Non-lymph wrong insurance</option>
+                  <option value="Out of Network">Out of Network</option>
+                  <option value="Area is closed">Area closed</option>
                 </select>
                 <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)} style={SEL}>
                   <option value="ALL">All Regions</option>

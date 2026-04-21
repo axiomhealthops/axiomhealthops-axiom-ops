@@ -3,11 +3,22 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import AIDocExtractor from './AIDocExtractor';
 
-const REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
+const REGIONS = ['A','B','C','G','H','I','J','M','N','T','V','OOA'];
 const INSURANCES = ['Humana','CarePlus','FHCP','Devoted','Health First','Aetna','Medicare','Simply','Cigna','United Healthcare','Other'];
-const REFERRAL_TYPES = ['New Referral','Continuation','Resumption of Care'];
+const REFERRAL_TYPES = ['New Referral','Continuation','Resumption of Care','Non Admit'];
 const STATUSES = ['Pending','Accepted','Denied','On Hold'];
-const CHART_STATUSES = ['Chart Pending','Chart Received','Chart Incomplete','Ready for Auth'];
+const CHART_STATUSES = ['Chart Pending','Chart Received','Chart Incomplete','Ready for Auth','Denied Referral'];
+const DENIAL_REASONS = [
+  'Out of Area',
+  'In network but Non-lymphedema',
+  'Non-lymphedema and we don\'t accept patient insurance',
+  'Lymphedema but we don\'t accept patient insurance',
+  'Out of Network',
+  'Area is closed already due to no staff available',
+  'Hospice Care',
+  'Denied in portal',
+  'Other',
+];
 
 // Module-scope field helpers. Previously defined inside the component body,
 // which caused React to unmount/remount every <input>/<select> on each keystroke
@@ -268,9 +279,21 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
                   style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:80, background:'var(--card-bg)' }} />
               </F>
               <F label="Denial Reason (if applicable)">
-                <textarea value={form.denial_reason} onChange={e => set('denial_reason', e.target.value)}
-                  placeholder="Leave blank if not denied"
-                  style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:60, background:'var(--card-bg)' }} />
+                <select value={form.denial_reason || ''} onChange={e => set('denial_reason', e.target.value)}
+                  style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }}>
+                  <option value="">— Not Denied —</option>
+                  {DENIAL_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                {form.denial_reason === 'Out of Area' && (
+                  <div style={{ marginTop:8, padding:10, background:'#FEF3C7', borderRadius:8, fontSize:11, color:'#92400E', border:'1px solid #FCD34D' }}>
+                    <strong>Out of Area:</strong> This referral will be saved for future expansion planning. Make sure the zip code, city, and county are captured in Step 1 so we can map demand by geography.
+                  </div>
+                )}
+                {form.denial_reason === 'Other' && (
+                  <textarea value={form.denial_reason_other || ''} onChange={e => set('denial_reason_other', e.target.value)}
+                    placeholder="Describe the denial reason…"
+                    style={{ width:'100%', marginTop:8, padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:50, background:'var(--card-bg)' }} />
+                )}
               </F>
               <F label="Internal Notes">
                 <textarea value={form.notes} onChange={e => set('notes', e.target.value)}
