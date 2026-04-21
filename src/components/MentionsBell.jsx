@@ -56,11 +56,12 @@ export default function MentionsBell() {
       .then(fetchNotifs);
   }
 
-  function displayNoteText(t) {
+  function cleanNoteText(t) {
     if (!t) return '';
-    const cleaned = t.replace(/@\[([^\]]+)\]\([^)]+\)/g, '@$1');
-    return cleaned.length > 120 ? cleaned.slice(0, 120) + '...' : cleaned;
+    return t.replace(/@\[([^\]]+)\]\([^)]+\)/g, '@$1');
   }
+
+  const [expandedId, setExpandedId] = useState(null);
 
   function timeAgo(d) {
     const now = new Date();
@@ -131,9 +132,13 @@ export default function MentionsBell() {
               </div>
             ) : notifs.map(n => {
               const note = n.note;
+              const fullText = cleanNoteText(note?.note_text);
+              const isLong = fullText.length > 120;
+              const isExpanded = expandedId === n.id;
+              const displayText = isLong && !isExpanded ? fullText.slice(0, 120) + '...' : fullText;
               return (
                 <div key={n.id}
-                  onClick={() => { if (!n.read) markRead(n.id); }}
+                  onClick={() => { if (!n.read) markRead(n.id); if (isLong) setExpandedId(isExpanded ? null : n.id); }}
                   style={{
                     padding: '12px 16px', borderBottom: '1px solid var(--border)', cursor: 'pointer',
                     background: n.read ? 'transparent' : '#EFF6FF', borderLeft: n.read ? 'none' : '3px solid #1565C0',
@@ -148,9 +153,15 @@ export default function MentionsBell() {
                       <div style={{ fontSize: 11, color: '#1565C0', fontWeight: 600, marginBottom: 4 }}>
                         Re: {n.patient_name}
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--gray)', lineHeight: 1.4 }}>
-                        {displayNoteText(note?.note_text)}
+                      <div style={{ fontSize: 11, color: 'var(--gray)', lineHeight: 1.4, whiteSpace: isExpanded ? 'pre-wrap' : undefined }}>
+                        {displayText}
                       </div>
+                      {isLong && (
+                        <div style={{ fontSize: 10, color: '#1565C0', fontWeight: 600, marginTop: 3, cursor: 'pointer' }}
+                          onClick={(e) => { e.stopPropagation(); setExpandedId(isExpanded ? null : n.id); if (!n.read) markRead(n.id); }}>
+                          {isExpanded ? 'Show less' : 'Read full comment'}
+                        </div>
+                      )}
                       <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 4 }}>
                         {timeAgo(n.created_at)}
                       </div>
