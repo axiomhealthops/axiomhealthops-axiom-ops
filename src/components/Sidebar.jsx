@@ -18,7 +18,7 @@ const ALL_SECTIONS = [
 ];
 
 const PAGE_ICONS = {
-  overview: '◈', alerts: '⚡', actions: '✓',
+  overview: '◈', alerts: '⚡', actions: '💰',
   intake: '📥',
   census: '👥', visits: '📅', 'on-hold': '⏸',
   auth: '🔐',
