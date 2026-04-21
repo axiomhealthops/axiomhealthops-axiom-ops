@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const BLENDED_RATE = 185;
@@ -393,17 +393,18 @@ export default function ClinicianAccountabilityPage() {
   const [activeTab, setActiveTab] = useState('clinicians');
 
   const load = useCallback(async () => {
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
     const [cl, v, c] = await Promise.all([
-      supabase.from('clinicians').select('*').eq('is_active', true),
-      supabase.from('visit_schedule_data')
+      fetchAllPages(supabase.from('clinicians').select('*').eq('is_active', true)),
+      fetchAllPages(supabase.from('visit_schedule_data')
         .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region')
-        .gte('visit_date', new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10)),
-      supabase.from('census_data')
-        .select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,last_visit_type,inferred_frequency,overdue_threshold_days,days_overdue'),
+        .gte('visit_date', fourteenDaysAgo)),
+      fetchAllPages(supabase.from('census_data')
+        .select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,last_visit_type,inferred_frequency,overdue_threshold_days,days_overdue')),
     ]);
-    setClinicians(cl.data || []);
-    setVisits(v.data || []);
-    setCensus(c.data || []);
+    setClinicians(cl);
+    setVisits(v);
+    setCensus(c);
     setLoading(false);
   }, []);
 
