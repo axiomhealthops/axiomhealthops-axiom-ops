@@ -311,7 +311,7 @@ export default function IntakeDashboardPage() {
   }
 
   useEffect(() => { fetchRecords(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
-  useRealtimeTable(['intake_referrals', 'auth_tracker', 'visit_schedule_data', 'data_freshness'], load);
+  useRealtimeTable(['intake_referrals', 'auth_tracker', 'visit_schedule_data', 'data_freshness'], fetchRecords);
 
   // ── open patient profile ───────────────────────────────────────────
   async function openPatientProfile(record) {
