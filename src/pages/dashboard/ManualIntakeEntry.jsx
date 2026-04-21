@@ -59,7 +59,7 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
     date_received: today, referral_status: 'Pending', referral_type: 'New Referral', region: '',
     patient_name: '', dob: '', contact_number: '', phone: '', location: '', city: '', zip_code: '', county: '',
     insurance: '', policy_number: '', medicare_type: '', secondary_insurance: '', secondary_id: '',
-    diagnosis: '', denial_reason: '', referral_source: '', referral_source_phone: '', referral_source_fax: '',
+    diagnosis: '', denial_reason: '', denial_reason_other: '', referral_source: '', referral_source_phone: '', referral_source_fax: '',
     pcp_name: '', pcp_phone: '', pcp_fax: '', chart_status: 'Chart Pending',
     census_status: '', welcome_call: '', first_appt: '', notes: '',
   });
@@ -128,9 +128,15 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
       referral_document_name = fileToUpload.name;
     }
 
+    // Merge "Other" denial text into denial_reason and strip the extra field
+    const { denial_reason_other, ...formClean } = form;
+    if (formClean.denial_reason === 'Other' && denial_reason_other) {
+      formClean.denial_reason = 'Other: ' + denial_reason_other;
+    }
+
     const payload = {
-      ...form,
-      diagnosis_clean: form.diagnosis?.split('(')[0]?.trim(),
+      ...formClean,
+      diagnosis_clean: formClean.diagnosis?.split('(')[0]?.trim(),
       referral_document_path,
       referral_document_name,
     };
