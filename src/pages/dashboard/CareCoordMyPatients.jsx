@@ -486,11 +486,19 @@ export default function CareCoordMyPatients() {
                         onChange={async e => {
                           const val = e.target.value || null;
                           const pName = p.patient_name;
-                          const { data: existing } = await supabase.from('patient_clinical_settings').select('id').eq('patient_name', pName).limit(1);
-                          if (existing && existing.length > 0) {
-                            await supabase.from('patient_clinical_settings').update({ visit_frequency: val, updated_at: new Date().toISOString() }).eq('id', existing[0].id);
-                          } else {
-                            await supabase.from('patient_clinical_settings').insert({ patient_name: pName, region: p.region, visit_frequency: val });
+                          try {
+                            const { data: existing, error: selErr } = await supabase.from('patient_clinical_settings').select('id').eq('patient_name', pName).limit(1);
+                            if (selErr) throw selErr;
+                            if (existing && existing.length > 0) {
+                              const { error: upErr } = await supabase.from('patient_clinical_settings').update({ visit_frequency: val, updated_at: new Date().toISOString() }).eq('id', existing[0].id);
+                              if (upErr) throw upErr;
+                            } else {
+                              const { error: insErr } = await supabase.from('patient_clinical_settings').insert({ patient_name: pName, region: p.region, visit_frequency: val });
+                              if (insErr) throw insErr;
+                            }
+                          } catch (err) {
+                            console.error('Frequency save failed:', err);
+                            alert('Failed to save frequency: ' + (err.message || err));
                           }
                           load();
                         }}
