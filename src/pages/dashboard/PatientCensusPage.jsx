@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import StatusChangeModal from '../../components/StatusChangeModal';
 import { supabase } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
@@ -638,6 +639,7 @@ export default function PatientCensusPage({ intent } = {}) {
   const [statusFilter, setStatusFilter] = useState(() => intent?.status || 'ALL');
   const [lastSeenFilter, setLastSeenFilter] = useState(() => intent?.lastSeen || 'ALL');
   const [selected, setSelected] = useState(null);
+  const [statusPatient, setStatusPatient] = useState(null);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
 
@@ -798,8 +800,8 @@ export default function PatientCensusPage({ intent } = {}) {
 
         {/* Table */}
         <div style={{ flex:1, overflow:'auto' }}>
-          <div style={{ display:'grid', gridTemplateColumns:'1.6fr 0.5fr 1fr 0.7fr 0.7fr 0.5fr 0.5fr 0.5fr 0.8fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', zIndex:1 }}>
-            <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Frequency</span><span>Last Seen</span><span>Done</span><span>Canc</span><span>Miss</span><span>Auth Left</span>
+          <div style={{ display:'grid', gridTemplateColumns:'1.6fr 0.5fr 0.8fr 0.9fr 0.7fr 0.7fr 0.5fr 0.5fr 0.5fr 0.8fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', zIndex:1 }}>
+            <span>Patient</span><span>Rgn</span><span>Status</span><span>Insurance</span><span>Frequency</span><span>Last Seen</span><span>Done</span><span>Canc</span><span>Miss</span><span>Auth Left</span>
           </div>
           {paged.map((patient, i) => {
             const k = (patient.patient_name||'').toLowerCase().trim();
@@ -808,7 +810,7 @@ export default function PatientCensusPage({ intent } = {}) {
             const remaining = auth ? (auth.visits_authorized||24)-(auth.visits_used||0) : null;
             return (
               <div key={patient.id||i} onClick={() => setSelected(patient)}
-                style={{ display:'grid', gridTemplateColumns:'1.6fr 0.5fr 1fr 0.7fr 0.7fr 0.5fr 0.5fr 0.5fr 0.8fr', padding:'10px 20px', borderBottom:'1px solid var(--border)', background: patient.last_visit_date && (new Date() - new Date(patient.last_visit_date+'T00:00:00'))/86400000 > 14 && patient.status?.toLowerCase().includes('active') ? '#FFF8F0' : i%2===0?'var(--card-bg)':'var(--bg)', cursor:'pointer', alignItems:'center' }}
+                style={{ display:'grid', gridTemplateColumns:'1.6fr 0.5fr 0.8fr 0.9fr 0.7fr 0.7fr 0.5fr 0.5fr 0.5fr 0.8fr', padding:'10px 20px', borderBottom:'1px solid var(--border)', background: patient.last_visit_date && (new Date() - new Date(patient.last_visit_date+'T00:00:00'))/86400000 > 14 && patient.status?.toLowerCase().includes('active') ? '#FFF8F0' : i%2===0?'var(--card-bg)':'var(--bg)', cursor:'pointer', alignItems:'center' }}
                 onMouseEnter={e => e.currentTarget.style.background='#F0F7FF'}
                 onMouseLeave={e => e.currentTarget.style.background=i%2===0?'var(--card-bg)':'var(--bg)'}>
                 <div>
@@ -816,6 +818,11 @@ export default function PatientCensusPage({ intent } = {}) {
                   <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>{patient.discipline||''}</div>
                 </div>
                 <span style={{ fontSize:13, fontWeight:700, color:'var(--gray)' }}>{patient.region||'—'}</span>
+                <button onClick={e => { e.stopPropagation(); setStatusPatient(patient); }}
+                  title="Click to change status"
+                  style={{ fontSize:10, background:'#F3F4F6', border:'1px solid var(--border)', borderRadius:5, padding:'2px 6px', cursor:'pointer', textAlign:'left', color:'var(--black)', fontWeight:500, justifySelf:'start' }}>
+                  {(patient.status||'—').slice(0,16)} ✎
+                </button>
                 <span style={{ fontSize:12 }}>{patient.insurance||'—'}</span>
                 <span style={{ fontSize:11, color: auth?.frequency ? 'var(--black)' : '#9CA3AF', fontWeight: auth?.frequency ? 600 : 400 }}>{auth?.frequency || '—'}</span>
                 <div>
@@ -850,6 +857,16 @@ export default function PatientCensusPage({ intent } = {}) {
           </div>
         )}
       </div>
+
+      {statusPatient && (
+        <StatusChangeModal patient={statusPatient}
+          onClose={() => setStatusPatient(null)}
+          onSaved={async () => {
+            setStatusPatient(null);
+            const { data } = await supabase.from('census_data').select('*');
+            if (data) setCensus(data);
+          }} />
+      )}
 
       {selected && (
         <PatientProfile

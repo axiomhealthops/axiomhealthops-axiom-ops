@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import StatusChangeModal from '../../components/StatusChangeModal';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -132,6 +133,7 @@ export default function CareCoordMyPatients() {
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
   const [notePatient, setNotePatient] = useState(null);
+  const [statusPatient, setStatusPatient] = useState(null);
 
   // Determine regions to show
   const myRegions = useMemo(() => {
@@ -480,7 +482,11 @@ export default function CareCoordMyPatients() {
                         {p.reassessUnscheduled && p.daysToReassess !== null && p.daysToReassess <= 14 && <div style={{ fontSize:9, color:'#DC2626', fontWeight:700 }}>🚨 Reassessment due {fmtDate(p.cs?.next_reassessment_deadline)}</div>}
                       </div>
                       <span style={{ fontSize:11, fontWeight:700, color:'var(--gray)' }}>{p.region}</span>
-                      <span style={{ fontSize:10 }}>{p.status?.slice(0,14)}</span>
+                      <button onClick={e => { e.stopPropagation(); setStatusPatient(p); }}
+                        title="Click to change status"
+                        style={{ fontSize:10, background:'#F3F4F6', border:'1px solid var(--border)', borderRadius:5, padding:'2px 6px', cursor:'pointer', textAlign:'left', color:'var(--black)', fontWeight:500 }}>
+                        {p.status?.slice(0,14)} ✎
+                      </button>
                       <span style={{ fontSize:10, color:'var(--gray)' }}>{p.insurance}</span>
                       <select value={p.visit_frequency||''} onClick={e => e.stopPropagation()}
                         onChange={async e => {
@@ -534,6 +540,12 @@ export default function CareCoordMyPatients() {
         <NoteModal patient={notePatient} coordId={profile?.id}
           onClose={() => setNotePatient(null)}
           onSaved={() => { setNotePatient(null); load(); }} />
+      )}
+
+      {statusPatient && (
+        <StatusChangeModal patient={statusPatient} coordinatorId={profile?.id} coordinatorName={profile?.full_name}
+          onClose={() => setStatusPatient(null)}
+          onSaved={() => { setStatusPatient(null); load(); }} />
       )}
     </div>
   );

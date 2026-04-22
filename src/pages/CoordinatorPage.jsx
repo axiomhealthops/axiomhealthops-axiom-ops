@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import StatusChangeModal from '../components/StatusChangeModal';
  
 var COORD_MAP = {
   A: 'Gypsy Renos',
@@ -137,6 +138,12 @@ function TaskCard(props) {
               <span style={{ fontSize: 11, color: '#374151', background: '#F3F4F6', padding: '2px 8px', borderRadius: 6 }}>
                 Patient: {task.patient_name}
               </span>
+            )}
+            {task.patient_name && props.onStatusChange && (
+              <button onClick={function(e) { e.stopPropagation(); props.onStatusChange(task.patient_name, task.coordinator_region || null); }}
+                style={{ fontSize: 10, color: '#1E40AF', background: '#EFF6FF', border: '1px solid #BFDBFE', padding: '2px 8px', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>
+                Change Status ✎
+              </button>
             )}
             {task.frequency && (
               <span style={{ fontSize: 11, color: '#1E40AF', background: '#DBEAFE', padding: '2px 8px', borderRadius: 6, fontWeight: 600 }}>
@@ -292,6 +299,7 @@ export default function CoordinatorPage(props) {
   var [activeTab, setActiveTab] = useState('today');
   var [showModal, setShowModal] = useState(false);
   var [typeFilter, setTypeFilter] = useState('ALL');
+  var [statusPatient, setStatusPatient] = useState(null);
 
   function fetchTasks() {
     Promise.all([
@@ -528,7 +536,9 @@ export default function CoordinatorPage(props) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {displayTasks.map(function(task) {
               return (
-                <TaskCard key={task.id} task={task} onRefresh={fetchTasks} autoResponses={autoResponses} coordName={coordName} />
+                <TaskCard key={task.id} task={task} onRefresh={fetchTasks} autoResponses={autoResponses} coordName={coordName} onStatusChange={function(patName, region) {
+                  setStatusPatient({ patient_name: patName, region: region, id: null, _needsLookup: true });
+                }} />
               );
             })}
           </div>
@@ -546,8 +556,55 @@ export default function CoordinatorPage(props) {
           onSave={function() { setShowModal(false); fetchTasks(); }}
         />
       )}
+
+      {statusPatient && <StatusChangePatientLookup
+        patientInfo={statusPatient}
+        onClose={function() { setStatusPatient(null); }}
+        onSaved={function() { setStatusPatient(null); fetchTasks(); }}
+      />}
     </div>
   );
+}
+
+// Wrapper that looks up census_data record by patient_name before showing the modal
+function StatusChangePatientLookup({ patientInfo, onClose, onSaved }) {
+  var [patient, setPatient] = useState(null);
+  var [error, setError] = useState(null);
+
+  useEffect(function() {
+    supabase.from('census_data')
+      .select('id, patient_name, region, status, insurance')
+      .eq('patient_name', patientInfo.patient_name)
+      .limit(1)
+      .then(function(res) {
+        if (res.data && res.data.length > 0) {
+          setPatient(res.data[0]);
+        } else {
+          setError('Patient "' + patientInfo.patient_name + '" not found in census. Status can only be changed for patients in the census.');
+        }
+      });
+  }, [patientInfo.patient_name]);
+
+  if (error) {
+    return (
+      <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+        <div style={{ background:'white', borderRadius:14, padding:24, maxWidth:400, textAlign:'center' }}>
+          <div style={{ fontSize:14, color:'#DC2626', fontWeight:600, marginBottom:12 }}>{error}</div>
+          <button onClick={onClose} style={{ padding:'7px 18px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:700, cursor:'pointer' }}>Close</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!patient) {
+    return (
+      <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center' }}>
+        <div style={{ background:'white', borderRadius:14, padding:24, color:'#6B7280' }}>Looking up patient...</div>
+      </div>
+    );
+  }
+
+  return <StatusChangeModal patient={patient} onClose={onClose} onSaved={onSaved} />;
 }
  
 function CompletedSection(props) {
