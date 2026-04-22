@@ -5,6 +5,7 @@ import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { supabase } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
+const FREQUENCY_OPTIONS = ['1x/week','2x/week','3x/week','4x/week','5x/week','1x/month','2x/month','PRN','Daily'];
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
 function isEval(e) { return /eval/i.test(e||''); }
 function isRA(e) { return /reassess|re-assess|30.day/i.test(e||''); }
@@ -203,6 +204,16 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
         if (authError) throw authError;
       }
 
+      // Sync visit_frequency to patient_clinical_settings
+      if (editForm.frequency) {
+        const { data: csExist } = await supabase.from('patient_clinical_settings').select('id').eq('patient_name', editForm.patient_name).limit(1);
+        if (csExist && csExist.length > 0) {
+          await supabase.from('patient_clinical_settings').update({ visit_frequency: editForm.frequency, updated_at: new Date().toISOString() }).eq('id', csExist[0].id);
+        } else {
+          await supabase.from('patient_clinical_settings').insert({ patient_name: editForm.patient_name, region: editForm.region, visit_frequency: editForm.frequency });
+        }
+      }
+
       setSaveMsg('✓ Saved successfully');
       setEditing(false);
       onUpdate?.(); // refresh parent
@@ -338,7 +349,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
               <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:10 }}>
                 <EditField label="Therapy Type" name="therapy_type" opts={['Lymphedema','Physical Therapy','Occupational Therapy','Speech Therapy','Cardiac','Other']} value={editForm.therapy_type} onChange={setField} />
                 <EditField label="Request Type" name="request_type" opts={['Initial','Renewal','Concurrent Review','Retrospective']} value={editForm.request_type} onChange={setField} />
-                <EditField label="Frequency" name="frequency" value={editForm.frequency} onChange={setField} />
+                <EditField label="Frequency" name="frequency" opts={FREQUENCY_OPTIONS} value={editForm.frequency} onChange={setField} />
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:10 }}>
                 <div>
@@ -458,6 +469,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
                       ['Visits Remaining', visitsRemaining],
                       ['Auth Start', fmtDate(latestAuth.auth_start_date || latestAuth.soc_date)],
                       ['Auth Expiry', fmtDate(latestAuth.auth_expiry_date)],
+                      ['Frequency', latestAuth.frequency || '—'],
                     ].map(([k,v]) => (
                       <div key={k} style={{ display:'flex', gap:8, marginBottom:6, fontSize:12 }}>
                         <span style={{ color:'var(--gray)', fontWeight:600, minWidth:110, flexShrink:0 }}>{k}:</span>
@@ -786,8 +798,8 @@ export default function PatientCensusPage({ intent } = {}) {
 
         {/* Table */}
         <div style={{ flex:1, overflow:'auto' }}>
-          <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 1.2fr 0.7fr 0.6fr 0.6fr 0.6fr 0.8fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', zIndex:1 }}>
-            <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Last Seen</span><span>Completed</span><span>Cancelled</span><span>Missed</span><span>Auth Remaining</span>
+          <div style={{ display:'grid', gridTemplateColumns:'1.6fr 0.5fr 1fr 0.7fr 0.7fr 0.5fr 0.5fr 0.5fr 0.8fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', zIndex:1 }}>
+            <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Frequency</span><span>Last Seen</span><span>Done</span><span>Canc</span><span>Miss</span><span>Auth Left</span>
           </div>
           {paged.map((patient, i) => {
             const k = (patient.patient_name||'').toLowerCase().trim();
@@ -796,7 +808,7 @@ export default function PatientCensusPage({ intent } = {}) {
             const remaining = auth ? (auth.visits_authorized||24)-(auth.visits_used||0) : null;
             return (
               <div key={patient.id||i} onClick={() => setSelected(patient)}
-                style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 1.2fr 0.7fr 0.6fr 0.6fr 0.6fr 0.8fr', padding:'10px 20px', borderBottom:'1px solid var(--border)', background: patient.last_visit_date && (new Date() - new Date(patient.last_visit_date+'T00:00:00'))/86400000 > 14 && patient.status?.toLowerCase().includes('active') ? '#FFF8F0' : i%2===0?'var(--card-bg)':'var(--bg)', cursor:'pointer', alignItems:'center' }}
+                style={{ display:'grid', gridTemplateColumns:'1.6fr 0.5fr 1fr 0.7fr 0.7fr 0.5fr 0.5fr 0.5fr 0.8fr', padding:'10px 20px', borderBottom:'1px solid var(--border)', background: patient.last_visit_date && (new Date() - new Date(patient.last_visit_date+'T00:00:00'))/86400000 > 14 && patient.status?.toLowerCase().includes('active') ? '#FFF8F0' : i%2===0?'var(--card-bg)':'var(--bg)', cursor:'pointer', alignItems:'center' }}
                 onMouseEnter={e => e.currentTarget.style.background='#F0F7FF'}
                 onMouseLeave={e => e.currentTarget.style.background=i%2===0?'var(--card-bg)':'var(--bg)'}>
                 <div>
@@ -805,6 +817,7 @@ export default function PatientCensusPage({ intent } = {}) {
                 </div>
                 <span style={{ fontSize:13, fontWeight:700, color:'var(--gray)' }}>{patient.region||'—'}</span>
                 <span style={{ fontSize:12 }}>{patient.insurance||'—'}</span>
+                <span style={{ fontSize:11, color: auth?.frequency ? 'var(--black)' : '#9CA3AF', fontWeight: auth?.frequency ? 600 : 400 }}>{auth?.frequency || '—'}</span>
                 <div>
                   {patient.last_visit_date ? (() => {
                     const days = Math.floor((new Date() - new Date(patient.last_visit_date+'T00:00:00')) / 86400000);

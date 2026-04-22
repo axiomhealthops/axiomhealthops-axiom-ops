@@ -138,6 +138,11 @@ function TaskCard(props) {
                 Patient: {task.patient_name}
               </span>
             )}
+            {task.frequency && (
+              <span style={{ fontSize: 11, color: '#1E40AF', background: '#DBEAFE', padding: '2px 8px', borderRadius: 6, fontWeight: 600 }}>
+                {task.frequency}
+              </span>
+            )}
             {task.clinician_name && (
               <span style={{ fontSize: 11, color: '#374151', background: '#F3F4F6', padding: '2px 8px', borderRadius: 6 }}>
                 Clinician: {task.clinician_name}
@@ -297,7 +302,7 @@ export default function CoordinatorPage(props) {
         .order('created_at', { ascending: false })
         .limit(200),
       supabase.from('auth_tracker')
-        .select('id, patient_name, insurance, region, auth_status, visits_authorized, visits_used, auth_expiry_date, soc_date')
+        .select('id, patient_name, insurance, region, auth_status, visits_authorized, visits_used, auth_expiry_date, soc_date, frequency')
         .in('region', regions)
         .in('auth_status', ['active', 'pending', 'renewal_needed']),
       supabase.from('action_responses')
@@ -331,8 +336,9 @@ export default function CoordinatorPage(props) {
           task_type: 'auth_critical',
           priority: 'critical',
           title: 'Auth Critical: ' + r.patient_name,
-          description: remaining + ' visits remaining with ' + r.insurance + '. Renewal needed immediately to avoid gap in care.',
+          description: remaining + ' visits remaining with ' + r.insurance + (r.frequency ? ' (' + r.frequency + ')' : '') + '. Renewal needed immediately to avoid gap in care.',
           patient_name: r.patient_name,
+          frequency: r.frequency || null,
           status: 'open',
           auto_generated: true,
           auth_tracker_id: r.id,
@@ -343,8 +349,9 @@ export default function CoordinatorPage(props) {
           task_type: 'auth_renewal',
           priority: 'high',
           title: 'Auth Renewal: ' + r.patient_name,
-          description: remaining + ' visits remaining with ' + r.insurance + '. Submit renewal auth request.',
+          description: remaining + ' visits remaining with ' + r.insurance + (r.frequency ? ' (' + r.frequency + ')' : '') + '. Submit renewal auth request.',
           patient_name: r.patient_name,
+          frequency: r.frequency || null,
           status: 'open',
           auto_generated: true,
           auth_tracker_id: r.id,

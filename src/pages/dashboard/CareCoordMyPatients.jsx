@@ -5,6 +5,8 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
+const FREQUENCY_OPTIONS = ['1x/week','2x/week','3x/week','4x/week','5x/week','1x/month','2x/month','PRN','Daily'];
+
 function fmtDate(d) {
   if (!d) return '—';
   return new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
@@ -184,7 +186,7 @@ export default function CareCoordMyPatients() {
       const followUpDue = lastNote?.follow_up_date ? new Date(lastNote.follow_up_date+'T00:00:00') <= new Date() : false;
       const reassessDeadline = cs?.next_reassessment_deadline;
       const daysToReassess = daysUntil(reassessDeadline);
-      return { ...p, lastNote, daysSinceContact, followUpDue, cs, daysToReassess, reassessUnscheduled: cs?.alert_reassessment_unscheduled };
+      return { ...p, lastNote, daysSinceContact, followUpDue, cs, daysToReassess, reassessUnscheduled: cs?.alert_reassessment_unscheduled, visit_frequency: cs?.visit_frequency || null };
     });
   }, [census, notes, clinSettings]);
 
@@ -460,8 +462,8 @@ export default function CareCoordMyPatients() {
 
               {/* Patient Table */}
               <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-                <div style={{ display:'grid', gridTemplateColumns:'1.6fr 0.4fr 0.7fr 0.7fr 0.9fr 1fr 0.9fr', padding:'7px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
-                  <span>Patient</span><span>Rgn</span><span>Status</span><span>Insurance</span><span>Last Seen</span><span>Last Contact</span><span>Action</span>
+                <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.4fr 0.6fr 0.6fr 0.8fr 0.8fr 0.9fr 0.9fr', padding:'7px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
+                  <span>Patient</span><span>Rgn</span><span>Status</span><span>Insurance</span><span>Frequency</span><span>Last Seen</span><span>Last Contact</span><span>Action</span>
                 </div>
                 {filtered.length === 0 ? (
                   <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
@@ -471,7 +473,7 @@ export default function CareCoordMyPatients() {
                   const rowBg = p.followUpDue ? '#FFFBEB' : (p.daysSinceContact===null||p.daysSinceContact>21) ? '#FFF5F5' : i%2===0?'var(--card-bg)':'var(--bg)';
                   const contactColor = p.daysSinceContact===null ? '#DC2626' : p.daysSinceContact>14 ? '#D97706' : '#059669';
                   return (
-                    <div key={p.id||i} style={{ display:'grid', gridTemplateColumns:'1.6fr 0.4fr 0.7fr 0.7fr 0.9fr 1fr 0.9fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8 }}>
+                    <div key={p.id||i} style={{ display:'grid', gridTemplateColumns:'1.5fr 0.4fr 0.6fr 0.6fr 0.8fr 0.8fr 0.9fr 0.9fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8 }}>
                       <div>
                         <div style={{ fontSize:12, fontWeight:600 }}>{p.patient_name}</div>
                         {p.followUpDue && <div style={{ fontSize:9, color:'#DC2626', fontWeight:700 }}>⚠ Follow-up overdue: {fmtDate(p.lastNote?.follow_up_date)}</div>}
@@ -480,6 +482,22 @@ export default function CareCoordMyPatients() {
                       <span style={{ fontSize:11, fontWeight:700, color:'var(--gray)' }}>{p.region}</span>
                       <span style={{ fontSize:10 }}>{p.status?.slice(0,14)}</span>
                       <span style={{ fontSize:10, color:'var(--gray)' }}>{p.insurance}</span>
+                      <select value={p.visit_frequency||''} onClick={e => e.stopPropagation()}
+                        onChange={async e => {
+                          const val = e.target.value || null;
+                          const pName = p.patient_name;
+                          const { data: existing } = await supabase.from('patient_clinical_settings').select('id').eq('patient_name', pName).limit(1);
+                          if (existing && existing.length > 0) {
+                            await supabase.from('patient_clinical_settings').update({ visit_frequency: val, updated_at: new Date().toISOString() }).eq('id', existing[0].id);
+                          } else {
+                            await supabase.from('patient_clinical_settings').insert({ patient_name: pName, region: p.region, visit_frequency: val });
+                          }
+                          load();
+                        }}
+                        style={{ fontSize:10, padding:'3px 4px', border:'1px solid var(--border)', borderRadius:5, background:'var(--card-bg)', outline:'none', cursor:'pointer', width:'100%', color: p.visit_frequency ? 'var(--black)' : 'var(--gray)' }}>
+                        <option value="">— Set —</option>
+                        {FREQUENCY_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
                       <span style={{ fontSize:11 }}>{fmtDate(p.last_visit_date)}</span>
                       <div>
                         {p.lastNote ? (
