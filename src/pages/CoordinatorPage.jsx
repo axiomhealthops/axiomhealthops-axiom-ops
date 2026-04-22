@@ -45,7 +45,10 @@ function TaskCard(props) {
   var [completing, setCompleting] = useState(false);
   var [notes, setNotes] = useState('');
   var [showNotes, setShowNotes] = useState(false);
-  var isAuto = task.auto_generated;
+  // Only treat tasks as "auto" if they are in-memory generated (IDs start with 'auto_').
+  // Tasks from coordinator_tasks table with auto_generated=true still have real UUIDs
+  // and must be updated via coordinator_tasks, not action_responses.
+  var isAuto = task.auto_generated && typeof task.id === 'string' && task.id.startsWith('auto_');
 
   async function markComplete() {
     setCompleting(true);
