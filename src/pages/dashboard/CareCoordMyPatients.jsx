@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import StatusChangeModal from '../../components/StatusChangeModal';
+import ScheduleVisitModal from '../../components/ScheduleVisitModal';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -134,6 +135,8 @@ export default function CareCoordMyPatients() {
   const [search, setSearch] = useState('');
   const [notePatient, setNotePatient] = useState(null);
   const [statusPatient, setStatusPatient] = useState(null);
+  const [schedulePatient, setSchedulePatient] = useState(null);
+  const [scheduledVisits, setScheduledVisits] = useState([]);
 
   // Determine regions to show
   const myRegions = useMemo(() => {
@@ -147,7 +150,7 @@ export default function CareCoordMyPatients() {
 
   const load = useCallback(async () => {
     const filters = myRegions;
-    const [c, a, n, r, cs] = await Promise.all([
+    const [c, a, n, r, cs, sv] = await Promise.all([
       // Census
       (() => { let q = supabase.from('census_data').select('*'); if (filters) q = q.in('region', filters); return q; })(),
       // Auth tracker
@@ -158,24 +161,33 @@ export default function CareCoordMyPatients() {
       (() => { let q = supabase.from('intake_referrals').select('id,patient_name,region,referral_status,welcome_call,first_appt,chart_status,date_received,insurance').eq('referral_status','Accepted'); if (filters) q = q.in('region', filters); return q; })(),
       // Clinical settings for reassessment alerts
       (() => { let q = supabase.from('patient_clinical_settings').select('patient_name,region,reassessment_status,next_reassessment_deadline,alert_reassessment_unscheduled,visit_frequency,inferred_frequency'); if (filters) q = q.in('region', filters); return q; })(),
+      // Scheduled visits (upcoming)
+      (() => { let q = supabase.from('scheduled_visits').select('*').gte('visit_date', new Date().toISOString().split('T')[0]).in('status', ['scheduled','confirmed']).order('visit_date'); if (filters) q = q.in('region', filters); return q; })(),
     ]);
     setCensus(c.data || []);
     setAuths(a.data || []);
     setNotes(n.data || []);
     setReferrals(r.data || []);
     setClinSettings(cs.data || []);
+    setScheduledVisits(sv.data || []);
     setLoading(false);
   }, [myRegions]);
 
   useEffect(() => { load(); }, [load]);
-  useRealtimeTable(['census_data', 'auth_tracker', 'care_coord_notes', 'intake_referrals', 'patient_clinical_settings'], load);
+  useRealtimeTable(['census_data', 'auth_tracker', 'care_coord_notes', 'intake_referrals', 'patient_clinical_settings', 'scheduled_visits'], load);
 
   // ── Enrich census ──────────────────────────────────────────────────────────
   const enrichedCensus = useMemo(() => {
+    // noteMap: most recent note per patient
     const noteMap = {};
+    // followUpNoteMap: the note that SET the follow-up (may not be the latest)
+    const followUpNoteMap = {};
     notes.forEach(n => {
       const k = n.patient_name?.toLowerCase().trim();
       if (!noteMap[k] || n.contact_date > noteMap[k].contact_date) noteMap[k] = n;
+      if (n.follow_up_date) {
+        if (!followUpNoteMap[k] || n.created_at > followUpNoteMap[k].created_at) followUpNoteMap[k] = n;
+      }
     });
     const csMap = {};
     clinSettings.forEach(cs => { csMap[cs.patient_name?.toLowerCase().trim()] = cs; });
@@ -183,14 +195,26 @@ export default function CareCoordMyPatients() {
     return census.map(p => {
       const k = p.patient_name?.toLowerCase().trim();
       const lastNote = noteMap[k];
+      const fuNote = followUpNoteMap[k]; // note that set the follow-up
       const cs = csMap[k];
       const daysSinceContact = lastNote ? daysSince(lastNote.contact_date) : null;
-      const followUpDue = lastNote?.follow_up_date ? new Date(lastNote.follow_up_date+'T00:00:00') <= new Date() : false;
+      // Follow-up is overdue ONLY if:
+      // 1. A follow-up date was set and it has passed
+      // 2. No newer note was logged AFTER that follow-up date (auto-clear)
+      let followUpDue = false;
+      if (fuNote?.follow_up_date) {
+        const fuDate = new Date(fuNote.follow_up_date + 'T00:00:00');
+        const isPast = fuDate <= new Date();
+        const hasNewerNote = lastNote && lastNote.id !== fuNote.id && lastNote.contact_date >= fuNote.follow_up_date;
+        followUpDue = isPast && !hasNewerNote;
+      }
       const reassessDeadline = cs?.next_reassessment_deadline;
       const daysToReassess = daysUntil(reassessDeadline);
-      return { ...p, lastNote, daysSinceContact, followUpDue, cs, daysToReassess, reassessUnscheduled: cs?.alert_reassessment_unscheduled, visit_frequency: cs?.visit_frequency || null };
+      // Next scheduled visit
+      const nextVisit = scheduledVisits.find(sv => sv.patient_name?.toLowerCase().trim() === k);
+      return { ...p, lastNote, daysSinceContact, followUpDue, followUpNote: fuNote, cs, daysToReassess, reassessUnscheduled: cs?.alert_reassessment_unscheduled, visit_frequency: cs?.visit_frequency || null, nextVisit };
     });
-  }, [census, notes, clinSettings]);
+  }, [census, notes, clinSettings, scheduledVisits]);
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -464,8 +488,8 @@ export default function CareCoordMyPatients() {
 
               {/* Patient Table */}
               <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-                <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.4fr 0.6fr 0.6fr 0.8fr 0.8fr 0.9fr 0.9fr', padding:'7px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
-                  <span>Patient</span><span>Rgn</span><span>Status</span><span>Insurance</span><span>Frequency</span><span>Last Seen</span><span>Last Contact</span><span>Action</span>
+                <div style={{ display:'grid', gridTemplateColumns:'1.4fr 0.4fr 0.6fr 0.6fr 0.7fr 0.7fr 0.8fr 0.9fr 1.1fr', padding:'7px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
+                  <span>Patient</span><span>Rgn</span><span>Status</span><span>Insurance</span><span>Frequency</span><span>Last Seen</span><span>Next Visit</span><span>Last Contact</span><span>Actions</span>
                 </div>
                 {filtered.length === 0 ? (
                   <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
@@ -475,10 +499,24 @@ export default function CareCoordMyPatients() {
                   const rowBg = p.followUpDue ? '#FFFBEB' : (p.daysSinceContact===null||p.daysSinceContact>21) ? '#FFF5F5' : i%2===0?'var(--card-bg)':'var(--bg)';
                   const contactColor = p.daysSinceContact===null ? '#DC2626' : p.daysSinceContact>14 ? '#D97706' : '#059669';
                   return (
-                    <div key={p.id||i} style={{ display:'grid', gridTemplateColumns:'1.5fr 0.4fr 0.6fr 0.6fr 0.8fr 0.8fr 0.9fr 0.9fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8 }}>
+                    <div key={p.id||i} style={{ display:'grid', gridTemplateColumns:'1.4fr 0.4fr 0.6fr 0.6fr 0.7fr 0.7fr 0.8fr 0.9fr 1.1fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8 }}>
                       <div>
                         <div style={{ fontSize:12, fontWeight:600 }}>{p.patient_name}</div>
-                        {p.followUpDue && <div style={{ fontSize:9, color:'#DC2626', fontWeight:700 }}>⚠ Follow-up overdue: {fmtDate(p.lastNote?.follow_up_date)}</div>}
+                        {p.followUpDue && (
+                          <div style={{ fontSize:9, color:'#DC2626', fontWeight:700, display:'flex', alignItems:'center', gap:4 }}>
+                            ⚠ Follow-up overdue: {fmtDate(p.followUpNote?.follow_up_date)}
+                            <button onClick={async e => {
+                              e.stopPropagation();
+                              if (p.followUpNote?.id) {
+                                await supabase.from('care_coord_notes').update({ follow_up_date: null, updated_at: new Date().toISOString() }).eq('id', p.followUpNote.id);
+                                load();
+                              }
+                            }} title="Dismiss — action already taken"
+                              style={{ fontSize:8, background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:4, padding:'1px 5px', cursor:'pointer', color:'#DC2626', fontWeight:700 }}>
+                              ✕ Dismiss
+                            </button>
+                          </div>
+                        )}
                         {p.reassessUnscheduled && p.daysToReassess !== null && p.daysToReassess <= 14 && <div style={{ fontSize:9, color:'#DC2626', fontWeight:700 }}>🚨 Reassessment due {fmtDate(p.cs?.next_reassessment_deadline)}</div>}
                       </div>
                       <span style={{ fontSize:11, fontWeight:700, color:'var(--gray)' }}>{p.region}</span>
@@ -514,6 +552,16 @@ export default function CareCoordMyPatients() {
                       </select>
                       <span style={{ fontSize:11 }}>{fmtDate(p.last_visit_date)}</span>
                       <div>
+                        {p.nextVisit ? (
+                          <div>
+                            <div style={{ fontSize:11, fontWeight:600, color:'#059669' }}>{fmtDate(p.nextVisit.visit_date)}</div>
+                            <div style={{ fontSize:9, color:'var(--gray)' }}>{p.nextVisit.clinician_name?.split(' ')[0]} · {p.nextVisit.visit_type}</div>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize:10, color:'#9CA3AF', fontStyle:'italic' }}>None</span>
+                        )}
+                      </div>
+                      <div>
                         {p.lastNote ? (
                           <>
                             <div style={{ fontSize:11, fontWeight:600, color:contactColor }}>{p.daysSinceContact===0?'Today':p.daysSinceContact===1?'Yesterday':`${p.daysSinceContact}d ago`}</div>
@@ -523,10 +571,16 @@ export default function CareCoordMyPatients() {
                           <span style={{ fontSize:11, color:'#DC2626', fontWeight:700 }}>Never logged</span>
                         )}
                       </div>
-                      <button onClick={() => setNotePatient(p)}
-                        style={{ padding:'5px 10px', background:'#1565C0', color:'#fff', border:'none', borderRadius:6, fontSize:10, fontWeight:700, cursor:'pointer' }}>
-                        Log Contact
-                      </button>
+                      <div style={{ display:'flex', gap:4 }}>
+                        <button onClick={() => setSchedulePatient(p)}
+                          style={{ padding:'5px 8px', background:'#059669', color:'#fff', border:'none', borderRadius:6, fontSize:10, fontWeight:700, cursor:'pointer' }}>
+                          Schedule
+                        </button>
+                        <button onClick={() => setNotePatient(p)}
+                          style={{ padding:'5px 8px', background:'#1565C0', color:'#fff', border:'none', borderRadius:6, fontSize:10, fontWeight:700, cursor:'pointer' }}>
+                          Log
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -546,6 +600,12 @@ export default function CareCoordMyPatients() {
         <StatusChangeModal patient={statusPatient} coordinatorId={profile?.id} coordinatorName={profile?.full_name}
           onClose={() => setStatusPatient(null)}
           onSaved={() => { setStatusPatient(null); load(); }} />
+      )}
+
+      {schedulePatient && (
+        <ScheduleVisitModal patient={schedulePatient} coordinatorId={profile?.id} coordinatorName={profile?.full_name}
+          onClose={() => setSchedulePatient(null)}
+          onSaved={() => { setSchedulePatient(null); load(); }} />
       )}
     </div>
   );

@@ -3,6 +3,7 @@ import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import StatusChangeModal from '../../components/StatusChangeModal';
+import ScheduleVisitModal from '../../components/ScheduleVisitModal';
 import { supabase } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 
@@ -45,6 +46,23 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
+  const [patientVisits, setPatientVisits] = useState([]);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+
+  // Load scheduled visits for this patient
+  useEffect(() => {
+    supabase.from('scheduled_visits').select('*')
+      .eq('patient_name', patient.patient_name)
+      .order('visit_date', { ascending: true })
+      .then(({ data }) => setPatientVisits(data || []));
+  }, [patient.patient_name]);
+
+  function reloadSchedule() {
+    supabase.from('scheduled_visits').select('*')
+      .eq('patient_name', patient.patient_name)
+      .order('visit_date', { ascending: true })
+      .then(({ data }) => setPatientVisits(data || []));
+  }
 
   // Find the intake record to edit
   const patIntakeRecord = intakeData.find(i =>
@@ -428,6 +446,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
         {/* Tabs */}
         <div style={{ display:'flex', borderBottom:'1px solid var(--border)', padding:'0 24px', overflowX:'auto' }}>
           {TAB('overview','Overview')}
+          {TAB('schedule','Schedule')}
           {TAB('referral','Referral')}
           {TAB('auth','Authorization')}
           {TAB('history','Visit History')}
@@ -436,6 +455,70 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
 
         {/* Tab content */}
         <div style={{ flex:1, overflowY:'auto', padding:24 }}>
+
+          {/* SCHEDULE */}
+          {tab === 'schedule' && (
+            <div>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+                <div style={{ fontSize:14, fontWeight:700 }}>Scheduled Visits</div>
+                <button onClick={() => setShowScheduleModal(true)}
+                  style={{ padding:'6px 14px', background:'#059669', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+                  + Schedule Visit
+                </button>
+              </div>
+              {patientVisits.length === 0 ? (
+                <div style={{ textAlign:'center', padding:40, color:'var(--gray)' }}>
+                  <div style={{ fontSize:24, marginBottom:8 }}>📅</div>
+                  <div style={{ fontSize:13, fontWeight:600 }}>No visits scheduled</div>
+                  <div style={{ fontSize:11, marginTop:4 }}>Click "Schedule Visit" to add one</div>
+                </div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  {patientVisits.map(v => {
+                    const isPast = new Date(v.visit_date + 'T23:59:59') < new Date();
+                    const isToday = v.visit_date === new Date().toISOString().split('T')[0];
+                    const statusColors = { scheduled:'#1E40AF', confirmed:'#059669', completed:'#065F46', cancelled:'#DC2626', no_show:'#D97706', rescheduled:'#7C3AED' };
+                    return (
+                      <div key={v.id} style={{ background: isPast && v.status === 'scheduled' ? '#FEF2F2' : isToday ? '#ECFDF5' : 'var(--bg)', border:'1px solid var(--border)', borderRadius:10, padding:'12px 16px', display:'flex', justifyContent:'space-between', alignItems:'center', opacity: v.status === 'cancelled' ? 0.5 : 1 }}>
+                        <div style={{ display:'flex', gap:16, alignItems:'center' }}>
+                          <div style={{ textAlign:'center', minWidth:50 }}>
+                            <div style={{ fontSize:18, fontWeight:800, color: isToday ? '#059669' : 'var(--black)' }}>{new Date(v.visit_date+'T00:00:00').getDate()}</div>
+                            <div style={{ fontSize:9, fontWeight:600, color:'var(--gray)', textTransform:'uppercase' }}>{new Date(v.visit_date+'T00:00:00').toLocaleDateString('en-US',{month:'short',year:'numeric'})}</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize:13, fontWeight:600 }}>{v.visit_type?.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())} {v.visit_time ? `· ${v.visit_time}` : ''}</div>
+                            <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>Clinician: {v.clinician_name}</div>
+                            {v.notes && <div style={{ fontSize:10, color:'var(--gray)', marginTop:2, fontStyle:'italic' }}>{v.notes}</div>}
+                          </div>
+                        </div>
+                        <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                          <span style={{ fontSize:10, fontWeight:700, color: statusColors[v.status] || '#374151', background: (statusColors[v.status] || '#374151') + '15', padding:'2px 8px', borderRadius:999 }}>
+                            {v.status}
+                          </span>
+                          {v.status === 'scheduled' && (
+                            <div style={{ display:'flex', gap:4 }}>
+                              <button onClick={async () => { await supabase.from('scheduled_visits').update({ status:'completed', updated_at:new Date().toISOString() }).eq('id',v.id); reloadSchedule(); }}
+                                style={{ fontSize:10, padding:'3px 8px', background:'#ECFDF5', border:'1px solid #A7F3D0', borderRadius:5, cursor:'pointer', color:'#065F46', fontWeight:600 }}>✓</button>
+                              <button onClick={async () => {
+                                const reason = prompt('Cancellation reason:');
+                                if (reason !== null) { await supabase.from('scheduled_visits').update({ status:'cancelled', cancelled_reason:reason, updated_at:new Date().toISOString() }).eq('id',v.id); reloadSchedule(); }
+                              }}
+                                style={{ fontSize:10, padding:'3px 8px', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:5, cursor:'pointer', color:'#DC2626', fontWeight:600 }}>✕</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {showScheduleModal && (
+                <ScheduleVisitModal patient={patient}
+                  onClose={() => setShowScheduleModal(false)}
+                  onSaved={() => { setShowScheduleModal(false); reloadSchedule(); }} />
+              )}
+            </div>
+          )}
 
           {/* OVERVIEW */}
           {tab === 'overview' && (
