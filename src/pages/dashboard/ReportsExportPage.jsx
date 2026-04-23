@@ -90,6 +90,14 @@ const REPORTS = [
     category: 'Operations',
   },
   {
+    id: 'frequency_review',
+    icon: '⚖',
+    title: 'Frequency Review Queue',
+    desc: 'Active patients with visit frequency, last visit date, visits used vs authorized, and days since last seen. Flags patients overdue for frequency review.',
+    formats: ['xlsx','csv'],
+    category: 'Clinical',
+  },
+  {
     id: 'patient_census',
     icon: '🩺',
     title: 'Patient Census Export',
@@ -113,11 +121,7 @@ export default function ReportsExportPage() {
   const [dateTo, setDateTo] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
  
-  useEffect(() => {
-    // All five tables paginated via fetchAllPages. Reports Export is
-    // the page most likely to hit multi-thousand-row tables (visits,
-    // intake_referrals both exceed 3k), and silent truncation here
-    // means exported CSVs/XLSX silently miss history.
+  function loadData() {
     Promise.all([
       fetchAllPages(supabase.from('visit_schedule_data').select('*')),
       fetchAllPages(supabase.from('intake_referrals').select('*')),
@@ -129,7 +133,9 @@ export default function ReportsExportPage() {
       setAuth(a); setCensus(c);
       setClinicians(cl); setLoading(false);
     });
-  }, []);
+  }
+
+  useEffect(() => { loadData(); }, []);
  
   function applyFilters(items, dateField='visit_date') {
     return items.filter(item => {
@@ -477,6 +483,46 @@ export default function ReportsExportPage() {
           break;
         }
  
+        case 'frequency_review': {
+          // Fetch clinical settings for frequency data
+          const { data: clinSettings } = await supabase.from('patient_clinical_settings').select('*');
+          const freqMap = {};
+          (clinSettings || []).forEach(s => { freqMap[s.patient_name] = s; });
+
+          const activePts = census.filter(p => p.status === 'Active' || (p.status || '').startsWith('Active'));
+          const now = Date.now();
+          const freqRows = activePts.map(p => {
+            const cs = freqMap[p.patient_name] || {};
+            const ptVisits = visits.filter(v => v.patient_name === p.patient_name);
+            const completed = ptVisits.filter(v => isCompleted(v.status));
+            const lastVisit = completed.length > 0 ? completed.sort((a,b) => (b.visit_date||'').localeCompare(a.visit_date||''))[0] : null;
+            const daysSince = lastVisit?.visit_date ? Math.floor((now - new Date(lastVisit.visit_date + 'T00:00:00').getTime()) / 86400000) : null;
+            const ptAuth = auth.filter(a => a.patient_name === p.patient_name && (a.auth_status === 'active' || a.auth_status === 'approved'));
+            const latestAuth = ptAuth.sort((a,b) => (b.auth_expiry_date||'').localeCompare(a.auth_expiry_date||''))[0];
+            return {
+              'Patient Name': p.patient_name,
+              'Region': p.region || '',
+              'Insurance': p.insurance || '',
+              'Visit Frequency': cs.visit_frequency || 'Not Set',
+              'Visits Used': latestAuth?.visits_used || 0,
+              'Visits Authorized': latestAuth?.visits_authorized || 0,
+              'Remaining': (latestAuth?.visits_authorized || 0) - (latestAuth?.visits_used || 0),
+              'Last Visit Date': lastVisit?.visit_date ? fmtDate(lastVisit.visit_date) : 'Never',
+              'Days Since Last Visit': daysSince !== null ? daysSince : 'N/A',
+              'Auth Expires': latestAuth?.auth_expiry_date ? fmtDate(latestAuth.auth_expiry_date) : '',
+              'Status': daysSince !== null && daysSince > 14 ? 'OVERDUE' : daysSince !== null && daysSince > 7 ? 'DUE SOON' : 'OK',
+              'Clinician': lastVisit?.clinician_name || '',
+            };
+          }).sort((a,b) => {
+            const order = { 'OVERDUE': 0, 'DUE SOON': 1, 'OK': 2 };
+            return (order[a.Status] ?? 3) - (order[b.Status] ?? 3);
+          });
+
+          rows = freqRows;
+          sheetName = 'Frequency Review';
+          break;
+        }
+
         case 'patient_census': {
           // Template download — blank Pariox-format upload sheet (matches UploadsPage parser exactly)
           if (format === 'template') {
@@ -636,7 +682,7 @@ export default function ReportsExportPage() {
   const categories = ['ALL', ...new Set(REPORTS.map(r => r.category))];
   const filtered = REPORTS.filter(r => categoryFilter === 'ALL' || r.category === categoryFilter);
  
-  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals'], load);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals'], loadData);
 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
