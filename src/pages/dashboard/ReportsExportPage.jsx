@@ -518,8 +518,8 @@ export default function ReportsExportPage() {
             return (order[a.Status] ?? 3) - (order[b.Status] ?? 3);
           });
 
-          rows = freqRows;
-          sheetName = 'Frequency Review';
+          if (freqRows.length === 0) { alert('No active patients found for frequency review.'); break; }
+          format === 'xlsx' ? exportXLSX(freqRows, 'Frequency Review', 'Frequency_Review_Queue'+suffix) : exportCSV(freqRows, 'Frequency_Review_Queue'+suffix);
           break;
         }
 
@@ -675,6 +675,7 @@ export default function ReportsExportPage() {
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       console.error('Export error:', err);
+      alert('Export failed: ' + (err.message || err));
     }
     setGenerating(null);
   }
