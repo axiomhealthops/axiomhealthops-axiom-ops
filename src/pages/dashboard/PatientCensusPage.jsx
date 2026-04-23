@@ -395,7 +395,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10, marginBottom:10 }}>
                 <EditField label="SOC Date" name="soc_date" type="date" value={editForm.soc_date} onChange={setField} />
-                <EditField label="Auth Submitted" name="auth_submitted_date" type="date" value={editForm.auth_submitted_date} onChange={setField} />
+                <EditField label="Auth Requested / Submit Date" name="auth_submitted_date" type="date" value={editForm.auth_submitted_date} onChange={setField} />
                 <EditField label="Needed By" name="auth_needed_by" type="date" value={editForm.auth_needed_by} onChange={setField} />
                 <EditField label="Auth Approved" name="auth_approved_date" type="date" value={editForm.auth_approved_date} onChange={setField} />
                 <EditField label="Auth Expiry" name="auth_expiry_date" type="date" value={editForm.auth_expiry_date} onChange={setField} />

@@ -196,7 +196,7 @@ function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
           {[
             { label:'Auth Number', field:'auth_number', type:'text', placeholder:'Auth #...' },
             { label:'Assigned To', field:'assigned_to', type:'text', placeholder:'Coordinator name...' },
-            { label:'Submitted Date', field:'auth_submitted_date', type:'date' },
+            { label:'Auth Requested / Submit Date', field:'auth_submitted_date', type:'date' },
             { label:'Approved Date', field:'auth_approved_date', type:'date' },
             { label:'Expiry Date', field:'auth_expiry_date', type:'date' },
             { label:'Visits Authorized', field:'visits_authorized', type:'number' },

@@ -453,7 +453,7 @@ function AddEditModal(props) {
  
           <div style={SEC}>Key Dates</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-            {[['soc_date','Start of Care (SOC)'],['auth_submitted_date','Auth Submitted'],['auth_needed_by','Needed By'],['auth_approved_date','Auth Approved'],['auth_expiry_date','Auth Expires']].map(function(item){
+            {[['soc_date','Start of Care (SOC)'],['auth_submitted_date','Auth Requested / Submit Date'],['auth_needed_by','Needed By'],['auth_approved_date','Auth Approved'],['auth_expiry_date','Auth Expires']].map(function(item){
               return (
                 <div key={item[0]}>
                   <label style={LBL}>{item[1]}</label>
@@ -858,7 +858,7 @@ export default function AuthTrackerPage() {
                           <div>
                             <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Key Dates</div>
                             {r.soc_date && <div style={{ fontSize: 12, color: 'var(--black)' }}>SOC: <strong>{fmtDate(r.soc_date)}</strong></div>}
-                            {r.auth_submitted_date && <div style={{ fontSize: 12, marginTop: 3 }}>Submitted: {fmtDate(r.auth_submitted_date)}</div>}
+                            {r.auth_submitted_date && <div style={{ fontSize: 12, marginTop: 3 }}>Requested: {fmtDate(r.auth_submitted_date)}</div>}
                             {r.auth_needed_by && <div style={{ fontSize: 12, color: '#DC2626', fontWeight: 600, marginTop: 3 }}>Needed by: {fmtDate(r.auth_needed_by)}</div>}
                             {r.auth_approved_date && <div style={{ fontSize: 12, color: 'var(--green)', marginTop: 3 }}>Approved: {fmtDate(r.auth_approved_date)}</div>}
                             {r.auth_expiry_date && <div style={{ fontSize: 12, color: expDays !== null && expDays <= 14 ? '#DC2626' : 'var(--black)', fontWeight: expDays !== null && expDays <= 14 ? 700 : 400, marginTop: 3 }}>Expires: {fmtDate(r.auth_expiry_date)}</div>}
