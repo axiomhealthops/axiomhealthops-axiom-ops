@@ -192,7 +192,9 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
 
       if (fnError) {
         // supabase.functions.invoke wraps non-2xx as error with a message
-        throw new Error(fnError.message || 'Extraction service unreachable');
+        // Try to extract the detailed error from the response body
+        const detail = data?.error || fnError.message || 'Extraction service unreachable';
+        throw new Error(detail);
       }
       if (data?.error) throw new Error(data.error);
 
