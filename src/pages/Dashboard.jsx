@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import { useAuth } from '../hooks/useAuth';
 
@@ -138,6 +138,15 @@ export default function Dashboard() {
     setActivePage(page);
     setPageIntent(intent);
   };
+
+  // Listen for navigation events from global components (e.g. MentionsBell)
+  useEffect(() => {
+    function handleNav(e) {
+      if (e.detail?.page) navigate(e.detail.page, e.detail.intent || null);
+    }
+    window.addEventListener('axiom-navigate', handleNav);
+    return () => window.removeEventListener('axiom-navigate', handleNav);
+  }, []);
 
   const PageComponent = PAGE_COMPONENTS[activePage];
 

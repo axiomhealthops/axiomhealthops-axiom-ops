@@ -712,16 +712,17 @@ export default function PatientCensusPage({ intent } = {}) {
   const [authData, setAuthData] = useState([]);
   const [intakeData, setIntakeData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => intent?.searchPatient || '');
   const [regionFilter, setRegionFilter] = useState('ALL');
   const [insFilter, setInsFilter] = useState('ALL');
   // statusFilter + lastSeenFilter: accept initial values from caller-supplied intent
   // (e.g. Director Command TriageCard #1 lands here with overdue+active pre-applied).
   // Lazy initializer so the intent is consumed once on mount and doesn't override
   // subsequent user interactions.
-  const [statusFilter, setStatusFilter] = useState(() => intent?.status || 'ALL');
+  const [statusFilter, setStatusFilter] = useState(() => intent?.searchPatient ? 'ALL' : (intent?.status || 'ALL'));
   const [lastSeenFilter, setLastSeenFilter] = useState(() => intent?.lastSeen || 'ALL');
   const [selected, setSelected] = useState(null);
+  const [autoSelectPatient, setAutoSelectPatient] = useState(() => intent?.searchPatient || null);
   const [statusPatient, setStatusPatient] = useState(null);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
@@ -752,6 +753,15 @@ export default function PatientCensusPage({ intent } = {}) {
 
   useEffect(() => { load(); }, [isAllAccess, regionsLoading, JSON.stringify(allowedRegions)]);
   useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'intake_referrals'], load);
+
+  // Auto-select patient when navigating from a mention notification
+  useEffect(() => {
+    if (autoSelectPatient && census.length > 0 && !loading) {
+      const match = census.find(c => c.patient_name === autoSelectPatient);
+      if (match) { setSelected(match); }
+      setAutoSelectPatient(null);
+    }
+  }, [autoSelectPatient, census, loading]);
 
   // Sort distinct values first, THEN prepend 'ALL' so "All Regions" stays at the
   // top of the dropdown regardless of the letters used for region codes.

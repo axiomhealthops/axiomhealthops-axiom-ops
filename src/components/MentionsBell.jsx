@@ -138,7 +138,18 @@ export default function MentionsBell() {
               const displayText = isLong && !isExpanded ? fullText.slice(0, 120) + '...' : fullText;
               return (
                 <div key={n.id}
-                  onClick={() => { if (!n.read) markRead(n.id); if (isLong) setExpandedId(isExpanded ? null : n.id); }}
+                  onClick={() => {
+                    if (!n.read) markRead(n.id);
+                    // Navigate to the patient in census when clicked
+                    if (n.patient_name) {
+                      window.dispatchEvent(new CustomEvent('axiom-navigate', {
+                        detail: { page: 'census', intent: { searchPatient: n.patient_name } }
+                      }));
+                      setOpen(false);
+                    } else if (isLong) {
+                      setExpandedId(isExpanded ? null : n.id);
+                    }
+                  }}
                   style={{
                     padding: '12px 16px', borderBottom: '1px solid var(--border)', cursor: 'pointer',
                     background: n.read ? 'transparent' : '#EFF6FF', borderLeft: n.read ? 'none' : '3px solid #1565C0',
