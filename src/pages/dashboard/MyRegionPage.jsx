@@ -69,12 +69,21 @@ export default function MyRegionPage() {
     Promise.all([
       supabase.from('visit_schedule_data').select('*').in('region', myRegions).not('visit_date','is',null),
       supabase.from('census_data').select('*').in('region', myRegions),
-      supabase.from('clinicians').select('*').in('region', myRegions).eq('is_active', true),
+      supabase.from('clinicians').select('*').eq('is_active', true),
       supabase.from('auth_tracker').select('*').in('region', myRegions),
       supabase.from('intake_referrals').select('*').in('region', myRegions).not('date_received','is',null),
       supabase.from('on_hold_recovery').select('*').in('region', myRegions).eq('recovery_status','on_hold'),
     ]).then(([v,c,cl,a,i,oh]) => {
-      setVisits(v.data||[]); setCensus(c.data||[]); setClinicians(cl.data||[]);
+      // Filter clinicians client-side to support multi-region comma-separated values
+      var allClinicians = cl.data || [];
+      var regionSet = new Set(myRegions);
+      var filteredCl = allClinicians.filter(function(c) {
+        if (c.region === 'All') return true;
+        if (regionSet.has(c.region)) return true;
+        if (c.region && c.region.includes(',')) return c.region.split(',').some(function(r) { return regionSet.has(r.trim()); });
+        return false;
+      });
+      setVisits(v.data||[]); setCensus(c.data||[]); setClinicians(filteredCl);
       setAuthData(a.data||[]); setIntake(i.data||[]); setOnHold(oh.data||[]);
       setLoading(false);
     });

@@ -239,7 +239,10 @@ export default function WaitlistPage() {
     }
     const [wl, cl, ir, vs] = await Promise.all([
       fetchAllPages(regionScope.applyToQuery(supabase.from('waitlist_assignments').select('*'))),
-      fetchAllPages(regionScope.applyToQuery(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,zip,lat,lng').eq('is_active', true))),
+      // Load ALL active clinicians (no region filter) because multi-region
+      // clinicians use comma-separated values like "M,N" which SQL IN() can't match.
+      // Client-side filtering in the assignment dropdown already handles multi-region.
+      fetchAllPages(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,zip,lat,lng').eq('is_active', true)),
       // intake_referrals has a region column — scope it too, and include
       // region in the select so downstream UI code can show it.
       fetchAllPages(regionScope.applyToQuery(supabase.from('intake_referrals').select('patient_name,city,zip_code,county,diagnosis,contact_number,pcp_name,location,region').order('date_received', { ascending: false }))),

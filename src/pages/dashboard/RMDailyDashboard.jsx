@@ -52,13 +52,19 @@ export default function RMDailyDashboard() {
         .in('region', myRegions).gte('visit_date', weekStartStr),
       supabase.from('auth_tracker').select('patient_name,region,insurance,auth_status,auth_expiry_date,visits_authorized,visits_used,auth_number,assigned_to')
         .in('region', myRegions).eq('auth_status','active'),
-      supabase.from('clinicians').select('*').in('region', myRegions).eq('is_active', true),
+      supabase.from('clinicians').select('*').eq('is_active', true),
       supabase.from('on_hold_recovery').select('*').in('region', myRegions),
     ]);
     setCensus(c.data||[]);
     setVisits(v.data||[]);
     setAuths(a.data||[]);
-    setClinicians(cl.data||[]);
+    // Filter clinicians client-side for multi-region support
+    var regionSet = new Set(myRegions);
+    setClinicians((cl.data||[]).filter(function(c) {
+      if (c.region === 'All') return true;
+      if (regionSet.has(c.region)) return true;
+      return c.region && c.region.split(',').some(function(r) { return regionSet.has(r.trim()); });
+    }));
     setOnHold(oh.data||[]);
     setLoading(false);
   }, [myRegions]);
