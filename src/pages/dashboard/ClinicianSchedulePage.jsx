@@ -155,7 +155,7 @@ export default function ClinicianSchedulePage() {
   /* ── clinician list for filter ─────────────────────── */
   var filteredClinicians = useMemo(function() {
     if (!regionFilter) return clinicians;
-    return clinicians.filter(function(c) { return c.region === regionFilter || c.region === 'All'; });
+    return clinicians.filter(function(c) { return c.region === regionFilter || c.region === 'All' || (c.region && c.region.split(',').map(function(r){return r.trim();}).includes(regionFilter)); });
   }, [clinicians, regionFilter]);
 
   /* ── render ────────────────────────────────────────── */

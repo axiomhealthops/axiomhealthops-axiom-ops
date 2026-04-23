@@ -72,12 +72,12 @@ export default function ScheduleVisitModal({ patient, coordinatorId, coordinator
   // Filter clinicians by patient region if available
   const filteredClinicians = useMemo(() => {
     if (!patient?.region) return clinicians;
-    return clinicians.filter(c => c.region === patient.region || c.region === 'All');
+    return clinicians.filter(c => c.region === patient.region || c.region === 'All' || (c.region && c.region.split(',').map(r => r.trim()).includes(patient.region)));
   }, [clinicians, patient?.region]);
 
   const otherRegionClinicians = useMemo(() => {
     if (!patient?.region) return [];
-    return clinicians.filter(c => c.region !== patient.region && c.region !== 'All');
+    return clinicians.filter(c => c.region !== patient.region && c.region !== 'All' && !(c.region && c.region.split(',').map(r => r.trim()).includes(patient.region)));
   }, [clinicians, patient?.region]);
 
   // Time conflict check
