@@ -121,17 +121,22 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
     setSaving(true);
     setSaveMsg('');
     try {
-      // Update census_data
-      await supabase.from('census_data').update({
+      // Update census_data — use .select() so we can detect zero-row silent rejects
+      const { data: censusResult, error: censusErr } = await supabase.from('census_data').update({
         patient_name: editForm.patient_name,
         region: editForm.region,
         insurance: editForm.insurance,
         status: editForm.status,
-      }).eq('id', patient.id);
+      }).eq('id', patient.id).select();
+      if (censusErr) throw new Error('Census save failed: ' + censusErr.message);
+      if (!censusResult || censusResult.length === 0) {
+        console.warn('[PatientCensus] census_data update returned 0 rows for id:', patient.id);
+        throw new Error('Census save failed — record not found or permission denied. Try refreshing the page.');
+      }
 
       // Update intake_referrals if record exists
       if (patIntakeRecord?.id) {
-        await supabase.from('intake_referrals').update({
+        const { error: intakeErr } = await supabase.from('intake_referrals').update({
           patient_name: editForm.patient_name,
           region: editForm.region,
           insurance: editForm.insurance,
@@ -152,6 +157,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
           chart_status: editForm.chart_status,
           notes: editForm.notes,
         }).eq('id', patIntakeRecord.id);
+        if (intakeErr) throw new Error('Intake save failed: ' + intakeErr.message);
       }
 
       // Update or create auth record
@@ -969,13 +975,25 @@ export default function PatientCensusPage({ intent } = {}) {
           intakeData={intakeData}
           onClose={() => setSelected(null)}
           onUpdate={async () => {
-            // Reload census and intake data after edit
-            const [c, i] = await Promise.all([
-              supabase.from('census_data').select('*'),
+            // Reload census and intake data after edit, and refresh the
+            // selected patient reference so the profile modal shows the
+            // saved values instead of the stale pre-edit snapshot.
+            const [c, i, a] = await Promise.all([
+              applyToQuery(supabase.from('census_data').select('*')),
               supabase.from('intake_referrals').select('*').not('date_received','is',null).order('date_received',{ascending:false}),
+              applyToQuery(supabase.from('auth_tracker').select('*')),
             ]);
-            if (c.data) setCensus(c.data);
+            if (c.data) {
+              setCensus(c.data);
+              // Re-point `selected` to the fresh row so the profile
+              // header and view-mode fields show the just-saved values.
+              if (selected) {
+                const fresh = c.data.find(p => p.id === selected.id);
+                if (fresh) setSelected(fresh);
+              }
+            }
             if (i.data) setIntakeData(i.data);
+            if (a.data) setAuthData(a.data);
           }}
         />
       )}
