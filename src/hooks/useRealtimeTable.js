@@ -1,8 +1,3 @@
-
-
-
-Google Chrome
-
 // useRealtimeTable.js
 //
 // Subscribes to Supabase Realtime Postgres Changes for one or more tables.
