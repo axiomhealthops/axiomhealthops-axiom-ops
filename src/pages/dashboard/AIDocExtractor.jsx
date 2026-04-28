@@ -191,9 +191,34 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
       });
 
       if (fnError) {
-        // supabase.functions.invoke wraps non-2xx as error with a message
-        // Try to extract the detailed error from the response body
-        const detail = data?.error || fnError.message || 'Extraction service unreachable';
+        // supabase-js v2.x wraps non-2xx responses in FunctionsHttpError
+        // with a generic message. The real error from our Edge Function
+        // (which includes the Anthropic error detail) is in fnError.context.
+        let detail = 'Extraction service unreachable';
+        if (data?.error) {
+          detail = data.error;
+        } else if (fnError.context && typeof fnError.context.json === 'function') {
+          try {
+            const errBody = await fnError.context.json();
+            detail = errBody?.error
+              || errBody?.anthropic_response?.error?.message
+              || fnError.message;
+          } catch {
+            detail = fnError.message;
+          }
+        } else {
+          detail = fnError.message;
+        }
+
+        // Translate common Anthropic errors into plain language
+        if (/invalid_request_error|could not process/i.test(detail)) {
+          detail = 'The AI could not read this document. Try re-scanning it as a cleaner PDF or image, or reduce the file size.';
+        } else if (/rate_limit|overloaded/i.test(detail)) {
+          detail = 'The AI service is temporarily busy. Please wait 30 seconds and try again.';
+        } else if (/authentication|unauthorized|api.key/i.test(detail)) {
+          detail = 'AI extraction is temporarily unavailable (configuration issue). Liam has been notified — please enter this referral manually for now.';
+        }
+
         throw new Error(detail);
       }
       if (data?.error) throw new Error(data.error);
@@ -413,7 +438,18 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
             )}
 
             {error && (
-              <div style={{ marginTop:10, padding:'10px 14px', background:'#FEF2F2', border:'1px solid #FCA5A5', borderRadius:8, fontSize:12, color:'#DC2626' }}>{error}</div>
+              <div style={{ marginTop:10, padding:'12px 14px', background:'#FEF2F2', border:'1px solid #FCA5A5', borderRadius:8 }}>
+                <div style={{ fontSize:12, color:'#DC2626', fontWeight:600, marginBottom:6 }}>{error}</div>
+                <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                  <button onClick={handleExtract} disabled={extracting}
+                    style={{ padding:'5px 12px', background:'#DC2626', color:'#fff', border:'none', borderRadius:5, fontSize:11, fontWeight:600, cursor:'pointer' }}>
+                    ↻ Retry
+                  </button>
+                  <span style={{ fontSize:11, color:'#92400E' }}>
+                    If this keeps failing, close this modal and enter the referral manually.
+                  </span>
+                </div>
+              </div>
             )}
           </div>
 
