@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-
+ 
 const EXTRACTION_MODES = {
   intake: {
     label: 'Referral / Intake',
@@ -11,7 +11,7 @@ const EXTRACTION_MODES = {
     systemPrompt: `You are a medical document data extraction specialist for a home health LYMPHEDEMA therapy company.
 Extract ALL of the following fields from the referral/intake document provided. Return ONLY valid JSON with these exact keys.
 If a field is not found, use null. Do not invent data.
-
+ 
 DIAGNOSIS EXTRACTION — CRITICAL FOR TRIAGE:
   The intake team needs ICD-10 codes identified explicitly. Look carefully for:
   - I89.0 (Lymphedema, not elsewhere classified) — PRIMARY ACCEPT-CRITERIA CODE
@@ -22,11 +22,11 @@ DIAGNOSIS EXTRACTION — CRITICAL FOR TRIAGE:
   - L89.x (Pressure ulcer — wound care, flag SWIFT team)
   - E11.621 / E11.622 (Diabetic foot ulcer — wound care, flag SWIFT team)
   Preserve the exact ICD code in the diagnosis string so downstream triage can parse it.
-
+ 
 INSURANCE — CRITICAL FOR ACCEPTANCE AND PAYOR TRACKING:
   The following payors are commonly accepted: Humana, CarePlus, Cigna, Aetna, FHCP, Devoted, Simply, Medicare, BlueCross/BlueShield, United Healthcare. Normalize the carrier name to one of these canonical forms when possible (e.g. "Humana Gold" → "Humana", "Cigna HealthSpring" → "Cigna").
   IMPORTANT: If the insurance does NOT match any of the above, preserve the ACTUAL insurance carrier name exactly as written on the document. Do NOT use "Other" — we need the real carrier name for payor opportunity analysis (e.g. "Molina", "WellCare", "Bright Health", "Oscar", etc.).
-
+ 
 {
   "patient_name": "Last, First format if possible",
   "dob": "YYYY-MM-DD format",
@@ -51,7 +51,7 @@ INSURANCE — CRITICAL FOR ACCEPTANCE AND PAYOR TRACKING:
   "referral_type": "New Referral, Continuation, or Resumption of Care. Use 'New Referral' for first-time patients. Use 'Continuation' for existing active patients getting a new referral. Use 'Resumption of Care' for patients previously discharged or on hold 30+ days who are returning.",
   "notes": "any other clinically relevant notes"
 }
-
+ 
 Return ONLY the JSON object, no markdown, no explanation.`,
   },
   auth: {
@@ -63,7 +63,7 @@ Return ONLY the JSON object, no markdown, no explanation.`,
     systemPrompt: `You are a medical authorization document extraction specialist for a home health therapy company.
 Extract ALL of the following fields from the authorization document provided. Return ONLY valid JSON with these exact keys.
 If a field is not found, use null. Do not invent data.
-
+ 
 {
   "patient_name": "patient full name, Last First format if possible",
   "dob": "YYYY-MM-DD",
@@ -83,11 +83,11 @@ If a field is not found, use null. Do not invent data.
   "denial_reason": "denial reason if denied",
   "notes": "any other relevant authorization details"
 }
-
+ 
 Return ONLY the JSON object, no markdown, no explanation.`,
   },
 };
-
+ 
 function FieldRow({ label, value, editable, onChange }) {
   return (
     <div style={{ display:'grid', gridTemplateColumns:'140px 1fr', gap:8, marginBottom:6, alignItems:'center' }}>
@@ -103,7 +103,7 @@ function FieldRow({ label, value, editable, onChange }) {
     </div>
   );
 }
-
+ 
 export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }) {
   const cfg = EXTRACTION_MODES[mode];
   const fileRef = useRef();
@@ -115,7 +115,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [uploadPath, setUploadPath] = useState(null);
-
+ 
   // Defensive escape — if a save error or network hang leaves the modal
   // showing an unrecoverable state, users can always Esc out instead of
   // being trapped looking for the × button. Disabled while extracting
@@ -127,7 +127,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, extracting, saving]);
-
+ 
   function handleFileChange(e) {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -138,14 +138,14 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
     setError('');
     setSaved(false);
   }
-
+ 
   async function handleExtract() {
     if (!file) return;
     setExtracting(true);
     setError('');
     setExtracted(null);
     setEditedData(null);
-
+ 
     try {
       // Convert file to base64
       const base64 = await new Promise((res, rej) => {
@@ -154,12 +154,12 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
         reader.onerror = () => rej(new Error('File read failed'));
         reader.readAsDataURL(file);
       });
-
+ 
       const isImage = file.type.startsWith('image/');
       const isPDF = file.type === 'application/pdf';
-
+ 
       const contentBlocks = [];
-
+ 
       if (isPDF) {
         contentBlocks.push({
           type: 'document',
@@ -175,9 +175,9 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
         const text = await file.text();
         contentBlocks.push({ type: 'text', text });
       }
-
+ 
       contentBlocks.push({ type: 'text', text: 'Extract the data from this document and return ONLY the JSON object.' });
-
+ 
       // Call the Supabase Edge Function that proxies Anthropic.
       // Direct browser calls to api.anthropic.com fail (CORS + API key
       // exposure). The function lives at supabase/functions/extract-document
@@ -189,7 +189,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
           max_tokens: 2048,
         },
       });
-
+ 
       if (fnError) {
         // supabase-js v2.x wraps non-2xx responses in FunctionsHttpError
         // with a generic message. The real error from our Edge Function
@@ -209,7 +209,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
         } else {
           detail = fnError.message;
         }
-
+ 
         // Translate common Anthropic errors into plain language
         if (/invalid_request_error|could not process/i.test(detail)) {
           detail = 'The AI could not read this document. Try re-scanning it as a cleaner PDF or image, or reduce the file size.';
@@ -218,17 +218,17 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
         } else if (/authentication|unauthorized|api.key/i.test(detail)) {
           detail = 'AI extraction is temporarily unavailable (configuration issue). Liam has been notified — please enter this referral manually for now.';
         }
-
+ 
         throw new Error(detail);
       }
       if (data?.error) throw new Error(data.error);
-
+ 
       const text = data?.content?.find(b => b.type === 'text')?.text || '';
-
+ 
       // Parse JSON from response
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('Could not parse extraction result. The document may not be readable.');
-
+ 
       const parsed = JSON.parse(jsonMatch[0]);
       setExtracted(parsed);
       setEditedData({ ...parsed });
@@ -237,17 +237,17 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
     }
     setExtracting(false);
   }
-
+ 
   function handleApplyToForm() {
     // For intake mode: don't save directly — pass data back to the form
     // so the user can review, add region, and submit through normal flow
     onExtracted?.(editedData, file);
   }
-
+ 
   async function handleSaveToSupabase() {
     if (!editedData) return;
     setSaving(true);
-
+ 
     try {
       // Upload file to storage first
       let filePath = uploadPath;
@@ -261,7 +261,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
         if (up?.path) filePath = up.path;
         setUploadPath(filePath);
       }
-
+ 
       if (mode === 'intake') {
         // Intake mode: pass data to form instead of saving directly.
         // This ensures the user reviews data, selects region (required),
@@ -272,7 +272,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
       } else {
         // Auth mode — save to auth_tracker
         const patientName = editedData.patient_name || null;
-
+ 
         // Detect whether this is a renewal: does this patient already have an active auth?
         var isRenewal = false;
         if (patientName) {
@@ -283,7 +283,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
             .limit(1);
           isRenewal = existingAuths && existingAuths.length > 0;
         }
-
+ 
         // --- Insurance-type heuristic fallback ---
         // If the AI didn't extract insurance_type (or defaulted to null),
         // infer from the carrier name + any plan keywords in the extracted fields.
@@ -296,7 +296,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
           else if (/\bhmo\b/i.test(haystack))                   inferredInsType = 'hmo';
           else inferredInsType = editedData.insurance_type || 'standard';
         }
-
+ 
         const payload = {
           patient_name: patientName,
           dob: editedData.dob || null,
@@ -322,7 +322,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
         };
         const { data: authRow, error: dbErr } = await supabase.from('auth_tracker').insert(payload).select('id').single();
         if (dbErr) throw new Error(dbErr.message);
-
+ 
         // Save document to auth_documents if file uploaded
         if (filePath && authRow?.id) {
           await supabase.from('auth_documents').insert({
@@ -334,7 +334,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
             uploaded_by: 'AI Extractor',
           });
         }
-
+ 
         // Recompute auth sequence for this patient — chains predecessor → successor,
         // locks visits on the renewal until predecessor is exhausted, and updates
         // is_currently_active + effective_visits_remaining across all auths.
@@ -342,7 +342,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
           await supabase.rpc('recompute_auth_sequence', { p_patient_name: patientName });
         }
       }
-
+ 
       setSaved(true);
       onExtracted?.(editedData);
     } catch (err) {
@@ -350,11 +350,11 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
     }
     setSaving(false);
   }
-
+ 
   function setField(key, val) {
     setEditedData(p => ({ ...p, [key]: val }));
   }
-
+ 
   const intakeFields = [
     ['patient_name','Patient Name'],['dob','Date of Birth'],['phone','Phone'],
     ['address','Address'],['city','City'],['zip_code','Zip'],['county','County'],
@@ -364,7 +364,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
     ['pcp_name','PCP Name'],['pcp_phone','PCP Phone'],['pcp_fax','PCP Fax'],
     ['notes','Notes'],
   ];
-
+ 
   const authFields = [
     ['patient_name','Patient Name'],['dob','Date of Birth'],['member_id','Member ID'],
     ['insurance','Insurance'],['auth_number','Auth Number'],['auth_status','Auth Status'],
@@ -373,10 +373,10 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
     ['frequency','Frequency'],['pcp_name','PCP Name'],['pcp_phone','PCP Phone'],['pcp_fax','PCP Fax'],
     ['denial_reason','Denial Reason'],['notes','Notes'],
   ];
-
+ 
   const fields = mode === 'intake' ? intakeFields : authFields;
   const filledCount = editedData ? fields.filter(([k]) => editedData[k]).length : 0;
-
+ 
   return (
     <div
       onClick={e => { if (e.target === e.currentTarget && !extracting && !saving) onClose?.(); }}
@@ -384,7 +384,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
       <div
         onClick={e => e.stopPropagation()}
         style={{ background:'var(--card-bg)', borderRadius:16, width:'100%', maxWidth:760, maxHeight:'92vh', display:'flex', flexDirection:'column', boxShadow:'0 24px 60px rgba(0,0,0,0.35)' }}>
-
+ 
         {/* Header */}
         <div style={{ padding:'18px 24px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:cfg.bg, borderRadius:'16px 16px 0 0' }}>
           <div style={{ display:'flex', alignItems:'center', gap:12 }}>
@@ -396,7 +396,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
           </div>
           <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'var(--gray)' }}>×</button>
         </div>
-
+ 
         <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:0 }}>
           {/* Upload section */}
           <div style={{ padding:20, borderBottom:'1px solid var(--border)' }}>
@@ -425,7 +425,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
               )}
               <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.tiff" onChange={handleFileChange} style={{ display:'none' }} />
             </div>
-
+ 
             {file && !extracted && (
               <button onClick={handleExtract} disabled={extracting}
                 style={{ marginTop:12, width:'100%', padding:'11px 0', background:cfg.color, color:'#fff', border:'none', borderRadius:8, fontSize:14, fontWeight:700, cursor:extracting?'wait':'pointer', opacity:extracting?0.8:1, display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
@@ -436,7 +436,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
                 )}
               </button>
             )}
-
+ 
             {error && (
               <div style={{ marginTop:10, padding:'12px 14px', background:'#FEF2F2', border:'1px solid #FCA5A5', borderRadius:8 }}>
                 <div style={{ fontSize:12, color:'#DC2626', fontWeight:600, marginBottom:6 }}>{error}</div>
@@ -452,7 +452,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
               </div>
             )}
           </div>
-
+ 
           {/* Extracted results */}
           {editedData && (
             <div style={{ padding:20 }}>
@@ -472,7 +472,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
                   <div style={{ fontSize:11, fontWeight:700, color:filledCount/fields.length>=0.7?'#065F46':'#D97706' }}>{Math.round(filledCount/fields.length*100)}%</div>
                 </div>
               </div>
-
+ 
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0 20px' }}>
                 {fields.map(([key, label]) => (
                   <FieldRow key={key} label={label} value={editedData[key]} editable onChange={v => setField(key, v)} />
@@ -481,7 +481,7 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
             </div>
           )}
         </div>
-
+ 
         {/* Footer */}
         {editedData && (
           <div style={{ padding:'14px 24px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--bg)' }}>
@@ -526,3 +526,4 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
     </div>
   );
 }
+ 
