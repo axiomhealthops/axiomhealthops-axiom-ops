@@ -140,4 +140,3 @@ export function useRealtimeTable(tables, onDataChange) {
     Array.isArray(tables) ? tables.join(',') : tables,
   ]);
 }
- 
