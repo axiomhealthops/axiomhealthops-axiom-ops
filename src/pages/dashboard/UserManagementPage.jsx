@@ -3,18 +3,18 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-
+ 
 const ROLES = ['super_admin','admin','assoc_director','regional_manager','auth_coordinator','intake_coordinator','care_coordinator','telehealth','clinician'];
 const ROLE_LABELS = { super_admin:'Super Admin', admin:'Director / Admin', assoc_director:'Assoc. Director of Clinical Ops', regional_manager:'Regional Manager', telehealth:'Telehealth PT/OT', auth_coordinator:'Auth Coordinator', intake_coordinator:'Intake Coordinator', care_coordinator:'Care Coordinator', clinician:'Clinician' };
 const ROLE_COLORS = { super_admin:'#DC2626', admin:'#7C3AED', assoc_director:'#0369A1', regional_manager:'#0E7490', telehealth:'#0D9488', auth_coordinator:'#1565C0', intake_coordinator:'#065F46', care_coordinator:'#D97706', clinician:'#059669' };
 const ROLE_BGS   = { super_admin:'#FEF2F2', admin:'#F5F3FF', assoc_director:'#E0F2FE', regional_manager:'#ECFEFF', telehealth:'#F0FDFA', auth_coordinator:'#EFF6FF', intake_coordinator:'#ECFDF5', care_coordinator:'#FEF3C7', clinician:'#F0FFF4' };
 const ALL_REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
-
+ 
 function genPassword() {
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
   return Array.from({length:12}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
 }
-
+ 
 function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUpdate, onDeactivate, onToggleOverride, onSendReset, onSetPassword }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({ role:user.role, regions:user.regions||[], job_title:user.job_title||'', is_swift_team:user.is_swift_team||false, email:user.email||'' });
@@ -23,13 +23,15 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
   const [newPwd, setNewPwd] = useState('');
   const [pwdMsg, setPwdMsg] = useState('');
   const [resetMsg, setResetMsg] = useState('');
+  const [recoveryLink, setRecoveryLink] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
   const userOverrides = overrides[user.id] || {};
-
+ 
   function getRoleDefault(page, role) {
     if (role === 'super_admin') return true;
     return page[role];
   }
-
+ 
   async function handleSave() {
     setSaving(true);
     // Update email if changed
@@ -40,60 +42,65 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
     setSaving(false);
     setIsEditing(false);
   }
-
+ 
   async function handleSetPassword() {
     if (!newPwd || newPwd.length < 8) { setPwdMsg('Min 8 characters required'); return; }
     if (!user.user_id) { setPwdMsg('No auth account linked — create one first via User Management'); return; }
     setSaving(true);
     setPwdMsg('');
-
-    // Try dedicated password function first, fall back to combined function
-    let result = null;
-    let rpcError = null;
-
-    const { data: d1, error: e1 } = await supabase.rpc('admin_set_password', {
-      target_user_id: user.user_id,
-      new_password: newPwd,
+ 
+    const { data, error } = await supabase.functions.invoke('admin-user-actions', {
+      body: { action: 'set_password', target_user_id: user.user_id, new_password: newPwd },
     });
-
-    if (e1) {
-      // Fallback to original combined function
-      const { data: d2, error: e2 } = await supabase.rpc('admin_update_user', {
-        target_user_id: user.user_id,
-        new_password: newPwd,
-      });
-      result = d2;
-      rpcError = e2;
-    } else {
-      result = d1;
-    }
-
-    if (rpcError) {
-      setPwdMsg('RPC error: ' + rpcError.message);
-    } else if (result?.success) {
-      setPwdMsg('✓ Password updated successfully');
+ 
+    if (error) {
+      // functions.invoke returns FunctionsHttpError when status !== 2xx — try to read the JSON body for detail
+      let detail = error.message;
+      try { detail = (await error.context?.json?.())?.error || detail; } catch {}
+      setPwdMsg('Failed: ' + detail);
+    } else if (data?.success) {
+      setPwdMsg('✓ ' + (data.message || 'Password updated'));
       setNewPwd('');
     } else {
-      setPwdMsg('Failed: ' + (result?.error || 'Unknown error — check Supabase RLS policies'));
+      setPwdMsg('Failed: ' + (data?.error || data?.detail || 'Unknown error'));
     }
     setSaving(false);
   }
-
+ 
   async function handleSendReset() {
     setSaving(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
-      redirectTo: 'https://axiomhealthops-axiom-ops.vercel.app/reset-password'
+    setResetMsg('');
+    setRecoveryLink('');
+    setLinkCopied(false);
+    const { data, error } = await supabase.functions.invoke('admin-user-actions', {
+      body: { action: 'send_reset', target_user_id: user.user_id },
     });
-    setResetMsg(error ? 'Error: ' + error.message : '✓ Reset email sent to ' + user.email);
+    if (error) {
+      let detail = error.message;
+      try { detail = (await error.context?.json?.())?.error || detail; } catch {}
+      setResetMsg('Error: ' + detail);
+    } else if (data?.success) {
+      setResetMsg(data.email_sent
+        ? ('✓ ' + (data.message || ('Reset email sent to ' + user.email)))
+        : ('⚠ ' + (data.message || 'Email failed — use the link below')));
+      if (data.recovery_link) setRecoveryLink(data.recovery_link);
+    } else {
+      setResetMsg('Error: ' + (data?.error || data?.detail || 'Unknown error'));
+    }
     setSaving(false);
   }
-
+ 
+  async function copyRecoveryLink() {
+    if (!recoveryLink) return;
+    try { await navigator.clipboard.writeText(recoveryLink); setLinkCopied(true); setTimeout(() => setLinkCopied(false), 2500); } catch {}
+  }
+ 
   const tabStyle = (t) => ({
     padding:'6px 14px', border:'none', background:'none', fontSize:12, fontWeight:tab===t?700:400,
     color:tab===t?'var(--black)':'var(--gray)', borderBottom:tab===t?'2px solid var(--red)':'2px solid transparent',
     cursor:'pointer'
   });
-
+ 
   return (
     <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
       {/* Header */}
@@ -131,7 +138,7 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
           </div>
         )}
       </div>
-
+ 
       {/* Edit panel */}
       {isEditing && (
         <div style={{ borderTop:'1px solid var(--border)', background:'var(--bg)' }}>
@@ -141,7 +148,7 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
               <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{l}</button>
             ))}
           </div>
-
+ 
           <div style={{ padding:20 }}>
             {/* DETAILS TAB */}
             {tab === 'details' && (
@@ -209,7 +216,7 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
                 </div>
               </>
             )}
-
+ 
             {/* ACCESS TAB */}
             {tab === 'access' && (
               <>
@@ -235,7 +242,7 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
                 </div>
               </>
             )}
-
+ 
             {/* PASSWORD TAB */}
             {tab === 'password' && (
               <div style={{ display:'flex', flexDirection:'column', gap:16, maxWidth:500 }}>
@@ -250,8 +257,21 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
                     style={{ padding:'8px 16px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
                     {saving ? 'Sending…' : '📧 Send Reset Link'}
                   </button>
+                  {recoveryLink && (
+                    <div style={{ marginTop:12, padding:10, background:'#F8FAFC', border:'1px solid #E2E8F0', borderRadius:8 }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:'var(--gray)', marginBottom:6 }}>Recovery link (valid ~1 hour)</div>
+                      <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                        <input readOnly value={recoveryLink} onFocus={e => e.target.select()}
+                          style={{ flex:1, padding:'6px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, fontFamily:'ui-monospace, monospace', background:'#fff' }} />
+                        <button onClick={copyRecoveryLink}
+                          style={{ padding:'6px 12px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, background:linkCopied?'#ECFDF5':'var(--card-bg)', color:linkCopied?'#065F46':'var(--black)', cursor:'pointer', fontWeight:600, whiteSpace:'nowrap' }}>
+                          {linkCopied ? '✓ Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-
+ 
                 {/* Manual Password Set */}
                 {isSuperAdmin && (
                   <div style={{ padding:16, background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10 }}>
@@ -282,7 +302,7 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
     </div>
   );
 }
-
+ 
 export default function UserManagementPage() {
   const { profile } = useAuth();
   const [users, setUsers] = useState([]);
@@ -294,10 +314,10 @@ export default function UserManagementPage() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [newUser, setNewUser] = useState({ full_name:'', email:'', role:'care_coordinator', regions:[], job_title:'', is_swift_team:false, password:'' });
-
+ 
   const isSuperAdmin = profile?.role === 'super_admin';
   const isAdmin = profile?.role === 'admin' || isSuperAdmin;
-
+ 
   async function loadData() {
     const [{ data:u }, { data:p }, { data:o }, { data:authUsers }] = await Promise.all([
       supabase.from('coordinators').select('*').order('full_name'),
@@ -315,14 +335,14 @@ export default function UserManagementPage() {
     setOverrides(map);
     setLoading(false);
   }
-
+ 
   useEffect(() => { loadData(); }, []);
   useRealtimeTable(['coordinators', 'page_permissions', 'user_page_overrides'], loadData);
-
+ 
   async function addUser() {
     if (!newUser.full_name || !newUser.email) { setMsg('Name and email required'); return; }
     setSaving(true); setMsg('');
-
+ 
     // Use the server-side RPC to create auth user + coordinator in one transaction
     const { data, error } = await supabase.rpc('admin_create_user', {
       p_email: newUser.email,
@@ -339,7 +359,7 @@ export default function UserManagementPage() {
         is_swift_team: newUser.is_swift_team || false,
       }).eq('email', newUser.email.toLowerCase());
     }
-
+ 
     if (error) {
       setMsg('Error: ' + error.message);
       setSaving(false);
@@ -350,7 +370,7 @@ export default function UserManagementPage() {
       setSaving(false);
       return;
     }
-
+ 
     const pwdNote = newUser.password ? ' Password set as specified.' : ' Use Manage → Password to set their password.';
     setMsg('✓ Account created successfully.' + pwdNote);
     setNewUser({ full_name:'', email:'', role:'care_coordinator', regions:[], job_title:'', is_swift_team:false, password:'' });
@@ -358,12 +378,12 @@ export default function UserManagementPage() {
     setSaving(false);
     await loadData();
   }
-
+ 
   async function updateUser(userId, updates) {
     await supabase.from('coordinators').update({ ...updates, updated_at:new Date().toISOString() }).eq('id', userId);
     await loadData();
   }
-
+ 
   async function deleteUser(coordinatorId, authUserId) {
     if (!window.confirm('Permanently delete this account? This cannot be undone.')) return;
     // Delete auth account via RPC if it exists
@@ -374,12 +394,12 @@ export default function UserManagementPage() {
     await supabase.from('coordinators').delete().eq('id', coordinatorId);
     await loadData();
   }
-
+ 
   async function deactivateUser(userId, isActive) {
     await supabase.from('coordinators').update({ is_active: !isActive }).eq('id', userId);
     await loadData();
   }
-
+ 
   async function toggleOverride(coordinatorId, pageKey, currentVal) {
     const existing = overrides[coordinatorId]?.[pageKey];
     if (existing !== undefined) {
@@ -389,20 +409,20 @@ export default function UserManagementPage() {
     }
     await loadData();
   }
-
+ 
   const filtered = users.filter(u =>
     (u.full_name||'').toLowerCase().includes(search.toLowerCase()) ||
     (u.email||'').toLowerCase().includes(search.toLowerCase()) ||
     (u.role||'').toLowerCase().includes(search.toLowerCase())
   );
-
+ 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="User Management" subtitle="Loading…" />
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading…</div>
     </div>
   );
-
+ 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar title="User Management" subtitle={`${users.length} users · ${users.filter(u=>u.is_active!==false).length} active`}
@@ -419,7 +439,7 @@ export default function UserManagementPage() {
         }
       />
       <div style={{ flex:1, overflow:'auto', padding:20, display:'flex', flexDirection:'column', gap:12 }}>
-
+ 
         {/* Add user panel */}
         {showAdd && (
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:20 }}>
@@ -460,10 +480,10 @@ export default function UserManagementPage() {
             </div>
           </div>
         )}
-
+ 
         <input placeholder="Search by name, email, or role…" value={search} onChange={e => setSearch(e.target.value)}
           style={{ padding:'8px 14px', border:'1px solid var(--border)', borderRadius:8, fontSize:13, outline:'none', background:'var(--card-bg)', width:320 }} />
-
+ 
         {filtered.map(user => (
           <UserCard key={user.id} user={user} profile={profile} pages={pages} overrides={overrides}
             isSuperAdmin={isSuperAdmin} isAdmin={isAdmin}
@@ -473,3 +493,4 @@ export default function UserManagementPage() {
     </div>
   );
 }
+ 
