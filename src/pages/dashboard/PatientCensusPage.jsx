@@ -6,6 +6,7 @@ import StatusChangeModal from '../../components/StatusChangeModal';
 import ScheduleVisitModal from '../../components/ScheduleVisitModal';
 import { supabase } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
+import { useAuth } from '../../hooks/useAuth';
 
 const FREQUENCY_OPTIONS = ['1x/week','2x/week','3x/week','4x/week','5x/week','1x/month','2x/month','PRN','Daily'];
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
@@ -37,6 +38,318 @@ function EditField({ label, name, type='text', opts, value, onChange }) {
         <input type={type} value={value||''} onChange={e => onChange(name, e.target.value)}
           style={{ width:'100%', padding:'6px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:12, outline:'none', boxSizing:'border-box', background:'var(--card-bg)' }} />
       )}
+    </div>
+  );
+}
+
+// CareTeamTab — patient profile section for managing assigned PTs/OTs/PTAs/COTAs.
+// Backed by patient_clinician_assignments. Multi-clinician supported: one
+// active "lead" per discipline (PT/OT) plus any number of "assistants"
+// (PTA/COTA). Recommendations are scored by discipline match, region match,
+// optional zip-prefix match (when both sides have zip), and current capacity
+// (lower utilization = better candidate).
+function CareTeamTab({ patient }) {
+  const { profile } = useAuth();
+  const [assignments, setAssignments] = useState([]);
+  const [clinicians, setClinicians] = useState([]);
+  const [caseloadById, setCaseloadById] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [busy, setBusy] = useState('');
+
+  // Patient key fallback: real census patient_key if present, else patient_name.
+  const patientKey = patient.patient_key || patient.patient_name;
+  // Extract zip from patient address ("32714: Altamonte Springs") if present.
+  const patientZip = (() => {
+    const m = (patient.address || '').match(/^(\d{5})/);
+    return m ? m[1] : (patient.zip || null);
+  })();
+  const patientZipPrefix = patientZip ? patientZip.slice(0, 3) : null;
+
+  async function reload() {
+    setLoading(true);
+    const [{ data: aRows }, { data: cRows }, { data: cl }] = await Promise.all([
+      supabase.from('patient_clinician_assignments')
+        .select('*')
+        .eq('patient_key', patientKey)
+        .eq('is_active', true)
+        .order('discipline').order('role'),
+      supabase.from('patient_clinician_assignments')
+        .select('clinician_id')
+        .eq('is_active', true),
+      supabase.from('clinicians').select('*').eq('is_active', true).order('full_name'),
+    ]);
+    setAssignments(aRows || []);
+    setClinicians(cl || []);
+    const caseload = {};
+    (cRows || []).forEach(r => { caseload[r.clinician_id] = (caseload[r.clinician_id] || 0) + 1; });
+    setCaseloadById(caseload);
+    setLoading(false);
+  }
+
+  useEffect(() => { reload(); }, [patientKey]);
+
+  async function removeAssignment(a) {
+    if (!window.confirm(`Remove ${a.discipline} ${a.role} ${clinicianNameById(a.clinician_id)} from this patient?`)) return;
+    setBusy('remove-' + a.id);
+    await supabase.from('patient_clinician_assignments').update({
+      is_active: false,
+      ended_at: new Date().toISOString(),
+      ended_by: profile?.full_name || profile?.email || null,
+      end_reason: 'manual removal',
+    }).eq('id', a.id);
+    setBusy('');
+    await reload();
+  }
+
+  function clinicianNameById(id) {
+    const c = clinicians.find(x => x.id === id);
+    return c?.full_name || '(unknown)';
+  }
+  function clinicianById(id) { return clinicians.find(x => x.id === id); }
+
+  // Group active assignments by discipline + role for the render
+  const grouped = useMemo(() => {
+    const byDisc = {};
+    ['PT','OT','PTA','COTA'].forEach(d => { byDisc[d] = { lead: [], assistant: [] }; });
+    assignments.forEach(a => {
+      if (!byDisc[a.discipline]) byDisc[a.discipline] = { lead: [], assistant: [] };
+      byDisc[a.discipline][a.role].push(a);
+    });
+    return byDisc;
+  }, [assignments]);
+
+  if (loading) return <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>Loading care team…</div>;
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+      {/* Patient context strip */}
+      <div style={{ background:'var(--bg)', borderRadius:10, padding:'10px 14px', display:'flex', gap:18, alignItems:'center', flexWrap:'wrap', fontSize:11 }}>
+        <span><span style={{ color:'var(--gray)' }}>Region:</span> <strong>{patient.region || '—'}</strong></span>
+        <span><span style={{ color:'var(--gray)' }}>Zip:</span> <strong>{patientZip || '—'}</strong></span>
+        <span><span style={{ color:'var(--gray)' }}>Cadence:</span> <strong>{patient.inferred_frequency || patient.current_visit_cadence || '—'}</strong></span>
+        <span style={{ marginLeft:'auto', color:'var(--gray)' }}>{assignments.length} active assignment{assignments.length===1?'':'s'}</span>
+      </div>
+
+      {/* Lead therapists */}
+      <CareTeamGroup
+        title="Lead Therapists (PT / OT)"
+        subtitle="One active lead per discipline. Performs eval + oversight."
+        disciplines={['PT','OT']}
+        role="lead"
+        grouped={grouped}
+        clinicianById={clinicianById}
+        onRemove={removeAssignment}
+        onAdd={(disc) => setShowAdd({ discipline: disc, role: 'lead' })}
+        busy={busy}
+      />
+
+      {/* Assistants */}
+      <CareTeamGroup
+        title="Assistants (PTA / COTA)"
+        subtitle="Multiple assistants allowed per discipline. Provide ongoing visits under lead supervision."
+        disciplines={['PTA','COTA']}
+        role="assistant"
+        grouped={grouped}
+        clinicianById={clinicianById}
+        onRemove={removeAssignment}
+        onAdd={(disc) => setShowAdd({ discipline: disc, role: 'assistant' })}
+        busy={busy}
+        multi
+      />
+
+      {showAdd && (
+        <AddAssignmentModal
+          patient={patient}
+          patientKey={patientKey}
+          patientRegion={patient.region}
+          patientZipPrefix={patientZipPrefix}
+          discipline={showAdd.discipline}
+          role={showAdd.role}
+          clinicians={clinicians}
+          caseloadById={caseloadById}
+          existingAssignments={assignments}
+          assignedBy={profile?.full_name || profile?.email || null}
+          onClose={() => setShowAdd(false)}
+          onSaved={() => { setShowAdd(false); reload(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CareTeamGroup({ title, subtitle, disciplines, role, grouped, clinicianById, onRemove, onAdd, busy, multi }) {
+  return (
+    <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+      <div style={{ padding:'10px 14px', background:'var(--bg)', borderBottom:'1px solid var(--border)' }}>
+        <div style={{ fontSize:12, fontWeight:700 }}>{title}</div>
+        <div style={{ fontSize:10, color:'var(--gray)', marginTop:2 }}>{subtitle}</div>
+      </div>
+      <div style={{ padding:'10px 14px', display:'flex', flexDirection:'column', gap:8 }}>
+        {disciplines.map(disc => {
+          const rows = grouped[disc]?.[role] || [];
+          return (
+            <div key={disc} style={{ borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)' }}>
+              <div style={{ padding:'8px 12px', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom: rows.length > 0 ? '1px solid var(--border)' : 'none' }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'#1565C0' }}>{disc}</div>
+                <button onClick={() => onAdd(disc)} disabled={!multi && rows.length >= 1}
+                  style={{ padding:'4px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, background:'var(--card-bg)', cursor:(!multi && rows.length >= 1) ? 'not-allowed' : 'pointer', color:(!multi && rows.length >= 1) ? 'var(--gray)' : '#1565C0', fontWeight:600 }}>
+                  + {multi ? 'Add ' : 'Assign '}{disc}
+                </button>
+              </div>
+              {rows.length === 0 ? (
+                <div style={{ padding:'8px 12px', fontSize:11, color:'var(--gray)', fontStyle:'italic' }}>None assigned</div>
+              ) : rows.map(a => {
+                const c = clinicianById(a.clinician_id);
+                return (
+                  <div key={a.id} style={{ padding:'8px 12px', display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:12 }}>
+                    <div>
+                      <div style={{ fontWeight:600 }}>{c?.full_name || '(removed clinician)'}</div>
+                      <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>
+                        Region {c?.region || '—'} · Target {c?.weekly_visit_target || '?'}/wk · Assigned {fmtDate(a.assigned_at?.slice(0,10))}{a.assigned_by ? ' by ' + a.assigned_by : ''}
+                      </div>
+                    </div>
+                    <button onClick={() => onRemove(a)} disabled={busy === 'remove-' + a.id}
+                      style={{ padding:'3px 10px', border:'1px solid #FECACA', borderRadius:5, fontSize:10, background:'#FEF2F2', color:'#DC2626', cursor:'pointer', fontWeight:600 }}>
+                      {busy === 'remove-' + a.id ? '…' : 'Remove'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AddAssignmentModal({ patient, patientKey, patientRegion, patientZipPrefix, discipline, role, clinicians, caseloadById, existingAssignments, assignedBy, onClose, onSaved }) {
+  const [selectedId, setSelectedId] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [showAll, setShowAll] = useState(false);
+
+  // Compute ranked recommendations
+  const ranked = useMemo(() => {
+    const already = new Set(existingAssignments.filter(a => a.is_active).map(a => a.clinician_id));
+    const candidates = clinicians.filter(c =>
+      c.is_active &&
+      c.discipline === discipline &&
+      !already.has(c.id)
+    );
+    return candidates.map(c => {
+      // Region match: exact, 'All', or comma-list contains
+      const regions = (c.region || '').split(',').map(r => r.trim());
+      const regionMatch = regions.includes(patientRegion) || regions.includes('All');
+      // Zip prefix match (3-digit)
+      const zipMatch = !!(patientZipPrefix && c.zip && c.zip.slice(0,3) === patientZipPrefix);
+      // Capacity: caseload / target. Lower utilization = more available.
+      const caseload = caseloadById[c.id] || 0;
+      const target = c.weekly_visit_target || 1;
+      const utilization = caseload / target;
+      const capacityScore = Math.max(0, 1 - utilization); // 1 = totally free, 0+ = overloaded
+      // Composite score (weighted)
+      const score = (regionMatch ? 0.45 : 0) + (zipMatch ? 0.20 : 0) + (capacityScore * 0.35);
+      return { ...c, regionMatch, zipMatch, caseload, utilization, capacityScore, score };
+    }).sort((a, b) => b.score - a.score);
+  }, [clinicians, caseloadById, existingAssignments, discipline, patientRegion, patientZipPrefix]);
+
+  // Visible list: top-5 unless showAll
+  const displayList = showAll ? ranked : ranked.slice(0, 5);
+
+  async function save() {
+    if (!selectedId) return;
+    setSaving(true);
+    setErr('');
+    const { error } = await supabase.from('patient_clinician_assignments').insert({
+      patient_key: patientKey,
+      patient_name: patient.patient_name,
+      clinician_id: selectedId,
+      role,
+      discipline,
+      is_active: true,
+      assigned_by: assignedBy,
+      notes: notes || null,
+    });
+    setSaving(false);
+    if (error) { setErr(error.message); return; }
+    onSaved();
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:560, boxShadow:'0 24px 60px rgba(0,0,0,0.4)', maxHeight:'85vh', display:'flex', flexDirection:'column' }}>
+        <div style={{ padding:'14px 20px', background:'#0F1117', borderRadius:'14px 14px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div>
+            <div style={{ fontSize:14, fontWeight:700, color:'#fff' }}>Assign {discipline} {role === 'lead' ? 'Lead' : 'Assistant'}</div>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.6)', marginTop:2 }}>{patient.patient_name} · Region {patientRegion || '—'}{patientZipPrefix ? ' · Zip ' + patientZipPrefix + 'xx' : ''}</div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'rgba(255,255,255,0.5)' }}>×</button>
+        </div>
+
+        <div style={{ padding:'14px 20px', overflowY:'auto', flex:1 }}>
+          <div style={{ fontSize:11, color:'var(--gray)', marginBottom:8 }}>
+            Showing top recommendations. Score combines region match, zip-prefix proximity, and current capacity (lower caseload ranks higher).
+          </div>
+
+          {ranked.length === 0 ? (
+            <div style={{ padding:'20px 0', textAlign:'center', color:'var(--gray)', fontSize:12 }}>
+              No active {discipline}s available (everyone is already assigned or none exist on the roster).
+            </div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              {displayList.map((c, idx) => {
+                const isSelected = selectedId === c.id;
+                const isTop = idx === 0;
+                const utilizationPct = Math.round(c.utilization * 100);
+                const utilColor = c.utilization < 0.6 ? '#065F46' : c.utilization < 0.9 ? '#D97706' : '#DC2626';
+                return (
+                  <button key={c.id} onClick={() => setSelectedId(c.id)}
+                    style={{ padding:'10px 12px', borderRadius:8, border:`2px solid ${isSelected ? '#1565C0' : 'var(--border)'}`, background: isSelected ? '#EFF6FF' : 'var(--card-bg)', cursor:'pointer', textAlign:'left', display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:13, fontWeight: isSelected ? 700 : 600, color: isSelected ? '#1565C0' : 'var(--black)', display:'flex', alignItems:'center', gap:6 }}>
+                        {isTop && <span style={{ fontSize:11, color:'#D97706' }}>⭐</span>}
+                        {c.full_name}
+                      </div>
+                      <div style={{ fontSize:10, color:'var(--gray)', marginTop:2, display:'flex', gap:8, flexWrap:'wrap' }}>
+                        <span>Region {c.region || '—'}</span>
+                        {c.regionMatch && <span style={{ color:'#065F46', fontWeight:600 }}>✓ region</span>}
+                        {c.zipMatch && <span style={{ color:'#065F46', fontWeight:600 }}>✓ zip</span>}
+                        <span style={{ color: utilColor, fontWeight:600 }}>{c.caseload} pts · {utilizationPct}% util</span>
+                      </div>
+                    </div>
+                    <div style={{ fontSize:10, color:'var(--gray)', fontFamily:'DM Mono, monospace' }}>{(c.score * 100).toFixed(0)}</div>
+                  </button>
+                );
+              })}
+              {!showAll && ranked.length > 5 && (
+                <button onClick={() => setShowAll(true)}
+                  style={{ marginTop:4, padding:'6px', border:'1px dashed var(--border)', borderRadius:6, background:'var(--bg)', fontSize:11, color:'var(--gray)', cursor:'pointer' }}>
+                  Show all {ranked.length} candidates →
+                </button>
+              )}
+            </div>
+          )}
+
+          <div style={{ marginTop:14 }}>
+            <label style={{ fontSize:10, fontWeight:700, display:'block', marginBottom:4, color:'var(--gray)' }}>Notes (optional)</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. patient preference, geographic logistics, availability…"
+              style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', boxSizing:'border-box', background:'var(--bg)' }} />
+          </div>
+
+          {err && <div style={{ marginTop:10, padding:'8px 10px', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:6, fontSize:11, color:'#DC2626' }}>Error: {err}</div>}
+        </div>
+
+        <div style={{ padding:'10px 20px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)', borderRadius:'0 0 14px 14px' }}>
+          <button onClick={onClose} style={{ padding:'7px 14px', border:'1px solid var(--border)', borderRadius:7, fontSize:12, cursor:'pointer', background:'var(--card-bg)' }}>Cancel</button>
+          <button onClick={save} disabled={!selectedId || saving}
+            style={{ padding:'7px 18px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:700, cursor: selectedId ? 'pointer' : 'not-allowed', opacity: selectedId ? 1 : 0.4 }}>
+            {saving ? 'Assigning…' : 'Assign'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -453,6 +766,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
         <div style={{ display:'flex', borderBottom:'1px solid var(--border)', padding:'0 24px', overflowX:'auto' }}>
           {TAB('overview','Overview')}
           {TAB('schedule','Schedule')}
+          {TAB('care','Care Team')}
           {TAB('referral','Referral')}
           {TAB('auth','Authorization')}
           {TAB('history','Visit History')}
@@ -527,7 +841,9 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
           )}
 
           {/* OVERVIEW */}
-          {tab === 'overview' && (
+          {tab === 'care' && <CareTeamTab patient={patient} />}
+
+                    {tab === 'overview' && (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
               <div style={{ background:'var(--bg)', borderRadius:10, padding:16 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'var(--gray)', marginBottom:12, textTransform:'uppercase', letterSpacing:'0.05em' }}>Contact Information</div>
