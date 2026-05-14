@@ -2,10 +2,10 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
- 
+
 const BLENDED_RATE = 185;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
- 
+
 function fmtDate(d) {
   if (!d) return '—';
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -20,7 +20,7 @@ function pctBg(pct) {
   if (pct >= 60) return '#FEF3C7';
   return '#FEF2F2';
 }
- 
+
 function CliniciansTab({ clinicians, visits, census }) {
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [filterDiscipline, setFilterDiscipline] = useState('ALL');
@@ -31,13 +31,13 @@ function CliniciansTab({ clinicians, visits, census }) {
   // summary tile narrows the table to that cohort. 'ALL' = no scope.
   // Scopes: 'under30' / 'under60' / 'hasInactive'
   const [scope, setScope] = useState('ALL');
- 
+
   const weekStart = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1));
     return d.toISOString().slice(0, 10);
   }, []);
- 
+
   const clinicianStats = useMemo(() => {
     // Single source of truth for resolving a name string (Pariox visits OR
     // census last-clinician) back to a roster clinician. Includes each
@@ -53,7 +53,7 @@ function CliniciansTab({ clinicians, visits, census }) {
         if (ak) nameToId[ak] = cl.id;
       });
     });
- 
+
     // Visit stats keyed by clinician.id so aliases roll up to one row.
     const weekVisits = visits.filter(v => v.visit_date >= weekStart);
     const visitMap = {};
@@ -66,7 +66,7 @@ function CliniciansTab({ clinicians, visits, census }) {
       else if (/cancel/i.test(v.status || '') || /cancel/i.test(v.event_type || '')) visitMap[cid].cancelled++;
       else if (/missed/i.test(v.status || '')) visitMap[cid].missed++;
     });
- 
+
     // Inactive-patient map keyed by clinician.id, using the same alias index.
     // Frequency-aware overdue: each patient has their own threshold (4w4→3d, 2w4→4d, 1w4→10d, 1em1→30d, 1em2→60d).
     const inactiveMap = {};
@@ -82,7 +82,7 @@ function CliniciansTab({ clinicians, visits, census }) {
       if (!inactiveMap[cid]) inactiveMap[cid] = [];
       inactiveMap[cid].push(p);
     });
- 
+
     return clinicians
       .filter(cl => cl.is_active && (cl.weekly_visit_target || 0) >= 5)
       .map(cl => {
@@ -107,7 +107,7 @@ function CliniciansTab({ clinicians, visits, census }) {
         };
       });
   }, [clinicians, visits, census, weekStart]);
- 
+
   const filtered = useMemo(() => {
     let list = clinicianStats;
     if (filterRegion !== 'ALL') list = list.filter(c => c.region === filterRegion || c.region === 'All');
@@ -121,7 +121,7 @@ function CliniciansTab({ clinicians, visits, census }) {
       return sortDir === 'asc' ? (av - bv) : (bv - av);
     });
   }, [clinicianStats, filterRegion, filterDiscipline, sortField, sortDir, scope]);
- 
+
   const summary = useMemo(() => ({
     under60: clinicianStats.filter(c => c.utilization < 60).length,
     under30: clinicianStats.filter(c => c.utilization < 30).length,
@@ -129,14 +129,14 @@ function CliniciansTab({ clinicians, visits, census }) {
     totalRevenueGap: clinicianStats.reduce((s, c) => s + c.revenueGap, 0),
     avgUtilization: clinicianStats.length > 0 ? Math.round(clinicianStats.reduce((s, c) => s + c.utilization, 0) / clinicianStats.length) : 0,
   }), [clinicianStats]);
- 
+
   function toggleSort(field) {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortField(field); setSortDir('asc'); }
   }
- 
+
   const disciplines = [...new Set(clinicians.map(c => c.discipline).filter(Boolean))].sort();
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 20 }}>
       {/* Summary KPIs — the three cohort tiles (Under 30%, Under 60%,
@@ -170,7 +170,7 @@ function CliniciansTab({ clinicians, visits, census }) {
           );
         })}
       </div>
- 
+
       {/* Filters */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
@@ -191,7 +191,7 @@ function CliniciansTab({ clinicians, visits, census }) {
         )}
         <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--gray)' }}>{filtered.length} clinicians · click row to see inactive patients</div>
       </div>
- 
+
       {/* Clinician Table */}
       <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.5fr 0.5fr 1.4fr 0.6fr 0.6fr 0.6fr 0.6fr 0.7fr 0.8fr', padding: '8px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 9, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', gap: 8 }}>
@@ -266,23 +266,23 @@ function CliniciansTab({ clinicians, visits, census }) {
     </div>
   );
 }
- 
+
 function InactivePatientsTab({ census, clinicians }) {
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [filterClinician, setFilterClinician] = useState('ALL');
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState('days_since_last_visit');
- 
+
   const inactiveActive = useMemo(() =>
     census
       .filter(p => /active/i.test(p.status || '') && (p.days_overdue || 0) > 0)
       .sort((a, b) => (b.days_overdue || 0) - (a.days_overdue || 0)),
     [census]);
- 
+
   const clinicianNames = useMemo(() =>
     [...new Set(inactiveActive.map(p => p.last_visit_clinician).filter(Boolean))].sort(),
     [inactiveActive]);
- 
+
   const filtered = useMemo(() => inactiveActive.filter(p => {
     if (filterRegion !== 'ALL' && p.region !== filterRegion) return false;
     if (filterClinician !== 'ALL' && p.last_visit_clinician !== filterClinician) return false;
@@ -292,9 +292,9 @@ function InactivePatientsTab({ census, clinicians }) {
     }
     return true;
   }), [inactiveActive, filterRegion, filterClinician, search]);
- 
+
   const totalGap = filtered.reduce((s, p) => s + BLENDED_RATE * 2, 0);
- 
+
   // Group by region for summary
   const byRegion = useMemo(() => {
     const map = {};
@@ -303,7 +303,7 @@ function InactivePatientsTab({ census, clinicians }) {
     });
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [inactiveActive]);
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 20 }}>
       {/* Alert banner */}
@@ -323,7 +323,7 @@ function InactivePatientsTab({ census, clinicians }) {
           <div style={{ fontSize: 10, color: '#DC2626' }}>weekly gap</div>
         </div>
       </div>
- 
+
       {/* Region breakdown */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {byRegion.map(([region, count]) => (
@@ -334,7 +334,7 @@ function InactivePatientsTab({ census, clinicians }) {
           </div>
         ))}
       </div>
- 
+
       {/* Filters */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patient, insurance, clinician..."
@@ -356,7 +356,7 @@ function InactivePatientsTab({ census, clinicians }) {
         )}
         <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--gray)' }}>{filtered.length} patients · ${Math.round(totalGap / 1000)}K/wk shown</div>
       </div>
- 
+
       {/* Patient table */}
       <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 0.4fr 0.9fr 0.5fr 0.7fr 0.6fr 0.6fr 1.2fr 0.6fr', padding: '8px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 9, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', gap: 8 }}>
@@ -400,14 +400,14 @@ function InactivePatientsTab({ census, clinicians }) {
     </div>
   );
 }
- 
+
 export default function ClinicianAccountabilityPage() {
   const [loading, setLoading] = useState(true);
   const [clinicians, setClinicians] = useState([]);
   const [visits, setVisits] = useState([]);
   const [census, setCensus] = useState([]);
   const [activeTab, setActiveTab] = useState('clinicians');
- 
+
   const load = useCallback(async () => {
     const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
     const [cl, v, c] = await Promise.all([
@@ -423,19 +423,19 @@ export default function ClinicianAccountabilityPage() {
     setCensus(c);
     setLoading(false);
   }, []);
- 
+
   useEffect(() => { load(); }, [load]);
   useRealtimeTable(['census_data', 'clinicians', 'visit_schedule_data'], load);
- 
+
   if (loading) return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Clinician Accountability" subtitle="Loading..." />
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gray)' }}>Loading...</div>
     </div>
   );
- 
+
   const inactiveCount = census.filter(p => /active/i.test(p.status || '') && (p.days_overdue || 0) > 0).length;
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       <TopBar
@@ -460,4 +460,3 @@ export default function ClinicianAccountabilityPage() {
     </div>
   );
 }
- 
