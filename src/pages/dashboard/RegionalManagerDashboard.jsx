@@ -25,7 +25,15 @@ function isMissed(s,e) { return /missed/i.test(s||'') && !isCancelled(e,s); }
 function isEval(e) { return /eval/i.test(e||''); }
 
 function getWeekStart(date) {
-  const d = new Date(date + 'T00:00:00');
+  // Accepts either a "YYYY-MM-DD" string or a Date object. Previously this
+  // assumed string input and crashed with `RangeError: Invalid time value`
+  // when called as `getWeekStart(new Date())` — concatenating a Date with
+  // 'T00:00:00' produces a garbage string like "Thu May 15 2026 ...T00:00:00"
+  // which parses to Invalid Date. Fixed 2026-05-15 when the AD dashboard's
+  // drill-down forced rm-dashboard to render for the first time in production.
+  const d = date instanceof Date
+    ? new Date(date.getTime())
+    : new Date(date + 'T00:00:00');
   const day = d.getDay();
   d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
   d.setHours(0,0,0,0);
@@ -33,7 +41,10 @@ function getWeekStart(date) {
 }
 
 function getQuarter(date) {
-  const d = new Date(date + 'T00:00:00');
+  // Same defensive handling as getWeekStart — accept either string or Date.
+  const d = date instanceof Date
+    ? new Date(date.getTime())
+    : new Date(date + 'T00:00:00');
   const q = Math.floor(d.getMonth() / 3);
   return `Q${q+1} ${d.getFullYear()}`;
 }
@@ -77,7 +88,7 @@ function KPICard({ label, value, sub, color='var(--black)', bg='var(--card-bg)',
   );
 }
 
-export default function RegionalManagerDashboard() {
+export default function RegionalManagerDashboard({ intent }) {
   const { profile } = useAuth();
   const [visits, setVisits] = useState([]);
   const [intake, setIntake] = useState([]);
@@ -85,7 +96,11 @@ export default function RegionalManagerDashboard() {
   const [auth, setAuth] = useState([]);
   const [goals, setGoals] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedRegion, setSelectedRegion] = useState('ALL');
+  // `intent` is an optional hint passed from a caller (e.g. AD dashboard's
+  // "View region →" button passes { region: 'A' }). Consumed once on mount
+  // via lazy initializer so a user clearing the filter later isn't snapped
+  // back when the parent re-renders with the same intent.
+  const [selectedRegion, setSelectedRegion] = useState(() => intent?.region || 'ALL');
   const [periodView, setPeriodView] = useState('week');
   const [selectedManager, setSelectedManager] = useState('ALL');
   const [showGoalEditor, setShowGoalEditor] = useState(false);

@@ -156,23 +156,19 @@ function RegionCard({ region, stats, onDrillIn }) {
             </div>
           )}
         </div>
-        {/* Region drill-down is deferred to v1.1 — disabled to prevent a render
-            crash in RegionalManagerDashboard when invoked via onNavigate with
-            an intent payload. Re-enable once RM dashboard accepts the intent
-            prop and the underlying render error is identified. */}
-        <span
+        <button
+          onClick={() => onDrillIn(region.letter)}
           style={{
+            background: 'transparent',
             border: '1px solid var(--border)',
             borderRadius: 8,
             padding: '6px 12px',
-            fontSize: 11,
-            fontWeight: 500,
-            color: 'var(--gray)',
-            background: 'var(--bg)',
-            cursor: 'default',
+            fontSize: 12,
+            fontWeight: 600,
+            color: 'var(--black)',
+            cursor: 'pointer',
           }}
-          title="Per-region drill-down coming in next release"
-        >Detail view →</span>
+        >View region →</button>
       </div>
 
       {/* Stats row */}
