@@ -25,6 +25,7 @@ import RegionsPage from './dashboard/RegionsPage';
 import ExpansionPage from './dashboard/ExpansionPage';
 import ReportsExportPage from './dashboard/ReportsExportPage';
 import RegionalManagerDashboard from './dashboard/RegionalManagerDashboard';
+import AssociateDirectorDashboard from './dashboard/AssociateDirectorDashboard';
 import HospitalizationTrackerPage from './dashboard/HospitalizationTrackerPage';
 import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
 import MyRegionPage from './dashboard/MyRegionPage';
@@ -73,6 +74,7 @@ const PAGE_COMPONENTS = {
   expansion:            ExpansionPage,
   reports:              ReportsExportPage,
   'rm-dashboard':       RegionalManagerDashboard,
+  'ad-dashboard':       AssociateDirectorDashboard,
   hospitalizations:     HospitalizationTrackerPage,
   'missed-cancelled':       MissedCancelledReportPage,
   'my-region':              MyRegionPage,
@@ -125,7 +127,7 @@ export default function Dashboard() {
     if (r === 'auth_coordinator')   return 'auth-coordinator';
     if (r === 'intake_coordinator') return 'intake-queue';
     if (r === 'care_coordinator')   return 'care-coord-patients';
-    if (r === 'assoc_director')      return 'overview';
+    if (r === 'assoc_director')      return 'ad-dashboard';
     if (r === 'telehealth')          return 'visits';
     if (r === 'pod_leader')         return 'intake-queue';
     if (r === 'clinician')          return 'visits';
