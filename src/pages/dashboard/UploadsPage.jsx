@@ -57,6 +57,50 @@ function extractRegion(colD) {
   return s;
 }
  
+// ── Insurance abbreviation lookup ──────────────────────────────────────
+// The Pariox export labels insurance as "private" or "medicare" in column
+// `Ins` while the real payor (Humana, Aetna, etc.) is encoded in `Ref Source`
+// as an abbreviation like "HumA" or "CPB". This function builds a lookup
+// map from the insurance_abbreviations table (managed via Settings →
+// Insurance Abbreviations) so the upload pipeline can resolve each row's
+// ref_source to the proper insurance name on insert.
+//
+// Match order: exact case match first, then case-insensitive fallback.
+// Returns an empty object on error — uploads still proceed, they just
+// fall back to whatever Pariox put in the Insurance column (the placeholder).
+async function loadInsuranceAbbreviationMap() {
+  try {
+    var { data, error } = await supabase
+      .from('insurance_abbreviations')
+      .select('abbreviation, insurance_name')
+      .eq('is_active', true);
+    if (error || !data) return {};
+    var map = {};
+    data.forEach(function(r) {
+      map[r.abbreviation] = r.insurance_name;
+      map[r.abbreviation.toUpperCase()] = r.insurance_name; // case-insensitive fallback
+    });
+    return map;
+  } catch (e) {
+    console.warn('[loadInsuranceAbbreviationMap] failed:', e?.message);
+    return {};
+  }
+}
+
+// Mutates each row to set `insurance` to the resolved name if its ref_source
+// matches a known abbreviation. Rows without a match keep their original
+// insurance value (typically the useless "private" placeholder from Pariox).
+function applyInsuranceResolution(rows, abbrMap) {
+  if (!abbrMap || Object.keys(abbrMap).length === 0) return rows;
+  rows.forEach(function(r) {
+    var rs = (r.ref_source || '').trim();
+    if (!rs) return;
+    var resolved = abbrMap[rs] || abbrMap[rs.toUpperCase()];
+    if (resolved) r.insurance = resolved;
+  });
+  return rows;
+}
+
 function parseVisitCSV(csv) {
   var lines = csv.split('\n').filter(function(l) { return l.trim(); });
   return lines.slice(1).map(function(line) {
@@ -133,6 +177,14 @@ function UploadCard(props) {
       try {
         var csv = parseXLSXFile(e.target.result);
         var data = props.parseType === 'visits' ? parseVisitCSV(csv) : parseCensusCSV(csv);
+
+        // Resolve insurance from ref_source abbreviation lookup.
+        // This replaces the "private"/"medicare" placeholders Pariox sends
+        // with the canonical insurance name (e.g. "Humana", "Aetna Commercial").
+        // Managed via Admin → Insurance Abbreviations.
+        setMessage('Resolving insurance abbreviations...');
+        var abbrMap = await loadInsuranceAbbreviationMap();
+        applyInsuranceResolution(data, abbrMap);
 
         setMessage('Processing ' + data.length + ' records...');
 

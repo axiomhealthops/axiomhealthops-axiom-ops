@@ -49,6 +49,7 @@ import StaleFrequencyPage from './dashboard/StaleFrequencyPage';
 import FrequencyReviewPage from './dashboard/FrequencyReviewPage';
 import OpsReportsPage from './dashboard/OpsReportsPage';
 import ClinicianSchedulePage from './dashboard/ClinicianSchedulePage';
+import InsuranceSettingsPage from './dashboard/InsuranceSettingsPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -98,6 +99,7 @@ const PAGE_COMPONENTS = {
   'frequency-review':       FrequencyReviewPage,
   'ops-reports':             OpsReportsPage,
   'clinician-schedule':      ClinicianSchedulePage,
+  'insurance-settings':      InsuranceSettingsPage,
 };
 
 function AccessDenied() {
