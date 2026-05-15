@@ -255,7 +255,7 @@ export default function AssociateDirectorDashboard({ onNavigate }) {
       ),
       fetchAllPages(
         supabase.from('census_data')
-          .select('region,patient_name,current_status')
+          .select('region,patient_name,status')
           .in('region', myRegions)
       ),
       fetchAllPages(
@@ -313,12 +313,16 @@ export default function AssociateDirectorDashboard({ onNavigate }) {
       else if (isScheduled(v.status, v.event_type)) m.scheduledWeek++;
     });
 
-    // Active census (current_status = active/on service)
+    // Active census: any status starting with "active" (case-insensitive).
+    // Matches: "Active" (most), "active", "Active - Auth Pending" etc.
+    // Does NOT match: Discharge, On Hold, Waitlist, Eval/SOC/Auth Pending,
+    // Hospitalized, Non-Admit, Recert/DC Pending — by design, those are
+    // tracked in pipeline counts (future v1.1 module), not active census.
     census.forEach(p => {
       const m = map[p.region];
       if (!m) return;
-      const s = (p.current_status || '').toLowerCase();
-      if (s === 'active' || s === 'soc' || s.includes('on service')) m.activeCensus++;
+      const s = (p.status || '').toLowerCase();
+      if (s.startsWith('active')) m.activeCensus++;
     });
 
     // Open authorizations (any non-closed status)
@@ -414,7 +418,11 @@ export default function AssociateDirectorDashboard({ onNavigate }) {
     <div style={{ padding: '0 28px 40px' }}>
       <TopBar />
 
-      {/* Identity strip */}
+      {/* Identity strip — header label adapts to the viewer's role:
+            * assoc_director → "Associate Director — {parentRegion}"
+            * super_admin / admin → "{job_title} — All Regions (Admin View)"
+            * anything else with regions → falls back to job_title or "Operations"
+      */}
       <div style={{
         marginTop: 20, padding: '18px 22px', background: 'var(--card-bg)',
         border: '1px solid var(--border)', borderRadius: 12,
@@ -425,13 +433,22 @@ export default function AssociateDirectorDashboard({ onNavigate }) {
             fontSize: 11, fontWeight: 700, color: 'var(--red, #D94F2B)',
             textTransform: 'uppercase', letterSpacing: '0.08em',
           }}>
-            Associate Director — {parentRegion || 'Multi-Region'}
+            {(() => {
+              const r = profile?.role;
+              const jt = profile?.job_title;
+              if (r === 'assoc_director') return `Associate Director — ${parentRegion || 'Multi-Region'}`;
+              if (r === 'super_admin' || r === 'admin') return `${jt || 'Administrator'} — All Regions (Admin View)`;
+              return jt || 'Operations Dashboard';
+            })()}
           </div>
           <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--black)', marginTop: 4 }}>
             {profile?.full_name || 'Associate Director'}
           </div>
           <div style={{ fontSize: 13, color: 'var(--gray)', marginTop: 2 }}>
-            Overseeing {myRegions.length} region{myRegions.length === 1 ? '' : 's'}: {myRegions.join(', ')} · Week of {fmtDate(weekStart)}–{fmtDate(weekEnd)}
+            {profile?.role === 'assoc_director'
+              ? `Overseeing ${myRegions.length} region${myRegions.length === 1 ? '' : 's'}: ${myRegions.join(', ')}`
+              : `Viewing all ${myRegions.length} regions: ${myRegions.join(', ')}`}
+            {' · '}Week of {fmtDate(weekStart)}–{fmtDate(weekEnd)}
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
