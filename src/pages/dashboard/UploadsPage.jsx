@@ -57,13 +57,18 @@ function extractRegion(colD) {
   return s;
 }
  
-// ── Insurance abbreviation lookup ──────────────────────────────────────
+// ── Insurance abbreviation lookup + defensive row repair ─────────────────
 // The Pariox export labels insurance as "private" or "medicare" in column
 // `Ins` while the real payor (Humana, Aetna, etc.) is encoded in `Ref Source`
 // as an abbreviation like "HumA" or "CPB". This function builds a lookup
 // map from the insurance_abbreviations table (managed via Settings →
 // Insurance Abbreviations) so the upload pipeline can resolve each row's
 // ref_source to the proper insurance name on insert.
+//
+// The map values include BOTH the canonical insurance_name AND the region
+// letter, because column-shift bugs in Pariox exports have previously put a
+// date string in the region column. When that happens we repair region from
+// the abbreviation (which we trust because it was the upload's ref_source).
 //
 // Match order: exact case match first, then case-insensitive fallback.
 // Returns an empty object on error — uploads still proceed, they just
@@ -72,13 +77,14 @@ async function loadInsuranceAbbreviationMap() {
   try {
     var { data, error } = await supabase
       .from('insurance_abbreviations')
-      .select('abbreviation, insurance_name')
+      .select('abbreviation, insurance_name, region')
       .eq('is_active', true);
     if (error || !data) return {};
     var map = {};
     data.forEach(function(r) {
-      map[r.abbreviation] = r.insurance_name;
-      map[r.abbreviation.toUpperCase()] = r.insurance_name; // case-insensitive fallback
+      var entry = { insurance_name: r.insurance_name, region: r.region };
+      map[r.abbreviation] = entry;
+      map[r.abbreviation.toUpperCase()] = entry; // case-insensitive fallback
     });
     return map;
   } catch (e) {
@@ -87,17 +93,64 @@ async function loadInsuranceAbbreviationMap() {
   }
 }
 
-// Mutates each row to set `insurance` to the resolved name if its ref_source
-// matches a known abbreviation. Rows without a match keep their original
-// insurance value (typically the useless "private" placeholder from Pariox).
+// Valid region pattern: single uppercase letter A-V, optionally followed by
+// a digit (B2 is a real sub-region). Anything else (dates, timestamps, etc.)
+// indicates a Pariox column-shift bug and the row should be repaired.
+function isValidRegionLetter(r) {
+  if (!r || typeof r !== 'string') return false;
+  return /^[A-V][0-9]?$/i.test(r.trim());
+}
+
+// Status values from Pariox are short text labels like "Active", "On Hold",
+// "Eval Pending", "SOC Pending", etc. A value that starts with a 4-digit
+// year (e.g. "2026-04-15 13:36:04") is almost certainly a timestamp that
+// landed in the status column due to a Pariox export column shift.
+function looksLikeTimestamp(s) {
+  if (!s || typeof s !== 'string') return false;
+  return /^\d{4}-\d{2}-\d{2}/.test(s.trim());
+}
+
+// Mutates each row to:
+//   * Set `insurance` to the resolved canonical name from the abbreviation
+//     lookup (replacing Pariox's useless "private" placeholder).
+//   * Repair `region` if it doesn't look like a valid letter — derive from
+//     the abbreviation's region. This catches the Pariox column-shift bug
+//     that previously put dates in the region column for 7 patients.
+//   * Reset `status` to "Active" if Pariox shifted a timestamp into it.
+// Rows without a matching ref_source keep their original values.
 function applyInsuranceResolution(rows, abbrMap) {
   if (!abbrMap || Object.keys(abbrMap).length === 0) return rows;
+  var repairsLogged = 0;
   rows.forEach(function(r) {
     var rs = (r.ref_source || '').trim();
     if (!rs) return;
-    var resolved = abbrMap[rs] || abbrMap[rs.toUpperCase()];
-    if (resolved) r.insurance = resolved;
+    var entry = abbrMap[rs] || abbrMap[rs.toUpperCase()];
+    if (!entry) return;
+
+    // Insurance resolution (the primary purpose)
+    r.insurance = entry.insurance_name;
+
+    // Defensive: repair garbage region from abbreviation lookup
+    if (!isValidRegionLetter(r.region) && entry.region) {
+      if (repairsLogged < 10) {
+        console.warn('[upload-repair] region "' + r.region + '" → "' + entry.region + '" for', r.patient_name, '(ref_source=' + rs + ')');
+      }
+      r.region = entry.region;
+      repairsLogged++;
+    }
+
+    // Defensive: repair garbage status (timestamp in status column → "Active")
+    if (looksLikeTimestamp(r.status)) {
+      if (repairsLogged < 10) {
+        console.warn('[upload-repair] status "' + r.status + '" → "Active" for', r.patient_name);
+      }
+      r.status = 'Active';
+      repairsLogged++;
+    }
   });
+  if (repairsLogged > 0) {
+    console.warn('[upload-repair] Total repairs applied:', repairsLogged);
+  }
   return rows;
 }
 
