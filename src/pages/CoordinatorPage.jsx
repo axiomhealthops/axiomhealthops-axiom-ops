@@ -297,6 +297,7 @@ export default function CoordinatorPage(props) {
  
   var [tasks, setTasks] = useState([]);
   var [authRecords, setAuthRecords] = useState([]);
+  var [census, setCensus] = useState([]);
   var [autoResponses, setAutoResponses] = useState({});
   var [loading, setLoading] = useState(true);
   var [activeTab, setActiveTab] = useState('today');
@@ -319,6 +320,11 @@ export default function CoordinatorPage(props) {
       supabase.from('action_responses')
         .select('*')
         .like('action_key', 'auto_%'),
+      // Census data for the pipeline overview and priority opportunities.
+      // We fetch only the columns we need to keep the payload small.
+      supabase.from('census_data')
+        .select('patient_name, region, status, insurance, last_visit_date, first_seen_date, last_seen_date, days_overdue')
+        .in('region', regions),
     ]).then(function(results) {
       setTasks(results[0].data || []);
       setAuthRecords(results[1].data || []);
@@ -326,6 +332,7 @@ export default function CoordinatorPage(props) {
       var respMap = {};
       (results[2].data || []).forEach(function(r) { respMap[r.action_key] = r; });
       setAutoResponses(respMap);
+      setCensus(results[3].data || []);
       setLoading(false);
     });
   }
@@ -426,7 +433,125 @@ export default function CoordinatorPage(props) {
     high: allTasks.filter(function(t) { return t.priority === 'high'; }).length,
     auth: allTasks.filter(function(t) { return t.task_type.startsWith('auth'); }).length,
   };
- 
+
+  // ── Per-region pipeline overview ────────────────────────────────────────
+  // For each region this coordinator covers, count patients by census status
+  // bucket so the coordinator can see their pipeline at a glance.
+  var regionPipeline = useMemo(function() {
+    var byRegion = {};
+    regions.forEach(function(r) {
+      byRegion[r] = { active:0, evalPending:0, socPending:0, authPending:0, onHold:0, hospitalized:0, waitlist:0, discharge:0 };
+    });
+    census.forEach(function(p) {
+      var b = byRegion[p.region];
+      if (!b) return;
+      var s = (p.status || '').toLowerCase();
+      if (s.indexOf('active') === 0)                              b.active++;
+      else if (s.indexOf('eval') >= 0 && s.indexOf('pending') >= 0) b.evalPending++;
+      else if (s.indexOf('soc') >= 0 && s.indexOf('pending') >= 0)  b.socPending++;
+      else if (s.indexOf('auth') >= 0 && s.indexOf('pending') >= 0) b.authPending++;
+      else if (s.indexOf('on hold') >= 0 || s.indexOf('on_hold') >= 0) b.onHold++;
+      else if (s.indexOf('hospital') >= 0)                        b.hospitalized++;
+      else if (s.indexOf('waitlist') >= 0)                        b.waitlist++;
+      else if (s.indexOf('discharge') >= 0 || s.indexOf('non-admit') >= 0) b.discharge++;
+    });
+    var totals = { active:0, evalPending:0, socPending:0, authPending:0, onHold:0, hospitalized:0, waitlist:0, discharge:0 };
+    Object.keys(byRegion).forEach(function(r) {
+      Object.keys(totals).forEach(function(k) { totals[k] += byRegion[r][k]; });
+    });
+    return { byRegion: byRegion, totals: totals };
+  }, [census, regions]);
+
+  // ── Priority opportunities (revenue-impact ranked, $ hidden from coords) ─
+  // These surface the highest-leverage actions to move patients through the
+  // pipeline. Dollar amounts are NOT shown to coordinators — they see
+  // priority tags instead. Sort order is still by impact under the hood.
+  function daysSinceLocal(d) {
+    if (!d) return null;
+    return Math.floor((new Date() - new Date(d + 'T00:00:00')) / 86400000);
+  }
+  function daysUntilLocal(d) {
+    if (!d) return null;
+    return Math.ceil((new Date(d + 'T00:00:00') - new Date()) / 86400000);
+  }
+  var opportunities = useMemo(function() {
+    var opps = [];
+
+    // SOC Pending > 3 days
+    var stuckSoc = census.filter(function(p) {
+      var s = (p.status || '').toLowerCase();
+      if (!(s.indexOf('soc') >= 0 && s.indexOf('pending') >= 0)) return false;
+      var d = daysSinceLocal(p.first_seen_date);
+      return d !== null && d > 3;
+    });
+    if (stuckSoc.length) opps.push({
+      icon: '🚦', urgency: 'critical', sortKey: stuckSoc.length * 16,
+      title: stuckSoc.length + ' patient' + (stuckSoc.length > 1 ? 's' : '') + ' stuck in SOC Pending > 3 days',
+      subtitle: 'Push the auth team to submit. Each accepted patient unlocks an episode of visits.',
+    });
+
+    // Eval Pending > 3 days
+    var stuckEval = census.filter(function(p) {
+      var s = (p.status || '').toLowerCase();
+      if (!(s.indexOf('eval') >= 0 && s.indexOf('pending') >= 0)) return false;
+      var d = daysSinceLocal(p.first_seen_date);
+      return d !== null && d > 3;
+    });
+    if (stuckEval.length) opps.push({
+      icon: '📅', urgency: 'critical', sortKey: stuckEval.length * 12,
+      title: stuckEval.length + ' patient' + (stuckEval.length > 1 ? 's' : '') + ' stuck in Eval Pending > 3 days',
+      subtitle: 'Auth is done — schedule the eval visit. First eval unlocks the rest.',
+    });
+
+    // On Hold > 14 days — recoverable
+    var recoverableHold = census.filter(function(p) {
+      var s = (p.status || '').toLowerCase();
+      if (s.indexOf('on hold') < 0 && s.indexOf('on_hold') < 0) return false;
+      var d = daysSinceLocal(p.last_seen_date);
+      return d !== null && d > 14;
+    });
+    if (recoverableHold.length) opps.push({
+      icon: '🔁', urgency: 'urgent', sortKey: recoverableHold.length * 6,
+      title: recoverableHold.length + ' on-hold patient' + (recoverableHold.length > 1 ? 's' : '') + ' > 14 days — recoverable',
+      subtitle: 'Call to re-engage or coordinate with the clinical team.',
+    });
+
+    // Active overdue (no visit in 7+ days)
+    var overdueActive = census.filter(function(p) {
+      var s = (p.status || '').toLowerCase();
+      if (s.indexOf('active') !== 0) return false;
+      var d = daysSinceLocal(p.last_visit_date);
+      return d !== null && d > 7;
+    });
+    if (overdueActive.length) opps.push({
+      icon: '⏰', urgency: 'urgent', sortKey: overdueActive.length,
+      title: overdueActive.length + ' active patient' + (overdueActive.length > 1 ? 's' : '') + ' overdue (no visit in 7+ days)',
+      subtitle: 'Schedule the next visit ASAP to keep cadence on track.',
+    });
+
+    // Auths with unused visits expiring < 60 days
+    var underUsed = authRecords.filter(function(a) {
+      if (a.auth_status !== 'active') return false;
+      var remaining = (a.visits_authorized || 0) - (a.visits_used || 0);
+      if (remaining < 4) return false;
+      if (!a.auth_expiry_date) return false;
+      var dte = daysUntilLocal(a.auth_expiry_date);
+      return dte !== null && dte > 0 && dte <= 60;
+    });
+    if (underUsed.length) {
+      var totalUnused = underUsed.reduce(function(s, a) {
+        return s + Math.max(0, (a.visits_authorized || 0) - (a.visits_used || 0));
+      }, 0);
+      opps.push({
+        icon: '📈', urgency: 'medium', sortKey: totalUnused,
+        title: underUsed.length + ' auth' + (underUsed.length > 1 ? 's' : '') + ' with unused visits expiring < 60 days',
+        subtitle: totalUnused + ' authorized visits at risk of expiring unused. Consider increasing visit frequency.',
+      });
+    }
+
+    return opps.sort(function(a, b) { return b.sortKey - a.sortKey; });
+  }, [census, authRecords]);
+
   var displayTasks = activeTab === 'today' ? todayTasks : allTasks;
   var today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
  
@@ -489,7 +614,120 @@ export default function CoordinatorPage(props) {
             </div>
           </div>
         )}
- 
+
+        {/* ── MY REGIONS — PIPELINE OVERVIEW ──────────────────────────── */}
+        <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 4 }}>
+            🗺 My Regions &mdash; Pipeline Overview
+          </div>
+          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
+            Patient counts by status across each region you cover
+          </div>
+          <div style={{ overflow: 'auto' }}>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
+              padding: '8px 10px', background: '#F9FAFB', borderRadius: 6,
+              fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em',
+            }}>
+              <span>Region</span>
+              <span style={{ textAlign: 'center' }}>Active</span>
+              <span style={{ textAlign: 'center' }}>Eval Pend</span>
+              <span style={{ textAlign: 'center' }}>SOC Pend</span>
+              <span style={{ textAlign: 'center' }}>Auth Pend</span>
+              <span style={{ textAlign: 'center' }}>On Hold</span>
+              <span style={{ textAlign: 'center' }}>Hospital</span>
+              <span style={{ textAlign: 'center' }}>Waitlist</span>
+              <span style={{ textAlign: 'center' }}>Discharge</span>
+            </div>
+            {regions.map(function(r, i) {
+              var c = regionPipeline.byRegion[r] || { active:0, evalPending:0, socPending:0, authPending:0, onHold:0, hospitalized:0, waitlist:0, discharge:0 };
+              return (
+                <div key={r} style={{
+                  display: 'grid',
+                  gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
+                  padding: '11px 10px', borderBottom: i < regions.length - 1 ? '1px solid #F3F4F6' : 'none',
+                  alignItems: 'center', fontSize: 14, fontFamily: 'DM Mono, monospace',
+                }}>
+                  <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif', color: '#111827' }}>Region {r}</span>
+                  <span style={{ textAlign: 'center', fontWeight: 700, color: '#059669' }}>{c.active}</span>
+                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.evalPending > 0 ? '#1565C0' : '#9CA3AF' }}>{c.evalPending}</span>
+                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.socPending > 0 ? '#1565C0' : '#9CA3AF' }}>{c.socPending}</span>
+                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.authPending > 0 ? '#D97706' : '#9CA3AF' }}>{c.authPending}</span>
+                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.onHold > 5 ? '#DC2626' : c.onHold > 0 ? '#7C3AED' : '#9CA3AF' }}>{c.onHold}</span>
+                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.hospitalized > 0 ? '#DC2626' : '#9CA3AF' }}>{c.hospitalized}</span>
+                  <span style={{ textAlign: 'center', fontWeight: 600, color: '#9CA3AF' }}>{c.waitlist}</span>
+                  <span style={{ textAlign: 'center', fontWeight: 600, color: '#9CA3AF' }}>{c.discharge}</span>
+                </div>
+              );
+            })}
+            {regions.length > 1 && (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
+                padding: '11px 10px', marginTop: 4, background: '#0F1117', color: '#fff', borderRadius: 6,
+                alignItems: 'center', fontSize: 14, fontFamily: 'DM Mono, monospace',
+              }}>
+                <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif' }}>Total</span>
+                <span style={{ textAlign: 'center', fontWeight: 800 }}>{regionPipeline.totals.active}</span>
+                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.evalPending}</span>
+                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.socPending}</span>
+                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.authPending}</span>
+                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.onHold}</span>
+                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.hospitalized}</span>
+                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.waitlist}</span>
+                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.discharge}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── PRIORITY OPPORTUNITIES (no $ shown to coordinators) ─────── */}
+        <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 4 }}>
+            🎯 Priority Opportunities
+          </div>
+          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
+            What to tackle first to keep patients moving through the pipeline
+          </div>
+          {opportunities.length === 0 ? (
+            <div style={{ padding: 18, textAlign: 'center', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 8 }}>
+              <div style={{ fontSize: 22, marginBottom: 4 }}>✅</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#065F46' }}>No obvious blockers right now — pipelines flowing!</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {opportunities.map(function(opp, i) {
+                var styles = {
+                  critical: { bg: '#FEF2F2', border: '#FECACA', title: '#DC2626' },
+                  urgent:   { bg: '#FFFBEB', border: '#FCD34D', title: '#92400E' },
+                  medium:   { bg: '#EFF6FF', border: '#BFDBFE', title: '#1E40AF' },
+                }[opp.urgency] || { bg: '#F9FAFB', border: '#E5E7EB', title: '#111827' };
+                return (
+                  <div key={i} style={{
+                    background: styles.bg, border: '1px solid ' + styles.border, borderRadius: 8,
+                    padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 12,
+                  }}>
+                    <div style={{ fontSize: 20, width: 28, textAlign: 'center', flexShrink: 0 }}>{opp.icon}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: styles.title }}>{opp.title}</div>
+                      <div style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>{opp.subtitle}</div>
+                    </div>
+                    <div style={{
+                      fontSize: 9, fontWeight: 700, color: styles.title,
+                      background: '#fff', padding: '3px 9px', borderRadius: 999,
+                      border: '1px solid ' + styles.border, textTransform: 'uppercase', letterSpacing: '0.05em',
+                      flexShrink: 0,
+                    }}>
+                      {opp.urgency}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* Tabs + Add */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 4, background: 'white', border: '1px solid #E5E7EB', borderRadius: 8, padding: 4 }}>
