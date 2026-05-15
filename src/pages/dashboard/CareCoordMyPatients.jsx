@@ -324,6 +324,144 @@ export default function CareCoordMyPatients() {
     return tasks.sort((a,b) => a.priority - b.priority);
   }, [enrichedCensus, auths, referrals]);
 
+  // ── Per-region pipeline overview ───────────────────────────────────────────
+  // For each region this coordinator covers, count patients by census status
+  // bucket. Status matching is fuzzy/case-insensitive so "Active",
+  // "Active - Auth Pending", and "active" all roll into the same bucket.
+  const PIPELINE_BUCKETS = ['active','evalPending','socPending','authPending','onHold','hospitalized','waitlist','discharge'];
+  const regionPipeline = useMemo(() => {
+    const buckets = {};
+    const regions = myRegions && myRegions.length > 0
+      ? myRegions
+      : [...new Set(enrichedCensus.map(p => p.region).filter(Boolean))].sort();
+    regions.forEach(r => {
+      buckets[r] = { active:0, evalPending:0, socPending:0, authPending:0, onHold:0, hospitalized:0, waitlist:0, discharge:0 };
+    });
+    enrichedCensus.forEach(p => {
+      const b = buckets[p.region];
+      if (!b) return;
+      const s = (p.status || '').toLowerCase();
+      if (s.startsWith('active'))               b.active++;
+      else if (s.includes('eval') && s.includes('pending')) b.evalPending++;
+      else if (s.includes('soc') && s.includes('pending'))  b.socPending++;
+      else if (s.includes('auth') && s.includes('pending')) b.authPending++;
+      else if (s.includes('on hold') || s.includes('on_hold')) b.onHold++;
+      else if (s.includes('hospital'))          b.hospitalized++;
+      else if (s.includes('waitlist'))          b.waitlist++;
+      else if (s.includes('discharge') || s.includes('non-admit')) b.discharge++;
+    });
+    // Totals row for multi-region coordinators
+    const totals = { active:0, evalPending:0, socPending:0, authPending:0, onHold:0, hospitalized:0, waitlist:0, discharge:0 };
+    Object.values(buckets).forEach(b => PIPELINE_BUCKETS.forEach(k => { totals[k] += b[k]; }));
+    return { byRegion: buckets, totals, regionList: regions };
+  }, [enrichedCensus, myRegions]);
+
+  // ── Revenue Opportunities (smart tips ranked by $ impact) ────────────────
+  // The principle is simple: every additional completed visit ≈ $230 revenue.
+  // So the coordinator's job is to keep patients flowing through the pipeline,
+  // unstick blocked patients, and prevent authorized visits from expiring
+  // unused. Each opportunity here estimates the revenue at stake.
+  const RATE_PER_VISIT = 230; // matches RM dashboard's RATE constant
+  const revenueOpportunities = useMemo(() => {
+    const opps = [];
+
+    // 1. SOC Pending > 3 days — auth team hasn't moved the patient forward yet.
+    //    Each accepted patient yields ~16 billable visits on average over their episode.
+    const stuckSoc = enrichedCensus.filter(p => {
+      const s = (p.status||'').toLowerCase();
+      if (!(s.includes('soc') && s.includes('pending'))) return false;
+      const d = daysSince(p.first_seen_date);
+      return d !== null && d > 3;
+    });
+    if (stuckSoc.length) opps.push({
+      icon: '🚦', urgency: 'critical', tab: 'pipeline',
+      title: `${stuckSoc.length} patient${stuckSoc.length>1?'s':''} stuck in SOC Pending > 3 days`,
+      subtitle: 'Push the auth team to submit. Each accepted patient ≈ 16 billable visits.',
+      impactDollars: stuckSoc.length * 16 * RATE_PER_VISIT,
+    });
+
+    // 2. Eval Pending > 3 days — auth already received, just need to book the eval.
+    //    The eval is itself billable and unlocks all subsequent visits.
+    const stuckEval = enrichedCensus.filter(p => {
+      const s = (p.status||'').toLowerCase();
+      if (!(s.includes('eval') && s.includes('pending'))) return false;
+      const d = daysSince(p.first_seen_date);
+      return d !== null && d > 3;
+    });
+    if (stuckEval.length) opps.push({
+      icon: '📅', urgency: 'critical', tab: 'pipeline',
+      title: `${stuckEval.length} patient${stuckEval.length>1?'s':''} stuck in Eval Pending > 3 days`,
+      subtitle: 'Auth is done — schedule the eval visit. First eval = first billable visit and unlocks the rest.',
+      impactDollars: stuckEval.length * 12 * RATE_PER_VISIT,
+    });
+
+    // 3. On Hold > 14 days — recovery opportunities. Recovered patients
+    //    typically complete an additional ~6 visits before final discharge.
+    const recoverableHold = enrichedCensus.filter(p => {
+      const s = (p.status||'').toLowerCase();
+      if (!s.includes('on hold') && !s.includes('on_hold')) return false;
+      const d = daysSince(p.last_seen_date);
+      return d !== null && d > 14;
+    });
+    if (recoverableHold.length) opps.push({
+      icon: '🔁', urgency: 'urgent', tab: 'on_hold',
+      title: `${recoverableHold.length} on-hold patient${recoverableHold.length>1?'s':''} > 14 days — recoverable`,
+      subtitle: 'Call to re-engage or coordinate with the clinical team. Recovered patients average ~6 more visits.',
+      impactDollars: recoverableHold.length * 6 * RATE_PER_VISIT,
+    });
+
+    // 4. Active patients overdue (no visit in 7+ days). Every day past frequency
+    //    cadence = revenue not captured. Each overdue patient ≈ 1 immediate visit at minimum.
+    const overdueActive = enrichedCensus.filter(p => {
+      const s = (p.status||'').toLowerCase();
+      if (!s.startsWith('active')) return false;
+      const d = daysSince(p.last_visit_date);
+      return d !== null && d > 7;
+    });
+    if (overdueActive.length) opps.push({
+      icon: '⏰', urgency: 'urgent', tab: 'my_patients',
+      title: `${overdueActive.length} active patient${overdueActive.length>1?'s':''} overdue (no visit in 7+ days)`,
+      subtitle: 'Schedule the next visit ASAP — each completed visit is immediate revenue.',
+      impactDollars: overdueActive.length * RATE_PER_VISIT,
+    });
+
+    // 5. Frequency under-utilization — auths with unused visits expiring soon.
+    //    These are visits already authorized by payor that we're at risk of
+    //    leaving on the table.
+    const underUtilizedAuths = auths.filter(a => {
+      if (a.auth_status !== 'active') return false;
+      const remaining = (a.visits_authorized || 0) - (a.visits_used || 0);
+      if (remaining < 4) return false;
+      if (!a.auth_expiry_date) return false;
+      const dte = daysUntil(a.auth_expiry_date);
+      return dte !== null && dte > 0 && dte <= 60;
+    });
+    if (underUtilizedAuths.length) {
+      const totalUnusedVisits = underUtilizedAuths.reduce((s, a) =>
+        s + Math.max(0, (a.visits_authorized || 0) - (a.visits_used || 0)), 0);
+      opps.push({
+        icon: '📈', urgency: 'medium', tab: 'my_patients',
+        title: `${underUtilizedAuths.length} auth${underUtilizedAuths.length>1?'s':''} with unused visits expiring < 60 days`,
+        subtitle: `${totalUnusedVisits} authorized visits at risk of expiring unused. Consider increasing visit frequency.`,
+        impactDollars: totalUnusedVisits * RATE_PER_VISIT,
+      });
+    }
+
+    // Sort by $ impact descending so highest-leverage actions are surfaced first.
+    return opps.sort((a, b) => b.impactDollars - a.impactDollars);
+  }, [enrichedCensus, auths]);
+
+  const totalRevenueOpportunity = useMemo(
+    () => revenueOpportunities.reduce((s, o) => s + o.impactDollars, 0),
+    [revenueOpportunities]
+  );
+
+  // Revenue figures are restricted to director-tier roles. Coordinators see
+  // the same prioritized opportunities (still sorted by $ impact) but the
+  // dollar amounts and "at stake" totals are hidden — they get a priority
+  // tag instead so they can still triage by importance.
+  const canSeeRevenue = ['super_admin', 'admin', 'ceo', 'director'].includes(profile?.role);
+
   // ── Filtered list for patient tabs ────────────────────────────────────────
   const filtered = useMemo(() => {
     let list = enrichedCensus;
@@ -404,6 +542,142 @@ export default function CareCoordMyPatients() {
                     <div style={{ fontSize:28, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:4 }}>{c.val}</div>
                   </div>
                 ))}
+              </div>
+
+              {/* ── MY REGIONS — PIPELINE OVERVIEW ────────────────────────── */}
+              <div>
+                <div style={{ fontSize:14, fontWeight:800, marginBottom:10, display:'flex', alignItems:'center', gap:8 }}>
+                  🗺 My Regions — Pipeline Overview
+                  <span style={{ fontSize:11, fontWeight:400, color:'var(--gray)' }}>
+                    Patient counts by status across each region you cover
+                  </span>
+                </div>
+                <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'auto' }}>
+                  <div style={{
+                    display:'grid',
+                    gridTemplateColumns:'80px repeat(8, minmax(70px, 1fr))',
+                    padding:'10px 14px', background:'var(--bg)', borderBottom:'1px solid var(--border)',
+                    fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em',
+                  }}>
+                    <span>Region</span>
+                    <span style={{ textAlign:'center' }}>Active</span>
+                    <span style={{ textAlign:'center' }}>Eval Pend</span>
+                    <span style={{ textAlign:'center' }}>SOC Pend</span>
+                    <span style={{ textAlign:'center' }}>Auth Pend</span>
+                    <span style={{ textAlign:'center' }}>On Hold</span>
+                    <span style={{ textAlign:'center' }}>Hospital</span>
+                    <span style={{ textAlign:'center' }}>Waitlist</span>
+                    <span style={{ textAlign:'center' }}>Discharge</span>
+                  </div>
+                  {regionPipeline.regionList.map((region, i) => {
+                    const c = regionPipeline.byRegion[region];
+                    return (
+                      <div key={region} style={{
+                        display:'grid',
+                        gridTemplateColumns:'80px repeat(8, minmax(70px, 1fr))',
+                        padding:'12px 14px', borderBottom:'1px solid var(--border)',
+                        background:i%2===0?'var(--card-bg)':'var(--bg)',
+                        alignItems:'center', fontSize:14, fontFamily:'DM Mono, monospace',
+                      }}>
+                        <span style={{ fontWeight:800, fontFamily:'DM Sans, sans-serif', color:'var(--black)' }}>Region {region}</span>
+                        <span style={{ textAlign:'center', fontWeight:700, color:'#059669' }}>{c.active}</span>
+                        <span style={{ textAlign:'center', fontWeight:600, color:c.evalPending>0?'#1565C0':'var(--gray)' }}>{c.evalPending}</span>
+                        <span style={{ textAlign:'center', fontWeight:600, color:c.socPending>0?'#1565C0':'var(--gray)' }}>{c.socPending}</span>
+                        <span style={{ textAlign:'center', fontWeight:600, color:c.authPending>0?'#D97706':'var(--gray)' }}>{c.authPending}</span>
+                        <span style={{ textAlign:'center', fontWeight:600, color:c.onHold>5?'#DC2626':c.onHold>0?'#7C3AED':'var(--gray)' }}>{c.onHold}</span>
+                        <span style={{ textAlign:'center', fontWeight:600, color:c.hospitalized>0?'#DC2626':'var(--gray)' }}>{c.hospitalized}</span>
+                        <span style={{ textAlign:'center', fontWeight:600, color:'var(--gray)' }}>{c.waitlist}</span>
+                        <span style={{ textAlign:'center', fontWeight:600, color:'var(--gray)' }}>{c.discharge}</span>
+                      </div>
+                    );
+                  })}
+                  {regionPipeline.regionList.length > 1 && (
+                    <div style={{
+                      display:'grid',
+                      gridTemplateColumns:'80px repeat(8, minmax(70px, 1fr))',
+                      padding:'12px 14px', background:'#0F1117', color:'#fff',
+                      alignItems:'center', fontSize:14, fontFamily:'DM Mono, monospace',
+                    }}>
+                      <span style={{ fontWeight:800, fontFamily:'DM Sans, sans-serif' }}>Total</span>
+                      <span style={{ textAlign:'center', fontWeight:800 }}>{regionPipeline.totals.active}</span>
+                      <span style={{ textAlign:'center', fontWeight:700 }}>{regionPipeline.totals.evalPending}</span>
+                      <span style={{ textAlign:'center', fontWeight:700 }}>{regionPipeline.totals.socPending}</span>
+                      <span style={{ textAlign:'center', fontWeight:700 }}>{regionPipeline.totals.authPending}</span>
+                      <span style={{ textAlign:'center', fontWeight:700 }}>{regionPipeline.totals.onHold}</span>
+                      <span style={{ textAlign:'center', fontWeight:700 }}>{regionPipeline.totals.hospitalized}</span>
+                      <span style={{ textAlign:'center', fontWeight:700 }}>{regionPipeline.totals.waitlist}</span>
+                      <span style={{ textAlign:'center', fontWeight:700 }}>{regionPipeline.totals.discharge}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ── REVENUE OPPORTUNITIES ──────────────────────────────────── */}
+              <div>
+                <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:10 }}>
+                  <div style={{ fontSize:14, fontWeight:800, display:'flex', alignItems:'center', gap:8 }}>
+                    {canSeeRevenue ? '💰 Revenue Opportunities' : '🎯 Priority Opportunities'}
+                    <span style={{ fontSize:11, fontWeight:400, color:'var(--gray)' }}>
+                      {canSeeRevenue
+                        ? `What to tackle first to maximize revenue · estimated impact at $${RATE_PER_VISIT}/visit`
+                        : 'What to tackle first to keep patients moving through the pipeline'}
+                    </span>
+                  </div>
+                  {canSeeRevenue && totalRevenueOpportunity > 0 && (
+                    <div style={{ fontSize:13, fontWeight:700, color:'#065F46', background:'#ECFDF5', padding:'4px 10px', borderRadius:999, border:'1px solid #A7F3D0' }}>
+                      Total at stake: ~${(totalRevenueOpportunity/1000).toFixed(1)}k
+                    </div>
+                  )}
+                </div>
+                {revenueOpportunities.length === 0 ? (
+                  <div style={{ background:'#ECFDF5', border:'1px solid #A7F3D0', borderRadius:10, padding:20, textAlign:'center' }}>
+                    <div style={{ fontSize:24, marginBottom:6 }}>✅</div>
+                    <div style={{ fontSize:13, fontWeight:700, color:'#065F46' }}>No obvious revenue gaps right now</div>
+                    <div style={{ fontSize:11, color:'#059669', marginTop:4 }}>Your pipelines are flowing — keep the contact cadence up.</div>
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                    {revenueOpportunities.map((opp, i) => {
+                      const colors = {
+                        critical: { bg:'#FEF2F2', border:'#FECACA', title:'#DC2626' },
+                        urgent:   { bg:'#FFFBEB', border:'#FCD34D', title:'#92400E' },
+                        medium:   { bg:'#EFF6FF', border:'#BFDBFE', title:'#1E40AF' },
+                      }[opp.urgency] || { bg:'var(--card-bg)', border:'var(--border)', title:'var(--black)' };
+                      return (
+                        <div key={i} onClick={() => opp.tab && setActiveTab(opp.tab)} style={{
+                          background:colors.bg, border:`1px solid ${colors.border}`, borderRadius:10,
+                          padding:'12px 14px', display:'flex', alignItems:'center', gap:14,
+                          cursor:opp.tab?'pointer':'default', transition:'opacity 0.15s',
+                        }} onMouseEnter={e => opp.tab && (e.currentTarget.style.opacity='0.85')}
+                           onMouseLeave={e => opp.tab && (e.currentTarget.style.opacity='1')}>
+                          <div style={{ fontSize:22, width:32, textAlign:'center', flexShrink:0 }}>{opp.icon}</div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:13, fontWeight:700, color:colors.title }}>{opp.title}</div>
+                            <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>{opp.subtitle}</div>
+                          </div>
+                          <div style={{ textAlign:'right', flexShrink:0 }}>
+                            {canSeeRevenue ? (
+                              <>
+                                <div style={{ fontSize:18, fontWeight:800, fontFamily:'DM Mono, monospace', color:'#065F46' }}>
+                                  ~${(opp.impactDollars/1000).toFixed(1)}k
+                                </div>
+                                <div style={{ fontSize:9, fontWeight:700, color:'#065F46', textTransform:'uppercase', letterSpacing:'0.04em' }}>est. impact</div>
+                              </>
+                            ) : (
+                              <div style={{
+                                fontSize:10, fontWeight:700, color:colors.title,
+                                background:'#fff', padding:'4px 10px', borderRadius:999,
+                                border:`1px solid ${colors.border}`, textTransform:'uppercase', letterSpacing:'0.05em',
+                              }}>
+                                {opp.urgency}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Prioritized Task List */}
