@@ -304,6 +304,10 @@ export default function CoordinatorPage(props) {
   var [showModal, setShowModal] = useState(false);
   var [typeFilter, setTypeFilter] = useState('ALL');
   var [statusPatient, setStatusPatient] = useState(null);
+  // Click-to-expand state for the pipeline grid. Object { region, bucket } or null.
+  // Clicking a cell number opens an inline patient list directly below the grid;
+  // clicking the same cell again closes it. Click a patient row → status edit modal.
+  var [expandedCell, setExpandedCell] = useState(null);
 
   function fetchTasks() {
     Promise.all([
@@ -323,7 +327,7 @@ export default function CoordinatorPage(props) {
       // Census data for the pipeline overview and priority opportunities.
       // We fetch only the columns we need to keep the payload small.
       supabase.from('census_data')
-        .select('patient_name, region, status, insurance, last_visit_date, first_seen_date, last_seen_date, days_overdue')
+        .select('id, patient_name, region, status, previous_status, insurance, last_visit_date, first_seen_date, last_seen_date, days_overdue')
         .in('region', regions),
     ]).then(function(results) {
       setTasks(results[0].data || []);
@@ -616,71 +620,208 @@ export default function CoordinatorPage(props) {
         )}
 
         {/* ── MY REGIONS — PIPELINE OVERVIEW ──────────────────────────── */}
-        <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 4 }}>
-            🗺 My Regions &mdash; Pipeline Overview
-          </div>
-          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
-            Patient counts by status across each region you cover
-          </div>
-          <div style={{ overflow: 'auto' }}>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
-              padding: '8px 10px', background: '#F9FAFB', borderRadius: 6,
-              fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em',
-            }}>
-              <span>Region</span>
-              <span style={{ textAlign: 'center' }}>Active</span>
-              <span style={{ textAlign: 'center' }}>Eval Pend</span>
-              <span style={{ textAlign: 'center' }}>SOC Pend</span>
-              <span style={{ textAlign: 'center' }}>Auth Pend</span>
-              <span style={{ textAlign: 'center' }}>On Hold</span>
-              <span style={{ textAlign: 'center' }}>Hospital</span>
-              <span style={{ textAlign: 'center' }}>Waitlist</span>
-              <span style={{ textAlign: 'center' }}>Discharge</span>
-            </div>
-            {regions.map(function(r, i) {
-              var c = regionPipeline.byRegion[r] || { active:0, evalPending:0, socPending:0, authPending:0, onHold:0, hospitalized:0, waitlist:0, discharge:0 };
-              return (
-                <div key={r} style={{
+        {/* Bucket helpers used by both the cell click handlers and the
+            expansion-panel filter. Matching mirrors regionPipeline. */}
+        {(function renderPipeline() {
+          var BUCKET_LABELS = {
+            active: 'Active', evalPending: 'Eval Pending', socPending: 'SOC Pending',
+            authPending: 'Auth Pending', onHold: 'On Hold', hospitalized: 'Hospitalized',
+            waitlist: 'Waitlist', discharge: 'Discharge',
+          };
+          function bucketMatches(status, bucket) {
+            var s = (status || '').toLowerCase();
+            if (bucket === 'active')        return s.indexOf('active') === 0;
+            if (bucket === 'evalPending')   return s.indexOf('eval') >= 0 && s.indexOf('pending') >= 0;
+            if (bucket === 'socPending')    return s.indexOf('soc') >= 0 && s.indexOf('pending') >= 0;
+            if (bucket === 'authPending')   return s.indexOf('auth') >= 0 && s.indexOf('pending') >= 0;
+            if (bucket === 'onHold')        return s.indexOf('on hold') >= 0 || s.indexOf('on_hold') >= 0;
+            if (bucket === 'hospitalized')  return s.indexOf('hospital') >= 0;
+            if (bucket === 'waitlist')      return s.indexOf('waitlist') >= 0;
+            if (bucket === 'discharge')     return s.indexOf('discharge') >= 0 || s.indexOf('non-admit') >= 0;
+            return false;
+          }
+          // Patients matching the currently-expanded cell
+          var expandedPatients = expandedCell
+            ? census.filter(function(p) {
+                var regionMatch = expandedCell.region === '__TOTAL__' ? true : p.region === expandedCell.region;
+                return regionMatch && bucketMatches(p.status, expandedCell.bucket);
+              }).sort(function(a, b) { return (a.patient_name || '').localeCompare(b.patient_name || ''); })
+            : [];
+
+          // Cell component: clickable number with visual selected state
+          function Cell(props) {
+            var isActive = expandedCell && expandedCell.region === props.region && expandedCell.bucket === props.bucket;
+            var canClick = props.count > 0;
+            return (
+              <span
+                onClick={canClick ? function() {
+                  setExpandedCell(isActive ? null : { region: props.region, bucket: props.bucket });
+                } : null}
+                style={{
+                  textAlign: 'center', fontWeight: props.weight || 600, color: props.color,
+                  cursor: canClick ? 'pointer' : 'default',
+                  background: isActive ? '#0F1117' : 'transparent',
+                  borderRadius: 6, padding: '4px 6px',
+                  border: isActive ? '1px solid #0F1117' : '1px solid transparent',
+                  transition: 'background 0.15s, color 0.15s',
+                  display: 'inline-block', minWidth: 32,
+                }}
+                onMouseEnter={canClick && !isActive ? function(e) { e.currentTarget.style.background = '#F3F4F6'; } : null}
+                onMouseLeave={canClick && !isActive ? function(e) { e.currentTarget.style.background = 'transparent'; } : null}
+              >
+                <span style={isActive ? { color: '#fff' } : null}>{props.count}</span>
+              </span>
+            );
+          }
+
+          return (
+            <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>🗺 My Regions &mdash; Pipeline Overview</div>
+                {expandedCell && (
+                  <button onClick={function() { setExpandedCell(null); }}
+                    style={{ fontSize: 10, color: '#6B7280', background: 'none', border: '1px solid #E5E7EB', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                    Close patient list
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
+                Click any number to see the patient list · click a patient to edit their record
+              </div>
+              <div style={{ overflow: 'auto' }}>
+                <div style={{
                   display: 'grid',
                   gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
-                  padding: '11px 10px', borderBottom: i < regions.length - 1 ? '1px solid #F3F4F6' : 'none',
-                  alignItems: 'center', fontSize: 14, fontFamily: 'DM Mono, monospace',
+                  padding: '8px 10px', background: '#F9FAFB', borderRadius: 6,
+                  fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em',
                 }}>
-                  <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif', color: '#111827' }}>Region {r}</span>
-                  <span style={{ textAlign: 'center', fontWeight: 700, color: '#059669' }}>{c.active}</span>
-                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.evalPending > 0 ? '#1565C0' : '#9CA3AF' }}>{c.evalPending}</span>
-                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.socPending > 0 ? '#1565C0' : '#9CA3AF' }}>{c.socPending}</span>
-                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.authPending > 0 ? '#D97706' : '#9CA3AF' }}>{c.authPending}</span>
-                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.onHold > 5 ? '#DC2626' : c.onHold > 0 ? '#7C3AED' : '#9CA3AF' }}>{c.onHold}</span>
-                  <span style={{ textAlign: 'center', fontWeight: 600, color: c.hospitalized > 0 ? '#DC2626' : '#9CA3AF' }}>{c.hospitalized}</span>
-                  <span style={{ textAlign: 'center', fontWeight: 600, color: '#9CA3AF' }}>{c.waitlist}</span>
-                  <span style={{ textAlign: 'center', fontWeight: 600, color: '#9CA3AF' }}>{c.discharge}</span>
+                  <span>Region</span>
+                  <span style={{ textAlign: 'center' }}>Active</span>
+                  <span style={{ textAlign: 'center' }}>Eval Pend</span>
+                  <span style={{ textAlign: 'center' }}>SOC Pend</span>
+                  <span style={{ textAlign: 'center' }}>Auth Pend</span>
+                  <span style={{ textAlign: 'center' }}>On Hold</span>
+                  <span style={{ textAlign: 'center' }}>Hospital</span>
+                  <span style={{ textAlign: 'center' }}>Waitlist</span>
+                  <span style={{ textAlign: 'center' }}>Discharge</span>
                 </div>
-              );
-            })}
-            {regions.length > 1 && (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
-                padding: '11px 10px', marginTop: 4, background: '#0F1117', color: '#fff', borderRadius: 6,
-                alignItems: 'center', fontSize: 14, fontFamily: 'DM Mono, monospace',
-              }}>
-                <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif' }}>Total</span>
-                <span style={{ textAlign: 'center', fontWeight: 800 }}>{regionPipeline.totals.active}</span>
-                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.evalPending}</span>
-                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.socPending}</span>
-                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.authPending}</span>
-                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.onHold}</span>
-                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.hospitalized}</span>
-                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.waitlist}</span>
-                <span style={{ textAlign: 'center', fontWeight: 700 }}>{regionPipeline.totals.discharge}</span>
+                {regions.map(function(r, i) {
+                  var c = regionPipeline.byRegion[r] || { active:0, evalPending:0, socPending:0, authPending:0, onHold:0, hospitalized:0, waitlist:0, discharge:0 };
+                  return (
+                    <div key={r} style={{
+                      display: 'grid',
+                      gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
+                      padding: '8px 10px', borderBottom: i < regions.length - 1 ? '1px solid #F3F4F6' : 'none',
+                      alignItems: 'center', fontSize: 14, fontFamily: 'DM Mono, monospace',
+                    }}>
+                      <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif', color: '#111827' }}>Region {r}</span>
+                      <Cell region={r} bucket="active"        count={c.active}        color="#059669" weight={700} />
+                      <Cell region={r} bucket="evalPending"   count={c.evalPending}   color={c.evalPending>0?'#1565C0':'#9CA3AF'} />
+                      <Cell region={r} bucket="socPending"    count={c.socPending}    color={c.socPending>0?'#1565C0':'#9CA3AF'} />
+                      <Cell region={r} bucket="authPending"   count={c.authPending}   color={c.authPending>0?'#D97706':'#9CA3AF'} />
+                      <Cell region={r} bucket="onHold"        count={c.onHold}        color={c.onHold>5?'#DC2626':c.onHold>0?'#7C3AED':'#9CA3AF'} />
+                      <Cell region={r} bucket="hospitalized"  count={c.hospitalized}  color={c.hospitalized>0?'#DC2626':'#9CA3AF'} />
+                      <Cell region={r} bucket="waitlist"      count={c.waitlist}      color="#9CA3AF" />
+                      <Cell region={r} bucket="discharge"     count={c.discharge}     color="#9CA3AF" />
+                    </div>
+                  );
+                })}
+                {regions.length > 1 && (
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
+                    padding: '8px 10px', marginTop: 4, background: '#0F1117', color: '#fff', borderRadius: 6,
+                    alignItems: 'center', fontSize: 14, fontFamily: 'DM Mono, monospace',
+                  }}>
+                    <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif' }}>Total</span>
+                    <Cell region="__TOTAL__" bucket="active"        count={regionPipeline.totals.active}        color="#fff" weight={800} />
+                    <Cell region="__TOTAL__" bucket="evalPending"   count={regionPipeline.totals.evalPending}   color="#fff" weight={700} />
+                    <Cell region="__TOTAL__" bucket="socPending"    count={regionPipeline.totals.socPending}    color="#fff" weight={700} />
+                    <Cell region="__TOTAL__" bucket="authPending"   count={regionPipeline.totals.authPending}   color="#fff" weight={700} />
+                    <Cell region="__TOTAL__" bucket="onHold"        count={regionPipeline.totals.onHold}        color="#fff" weight={700} />
+                    <Cell region="__TOTAL__" bucket="hospitalized"  count={regionPipeline.totals.hospitalized}  color="#fff" weight={700} />
+                    <Cell region="__TOTAL__" bucket="waitlist"      count={regionPipeline.totals.waitlist}      color="#fff" weight={700} />
+                    <Cell region="__TOTAL__" bucket="discharge"     count={regionPipeline.totals.discharge}     color="#fff" weight={700} />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
+
+              {/* ── EXPANSION PANEL: patient list for the clicked cell ── */}
+              {expandedCell && (
+                <div style={{
+                  marginTop: 14, border: '2px solid #0F1117', borderRadius: 10,
+                  background: '#F9FAFB', overflow: 'hidden',
+                }}>
+                  <div style={{
+                    padding: '10px 14px', background: '#0F1117', color: '#fff',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>
+                        {expandedCell.region === '__TOTAL__' ? 'All Regions' : 'Region ' + expandedCell.region}
+                        {' · '}{BUCKET_LABELS[expandedCell.bucket]}
+                      </div>
+                      <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
+                        {expandedPatients.length} patient{expandedPatients.length === 1 ? '' : 's'} · click a row to edit status
+                      </div>
+                    </div>
+                    <button onClick={function() { setExpandedCell(null); }}
+                      style={{ background: 'none', border: '1px solid #4B5563', color: '#D1D5DB', borderRadius: 5, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>
+                      Close ×
+                    </button>
+                  </div>
+
+                  {expandedPatients.length === 0 ? (
+                    <div style={{ padding: 24, textAlign: 'center', color: '#9CA3AF', fontSize: 12 }}>
+                      No patients in this bucket right now.
+                    </div>
+                  ) : (
+                    <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+                      <div style={{
+                        display: 'grid', gridTemplateColumns: '60px 1.6fr 1fr 1fr 100px',
+                        padding: '7px 14px', background: '#fff', borderBottom: '1px solid #E5E7EB',
+                        fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em', position: 'sticky', top: 0,
+                      }}>
+                        <span>Region</span><span>Patient</span><span>Status</span><span>Insurance</span><span style={{ textAlign: 'right' }}>Last Visit</span>
+                      </div>
+                      {expandedPatients.map(function(p, i) {
+                        var lastVisit = p.last_visit_date
+                          ? new Date(p.last_visit_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                          : '—';
+                        var daysAgo = p.last_visit_date ? daysSinceLocal(p.last_visit_date) : null;
+                        var lastVisitColor = daysAgo === null ? '#9CA3AF'
+                          : daysAgo > 14 ? '#DC2626'
+                          : daysAgo > 7  ? '#D97706'
+                          : '#374151';
+                        return (
+                          <div key={p.patient_name + '|' + p.region + '|' + i}
+                            onClick={function() { setStatusPatient(p); }}
+                            style={{
+                              display: 'grid', gridTemplateColumns: '60px 1.6fr 1fr 1fr 100px',
+                              padding: '9px 14px', borderBottom: '1px solid #F3F4F6',
+                              background: i % 2 === 0 ? '#fff' : '#F9FAFB',
+                              alignItems: 'center', fontSize: 12, cursor: 'pointer',
+                              transition: 'background 0.1s',
+                            }}
+                            onMouseEnter={function(e) { e.currentTarget.style.background = '#EFF6FF'; }}
+                            onMouseLeave={function(e) { e.currentTarget.style.background = i % 2 === 0 ? '#fff' : '#F9FAFB'; }}>
+                            <span style={{ fontWeight: 700, color: '#374151' }}>{p.region}</span>
+                            <span style={{ fontWeight: 600, color: '#111827' }}>{p.patient_name}</span>
+                            <span style={{ color: '#6B7280', fontSize: 11 }}>{p.status || '—'}</span>
+                            <span style={{ color: '#6B7280', fontSize: 11 }}>{p.insurance || '—'}</span>
+                            <span style={{ textAlign: 'right', color: lastVisitColor, fontSize: 11, fontWeight: 600 }}>
+                              {lastVisit}{daysAgo !== null ? ' (' + daysAgo + 'd)' : ''}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ── PRIORITY OPPORTUNITIES (no $ shown to coordinators) ─────── */}
         <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
