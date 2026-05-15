@@ -83,6 +83,27 @@ function isCompleted(s)    { return /completed/i.test(s || ''); }
 function isMissed(s, e)    { return /missed/i.test(s || '') && !isCancelled(e, s); }
 function isScheduled(s, e) { return /scheduled/i.test(s || '') && !isCancelled(e, s); }
 
+// ---- numeric helpers for auth lag computation -----------------------------
+function median(arr) {
+  if (!arr || arr.length === 0) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? Math.round((sorted[mid - 1] + sorted[mid]) / 2) : sorted[mid];
+}
+function daysBetween(start, end) {
+  if (!start || !end) return null;
+  const s = new Date(start).getTime();
+  const e = new Date(end).getTime();
+  if (isNaN(s) || isNaN(e) || e < s) return null;
+  return Math.round((e - s) / (1000 * 60 * 60 * 24));
+}
+function daysAgo(date) {
+  if (!date) return null;
+  const d = new Date(date).getTime();
+  if (isNaN(d)) return null;
+  return Math.floor((Date.now() - d) / (1000 * 60 * 60 * 24));
+}
+
 // ---- tiny presentational components --------------------------------------
 function KPI({ label, value, sub, accent = 'var(--black)', flag }) {
   return (
@@ -260,7 +281,7 @@ export default function AssociateDirectorDashboard({ onNavigate }) {
       ),
       fetchAllPages(
         supabase.from('auth_tracker')
-          .select('region,auth_status,visits_authorized,visits_used,auth_expiry_date')
+          .select('id,region,auth_status,visits_authorized,visits_used,auth_expiry_date,auth_submitted_date,auth_approved_date,soc_date,insurance,patient_name,is_currently_active')
           .in('region', myRegions)
       ),
       // For resolving "who manages region X" → coordinators with role regional_manager
@@ -381,6 +402,62 @@ export default function AssociateDirectorDashboard({ onNavigate }) {
     }).length,
     [myRegions, coords]
   );
+
+  // ─── Authorization Lag computations (v1.1) ─────────────────────────────
+  // Per-AD auth pipeline visibility:
+  //   * Median days payor takes to respond (auth_submitted → auth_approved)
+  //   * Median days from approval to first SOC visit (auth_approved → soc_date)
+  //   * Patients currently stalled (status pending/submitted, >5 days old)
+  //   * Payor leaderboard sorted slowest-first (3+ data points required)
+  //
+  // Only considers `is_currently_active` rows so renewal history doesn't
+  // skew the medians. Negative or null durations are filtered out
+  // (data-quality guard against rows with mis-ordered timestamps).
+  const authLag = useMemo(() => {
+    const active = auth.filter(a => a.is_currently_active !== false);
+
+    const submitToApprove = active
+      .map(a => daysBetween(a.auth_submitted_date, a.auth_approved_date))
+      .filter(d => d !== null);
+
+    const approveToSoc = active
+      .map(a => daysBetween(a.auth_approved_date, a.soc_date))
+      .filter(d => d !== null);
+
+    const stalled = active
+      .filter(a => {
+        const s = (a.auth_status || '').toLowerCase();
+        if (!['submitted', 'pending'].includes(s)) return false;
+        const days = daysAgo(a.auth_submitted_date);
+        return days !== null && days > 5;
+      })
+      .map(a => ({ ...a, daysSinceSubmit: daysAgo(a.auth_submitted_date) }))
+      .sort((a, b) => b.daysSinceSubmit - a.daysSinceSubmit);
+
+    // Payor breakdown — group submit→approve days by insurance,
+    // surface only payors with ≥3 data points to avoid noise.
+    const byPayor = {};
+    active.forEach(a => {
+      if (!a.insurance) return;
+      const d = daysBetween(a.auth_submitted_date, a.auth_approved_date);
+      if (d === null) return;
+      if (!byPayor[a.insurance]) byPayor[a.insurance] = [];
+      byPayor[a.insurance].push(d);
+    });
+    const payorRanking = Object.entries(byPayor)
+      .filter(([, days]) => days.length >= 3)
+      .map(([insurance, days]) => ({ insurance, median: median(days), count: days.length }))
+      .sort((a, b) => b.median - a.median);
+
+    return {
+      medianSubmitToApprove: median(submitToApprove),
+      medianApproveToSoc: median(approveToSoc),
+      submitToApproveCount: submitToApprove.length,
+      approveToSocCount: approveToSoc.length,
+      stalled,
+      payorRanking,
+    };
+  }, [auth]);
 
   function handleDrillIntoRegion(letter) {
     // Navigate to the existing RM dashboard with this region preselected.
@@ -522,10 +599,173 @@ export default function AssociateDirectorDashboard({ onNavigate }) {
         ))}
       </div>
 
-      {/* TODO v1.1: Authorization lag tracking section
-            Reads from auth_tracker. Compute median referral→SOC business days
-            per region. Surface payor-level outliers. Will require joining
-            intake_referrals.date_received with auth_tracker timestamps. */}
+      {/* ─── AUTHORIZATION LAG TRACKING (v1.1) ─────────────────────────── */}
+      <div style={{ marginTop: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div>
+            <div style={{
+              fontSize: 11, fontWeight: 700, color: 'var(--gray)',
+              textTransform: 'uppercase', letterSpacing: '0.08em',
+            }}>Authorization Lag</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--black)', marginTop: 2 }}>
+              Active Auth Pipeline
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--gray)' }}>
+            Top-quartile target: median ≤ 3 days at each stage
+          </div>
+        </div>
+
+        {/* Lag KPI strip */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 12,
+          marginBottom: 16,
+        }}>
+          <KPI
+            label="Submission → Approval"
+            value={authLag.medianSubmitToApprove !== null ? `${authLag.medianSubmitToApprove}d` : '—'}
+            sub={authLag.submitToApproveCount > 0 ? `median of ${authLag.submitToApproveCount} auths` : 'no data'}
+            accent={
+              authLag.medianSubmitToApprove === null ? 'var(--gray)' :
+              authLag.medianSubmitToApprove <= 3 ? '#10B981' :
+              authLag.medianSubmitToApprove <= 7 ? '#F59E0B' : '#EF4444'
+            }
+          />
+          <KPI
+            label="Approval → SOC"
+            value={authLag.medianApproveToSoc !== null ? `${authLag.medianApproveToSoc}d` : '—'}
+            sub={authLag.approveToSocCount > 0 ? `median of ${authLag.approveToSocCount} auths` : 'no data'}
+            accent={
+              authLag.medianApproveToSoc === null ? 'var(--gray)' :
+              authLag.medianApproveToSoc <= 3 ? '#10B981' :
+              authLag.medianApproveToSoc <= 7 ? '#F59E0B' : '#EF4444'
+            }
+          />
+          <KPI
+            label="Stalled Auths"
+            value={authLag.stalled.length}
+            sub="submitted > 5 days, no response"
+            flag={authLag.stalled.length > 0 ? 'Action' : null}
+            accent={authLag.stalled.length > 0 ? '#EF4444' : '#10B981'}
+          />
+          <KPI
+            label="Slowest Payor"
+            value={authLag.payorRanking[0] ? `${authLag.payorRanking[0].median}d` : '—'}
+            sub={authLag.payorRanking[0]
+              ? authLag.payorRanking[0].insurance.length > 22
+                ? authLag.payorRanking[0].insurance.slice(0, 22) + '…'
+                : authLag.payorRanking[0].insurance
+              : 'no data'}
+          />
+        </div>
+
+        {/* Stalled patients + Payor breakdown side by side */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+          gap: 14,
+        }}>
+          {/* Stalled auths table */}
+          <div style={{
+            background: 'var(--card-bg)', border: '1px solid var(--border)',
+            borderRadius: 12, overflow: 'hidden',
+          }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--black)' }}>
+                Stalled Authorizations
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>
+                Submitted to payor but no response after 5 days — worth a follow-up call
+              </div>
+            </div>
+            {authLag.stalled.length === 0 ? (
+              <div style={{ padding: 24, color: 'var(--gray)', fontSize: 12, textAlign: 'center' }}>
+                No stalled auths — payors responding promptly.
+              </div>
+            ) : (
+              <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                {authLag.stalled.slice(0, 15).map((s, i) => (
+                  <div key={s.id || i} style={{
+                    display: 'grid', gridTemplateColumns: '1fr auto', gap: 12,
+                    padding: '10px 16px', borderBottom: '1px solid var(--border)',
+                    alignItems: 'center',
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>
+                        {s.patient_name || '—'}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 2 }}>
+                        Region {s.region} · {s.insurance || '—'} · Submitted {s.auth_submitted_date
+                          ? new Date(s.auth_submitted_date).toLocaleDateString()
+                          : '—'}
+                      </div>
+                    </div>
+                    <span style={{
+                      fontSize: 14, fontWeight: 700, fontFamily: 'DM Mono, monospace',
+                      color: s.daysSinceSubmit > 14 ? '#DC2626'
+                        : s.daysSinceSubmit > 7 ? '#D97706'
+                        : '#F59E0B',
+                    }}>
+                      {s.daysSinceSubmit}d
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Payor response leaderboard */}
+          <div style={{
+            background: 'var(--card-bg)', border: '1px solid var(--border)',
+            borderRadius: 12, overflow: 'hidden',
+          }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--black)' }}>
+                Payor Response Time
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>
+                Median submission → approval days · slowest first · ≥3 auths each
+              </div>
+            </div>
+            {authLag.payorRanking.length === 0 ? (
+              <div style={{ padding: 24, color: 'var(--gray)', fontSize: 12, textAlign: 'center' }}>
+                No payor data available yet.
+              </div>
+            ) : (
+              <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                {authLag.payorRanking.slice(0, 10).map((p) => {
+                  const maxMedian = Math.max(authLag.payorRanking[0].median, 1);
+                  const pct = Math.min(100, Math.round((p.median / maxMedian) * 100));
+                  const color = p.median <= 3 ? '#10B981'
+                    : p.median <= 7 ? '#F59E0B' : '#EF4444';
+                  return (
+                    <div key={p.insurance} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)' }}>
+                          {p.insurance}
+                        </span>
+                        <span style={{ fontSize: 13, fontWeight: 700, fontFamily: 'DM Mono, monospace', color }}>
+                          {p.median}d
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ flex: 1, height: 5, background: 'var(--border)', borderRadius: 999 }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 999, transition: 'width 0.4s' }} />
+                        </div>
+                        <span style={{ fontSize: 10, color: 'var(--gray)', minWidth: 50, textAlign: 'right' }}>
+                          {p.count} auths
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* TODO v1.1: Documentation timeliness section
             Requires a documentation/notes table with submitted_at timestamps
