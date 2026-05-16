@@ -51,6 +51,8 @@ import OpsReportsPage from './dashboard/OpsReportsPage';
 import ClinicianSchedulePage from './dashboard/ClinicianSchedulePage';
 import InsuranceSettingsPage from './dashboard/InsuranceSettingsPage';
 import OperationsManagerDashboard from './dashboard/OperationsManagerDashboard';
+import AuthAuditImportPage from './dashboard/AuthAuditImportPage';
+import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -102,6 +104,8 @@ const PAGE_COMPONENTS = {
   'clinician-schedule':      ClinicianSchedulePage,
   'insurance-settings':      InsuranceSettingsPage,
   'ops-dashboard':           OperationsManagerDashboard,
+  'audit-import':            AuthAuditImportPage,
+  'dept-reports':            DepartmentReportsPage,
 };
 
 function AccessDenied() {
