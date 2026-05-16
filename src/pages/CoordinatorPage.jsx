@@ -916,6 +916,78 @@ export default function CoordinatorPage(props) {
           );
         })()}
 
+        {/* ── TODAY'S TASKS (moved to top per Liam — critical for daily ops) ── */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            📋 Today's Tasks
+            <span style={{ fontSize: 11, fontWeight: 400, color: '#6B7280' }}>
+              Note submissions, auth follow-ups, and patient outreach you need to act on
+            </span>
+          </div>
+
+          {/* Tabs + Add */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 4, background: 'white', border: '1px solid #E5E7EB', borderRadius: 8, padding: 4 }}>
+              {[
+                { key: 'today', label: "Today's Priority (" + todayTasks.length + ')' },
+                { key: 'all',   label: 'All Tasks (' + allTasks.length + ')' },
+              ].map(function(tab) {
+                var isActive = activeTab === tab.key;
+                return (
+                  <button key={tab.key} onClick={function() { setActiveTab(tab.key); }}
+                    style={{ padding: '7px 16px', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: isActive ? 600 : 500, cursor: 'pointer', background: isActive ? '#0F1117' : 'none', color: isActive ? '#fff' : '#6B7280' }}>
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select value={typeFilter} onChange={function(e) { setTypeFilter(e.target.value); }}
+                style={{ padding: '7px 10px', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 12, background: 'white', outline: 'none' }}>
+                <option value="ALL">All Types</option>
+                {Object.entries(TASK_CONFIG).map(function(entry) {
+                  return <option key={entry[0]} value={entry[0]}>{entry[1].label}</option>;
+                })}
+              </select>
+              <button onClick={function() { setShowModal(true); }}
+                style={{ padding: '7px 14px', background: '#D94F2B', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                + Add Task
+              </button>
+            </div>
+          </div>
+
+          {/* Task list */}
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF' }}>Loading tasks...</div>
+          ) : displayTasks.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 60, background: 'white', borderRadius: 10, border: '1px solid #E5E7EB' }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>&#9989;</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
+                {activeTab === 'today' ? 'No critical tasks today' : 'No open tasks'}
+              </div>
+              <div style={{ fontSize: 13, color: '#9CA3AF', marginTop: 6 }}>
+                {activeTab === 'today' ? 'Switch to All Tasks to see lower priority items' : 'All caught up!'}
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {displayTasks.map(function(task) {
+                return (
+                  <TaskCard key={task.id} task={task} onRefresh={fetchTasks} autoResponses={autoResponses} coordName={coordName} onStatusChange={function(patName, region) {
+                    setStatusPatient({ patient_name: patName, region: region, id: null, _needsLookup: true });
+                  }} />
+                );
+              })}
+            </div>
+          )}
+
+          {/* Completed today */}
+          <div style={{ marginTop: 12 }}>
+            <CompletedSection regions={regions} />
+          </div>
+        </div>
+
         {/* ── MY REGIONS — PIPELINE OVERVIEW ──────────────────────────── */}
         {/* Bucket helpers used by both the cell click handlers and the
             expansion-panel filter. Matching mirrors regionPipeline. */}
@@ -1560,65 +1632,6 @@ export default function CoordinatorPage(props) {
           })()}
         </div>
 
-        {/* Tabs + Add */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <div style={{ display: 'flex', gap: 4, background: 'white', border: '1px solid #E5E7EB', borderRadius: 8, padding: 4 }}>
-            {[
-              { key: 'today', label: "Today's Priority (" + todayTasks.length + ')' },
-              { key: 'all',   label: 'All Tasks (' + allTasks.length + ')' },
-            ].map(function(tab) {
-              var isActive = activeTab === tab.key;
-              return (
-                <button key={tab.key} onClick={function() { setActiveTab(tab.key); }}
-                  style={{ padding: '7px 16px', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: isActive ? 600 : 500, cursor: 'pointer', background: isActive ? '#0F1117' : 'none', color: isActive ? '#fff' : '#6B7280' }}>
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
- 
-          <div style={{ display: 'flex', gap: 8 }}>
-            <select value={typeFilter} onChange={function(e) { setTypeFilter(e.target.value); }}
-              style={{ padding: '7px 10px', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 12, background: 'white', outline: 'none' }}>
-              <option value="ALL">All Types</option>
-              {Object.entries(TASK_CONFIG).map(function(entry) {
-                return <option key={entry[0]} value={entry[0]}>{entry[1].label}</option>;
-              })}
-            </select>
-            <button onClick={function() { setShowModal(true); }}
-              style={{ padding: '7px 14px', background: '#D94F2B', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-              + Add Task
-            </button>
-          </div>
-        </div>
- 
-        {/* Task list */}
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF' }}>Loading tasks...</div>
-        ) : displayTasks.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 60, background: 'white', borderRadius: 10, border: '1px solid #E5E7EB' }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>&#9989;</div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
-              {activeTab === 'today' ? 'No critical tasks today' : 'No open tasks'}
-            </div>
-            <div style={{ fontSize: 13, color: '#9CA3AF', marginTop: 6 }}>
-              {activeTab === 'today' ? 'Switch to All Tasks to see lower priority items' : 'All caught up!'}
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {displayTasks.map(function(task) {
-              return (
-                <TaskCard key={task.id} task={task} onRefresh={fetchTasks} autoResponses={autoResponses} coordName={coordName} onStatusChange={function(patName, region) {
-                  setStatusPatient({ patient_name: patName, region: region, id: null, _needsLookup: true });
-                }} />
-              );
-            })}
-          </div>
-        )}
- 
-        {/* Completed today */}
-        <CompletedSection regions={regions} />
       </div>
  
       {showModal && (
