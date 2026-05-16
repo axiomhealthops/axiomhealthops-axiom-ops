@@ -4,7 +4,8 @@ import TopBar from '../../components/TopBar';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import ManagerScorecards from '../../components/director/ManagerScorecards';
 import ExceptionFeed from '../../components/director/ExceptionFeed';
-import LieutenantSnapshots from '../../components/director/LieutenantSnapshots';
+// LieutenantSnapshots removed in v2.1 rework — redundant with Manager Scorecards.
+// Carla's scorecard IS her snapshot; Hervylie's scorecard IS his. One source of truth.
 
 const BLENDED_RATE = 230;
 const WEEKLY_TARGET = 750;
@@ -122,6 +123,114 @@ function RegionRow({ region, active, inactiveActive, onHold, pending, completedV
       <div style={{ fontSize:13, color:'var(--gray)' }}>{pending}</div>
       <div style={{ fontSize:11, fontWeight:700, color:revenueGap>5000?'#DC2626':revenueGap>2000?'#D97706':'#059669' }}>
         {revenueGap > 0 ? `-${fmt$(revenueGap)}/wk` : '✓ Active'}
+      </div>
+    </div>
+  );
+}
+
+// ── Hero Band (Director Command v2.1 rework) ─────────────────────────────────
+// The hero band is the only thing Liam sees in the first 5 seconds of his
+// daily standup. Per his explicit answer (2026-05-16):
+//   "Are we hitting revenue this week?" is THE question this page must answer.
+// So we lead with a massive revenue number, the ops score beside it, and one
+// declarative summary sentence with the today's-action counts baked in.
+function HeroBand({ weeklyRevenue, target, score, scoreColor, p1Count, redManagerCount, daysLeftInWeek, pathTiles }) {
+  const pct = Math.min(100, Math.round((weeklyRevenue / target) * 100));
+  const gap = Math.max(0, target - weeklyRevenue);
+  const paceColor = pct >= 80 ? '#34D399' : pct >= 60 ? '#FBBF24' : '#F87171';
+
+  return (
+    <div style={{ background: '#0F1117', borderRadius: 14, padding: '20px 24px', color: '#fff' }}>
+      {/* Headline strip: revenue mega-number + ops score */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 24, alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
+            Weekly Revenue Pace
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 56, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: paceColor, lineHeight: 1 }}>
+              {fmt$(weeklyRevenue)}
+            </div>
+            <div style={{ fontSize: 18, color: 'rgba(255,255,255,0.45)', fontWeight: 600 }}>
+              of {fmt$(target)} target
+            </div>
+            <div style={{
+              padding: '4px 10px', background: paceColor + '22', color: paceColor,
+              borderRadius: 6, fontSize: 14, fontWeight: 800, fontFamily: 'DM Mono, monospace',
+            }}>
+              {pct}%
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 999, height: 10, marginTop: 14, overflow: 'hidden' }}>
+            <div style={{ width: pct + '%', height: '100%', background: paceColor, borderRadius: 999, transition: 'width 0.8s ease' }} />
+          </div>
+        </div>
+        <div style={{
+          padding: '14px 22px', background: 'rgba(255,255,255,0.05)', borderRadius: 10,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 130,
+          border: '1px solid rgba(255,255,255,0.08)',
+        }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Ops Score
+          </div>
+          <div style={{ fontSize: 44, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: scoreColor, lineHeight: 1, marginTop: 4 }}>
+            {score}
+          </div>
+          <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)' }}>/ 100</div>
+          <div style={{ fontSize: 9, color: scoreColor, marginTop: 4, fontWeight: 700 }}>
+            {score >= 80 ? 'STRONG' : score >= 60 ? 'NEEDS WORK' : 'CRITICAL'}
+          </div>
+        </div>
+      </div>
+
+      {/* Headline summary sentence — Liam's 5-second read */}
+      <div style={{
+        padding: '12px 16px', background: 'rgba(255,255,255,0.04)', borderRadius: 8,
+        fontSize: 13, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5, marginBottom: 16,
+        border: '1px solid rgba(255,255,255,0.06)',
+      }}>
+        {pct >= 80 ? '✓ ' : pct >= 60 ? '⚠ ' : '✗ '}
+        <strong style={{ color: paceColor }}>On pace for {fmt$(weeklyRevenue)}</strong> of {fmt$(target)} this week
+        {gap > 0 && <span style={{ color: 'rgba(255,255,255,0.55)' }}> (gap {fmt$(gap)})</span>}
+        {' · '}
+        {p1Count > 0 ? (
+          <><strong style={{ color: '#F87171' }}>{p1Count} P1 {p1Count === 1 ? 'issue' : 'issues'}</strong> need your eyes</>
+        ) : (
+          <span style={{ color: '#34D399' }}>no P1 issues</span>
+        )}
+        {' · '}
+        {redManagerCount > 0 ? (
+          <><strong style={{ color: '#F87171' }}>{redManagerCount} {redManagerCount === 1 ? 'manager' : 'managers'} in red</strong></>
+        ) : (
+          <span style={{ color: '#34D399' }}>all managers green/amber</span>
+        )}
+        {' · '}
+        <span style={{ color: 'rgba(255,255,255,0.5)' }}>{daysLeftInWeek} days left in week</span>
+      </div>
+
+      {/* Path to $200K — supporting context for the headline */}
+      <div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+          Path to {fmt$(target)}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+          {pathTiles.map(function(item) {
+            return (
+              <div key={item.label} style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
+                  {item.label}
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: item.color, lineHeight: 1 }}>
+                  {item.val}
+                </div>
+                <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>
+                  {item.sub}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -334,6 +443,104 @@ export default function DirectorDashboard({ onNavigate }) {
   const today = new Date().toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
   const totalInactiveGap = m.inactiveActive.length * BLENDED_RATE * 2;
 
+  // Days left in week (counts Mon-Sun = 7; if today is Wed = 4 days left)
+  const now = new Date();
+  const dow = now.getDay(); // 0=Sun
+  const daysLeftInWeek = dow === 0 ? 0 : 7 - dow;
+
+  // For the hero headline sentence — needs proxies for "P1 exceptions" and
+  // "red managers". We compute lightweight versions here so we don't need to
+  // round-trip through the ExceptionFeed/ManagerScorecards components.
+  function _stuckPatients() {
+    return census.filter(function(p) {
+      var s = p.status || '';
+      var d = p.status_changed_at ? Math.ceil((Date.now() - new Date(p.status_changed_at).getTime()) / 86400000) : null;
+      if (d === null) return false;
+      if (/soc.*pending/i.test(s)) return d > 3;
+      if (/auth.*pending/i.test(s) && !/active/i.test(s)) return d > 5;
+      if (/eval.*pending/i.test(s)) return d > 2;
+      return false;
+    });
+  }
+  const headlineP1Count = (() => {
+    // P1 proxy: dead spots + unassigned-stuck-7d+ + inactive coords 48h+
+    var stuck = _stuckPatients();
+    var unassignedDeep = stuck.filter(function(p) {
+      var d = Math.ceil((Date.now() - new Date(p.status_changed_at).getTime()) / 86400000);
+      return !p.pipeline_assigned_to && d >= 7;
+    }).length;
+    // Dead spots — count stuck patients whose owner has zero activity in 48h
+    var coordLast = {};
+    activityLog.forEach(function(a) {
+      if (!a.coordinator_name) return;
+      if (!coordLast[a.coordinator_name] || a.created_at > coordLast[a.coordinator_name]) {
+        coordLast[a.coordinator_name] = a.created_at;
+      }
+    });
+    var deadSpots = stuck.filter(function(p) {
+      if (!p.pipeline_assigned_to) return false;
+      var last = coordLast[p.pipeline_assigned_to];
+      if (!last) return true;
+      var hrs = (Date.now() - new Date(last).getTime()) / 3600000;
+      return hrs >= 48;
+    }).length;
+    return unassignedDeep + deadSpots;
+  })();
+  const headlineRedManagerCount = (() => {
+    // Red proxy: managers whose span has median stuck > 7d
+    // We approximate by counting ADs whose region spans have any patient
+    // stuck > 7d (the simpler and faster proxy than rebuilding the full
+    // scorecard math here).
+    var byRegionStuckDays = {};
+    _stuckPatients().forEach(function(p) {
+      var d = Math.ceil((Date.now() - new Date(p.status_changed_at).getTime()) / 86400000);
+      if (!byRegionStuckDays[p.region]) byRegionStuckDays[p.region] = [];
+      byRegionStuckDays[p.region].push(d);
+    });
+    function medianArr(arr) {
+      var s = arr.slice().sort(function(a,b){return a-b;});
+      var k = Math.floor(s.length / 2);
+      return s.length % 2 === 0 ? Math.round((s[k-1] + s[k]) / 2) : s[k];
+    }
+    var redCount = 0;
+    // FL_PARENT_REGIONS check — inline here to avoid pulling in another import
+    var parents = { 'FL North': ['B','C','G'], 'FL Central': ['A','H','M','N'], 'FL South': ['J','T','V'] };
+    Object.values(parents).forEach(function(regions) {
+      var pool = [];
+      regions.forEach(function(r) { if (byRegionStuckDays[r]) pool = pool.concat(byRegionStuckDays[r]); });
+      if (pool.length > 0 && medianArr(pool) > 7) redCount++;
+    });
+    return redCount;
+  })();
+
+  // Path-to-target tiles — promoted from below into the hero band
+  const pathTiles = [
+    {
+      label: 'Current Pace',
+      val: fmt$(m.weeklyRevenue),
+      sub: `${m.completedThisWeek.length} visits @ $${BLENDED_RATE}`,
+      color: m.weeklyRevenue >= 150000 ? '#34D399' : m.weeklyRevenue >= 100000 ? '#FBBF24' : '#F87171',
+    },
+    {
+      label: 'Recover Inactives',
+      val: `+${fmt$(totalInactiveGap)}`,
+      sub: `${m.inactiveActive.length} pts × 2 visits`,
+      color: '#FBBF24',
+    },
+    {
+      label: 'Convert Pipeline',
+      val: `+${fmt$(m.pendingStart.length * BLENDED_RATE * 2)}`,
+      sub: `${m.pendingStart.length} SOC/Eval pending`,
+      color: '#FBBF24',
+    },
+    {
+      label: 'Full Recovery',
+      val: fmt$(m.weeklyRevenue + totalInactiveGap + (m.pendingStart.length * BLENDED_RATE * 2)),
+      sub: `vs ${fmt$(REVENUE_TARGET)} target`,
+      color: (m.weeklyRevenue + totalInactiveGap + (m.pendingStart.length * BLENDED_RATE * 2)) >= REVENUE_TARGET ? '#34D399' : '#FBBF24',
+    },
+  ];
+
   // Score: 5 critical checks, each worth 20 pts
   const score = Math.round(
     (m.urgentAuths.length === 0 ? 20 : Math.max(0, 20 - m.urgentAuths.length * 2)) +
@@ -359,26 +566,49 @@ export default function DirectorDashboard({ onNavigate }) {
         }
       />
 
-      <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:16 }}>
+      <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:20 }}>
 
-        {/* ───────────────────────────────────────────────────────────────
-            DIRECTOR COMMAND v2 — Manager Accountability Layer
-            Order is deliberate:
-              1. Scorecards     → who's effective, who's slipping
-              2. Exception feed → what specifically needs your attention
-              3. Lieutenants    → quick verify of Carla/Hervylie views
-            Existing revenue + triage rolls below — still useful for the
-            weekly review use case, just no longer the lead.
-            ─────────────────────────────────────────────────────────────── */}
+        {/* ═══════════════════════════════════════════════════════════════
+            DIRECTOR COMMAND v2.1 — Vertical Newsfeed, Revenue Hero
+            Per Liam 2026-05-16: usage = daily standup (3-5 min), hero question
+            = "are we hitting revenue?", density = fewer/bigger/clearer.
+            Order matches the standup walkthrough:
+              1. HERO     → revenue + ops score + headline + path to target
+              2. FIRE     → exception feed (only what's broken today)
+              3. PEOPLE   → manager scorecards (T1+T2 visible, T3 collapsed)
+              4. PULSE    → weekly visit tiles
+              5. DETAIL   → collapsed by default — region/auth/clinician deep dive
+            Killed: TRIAGE cards (folded into Detail), LieutenantSnapshots
+            (redundant with scorecards), separate Revenue+Score row (now hero).
+            ═══════════════════════════════════════════════════════════════ */}
+
+        {/* ─── 1. HERO BAND ──────────────────────────────────────────── */}
+        <HeroBand
+          weeklyRevenue={m.weeklyRevenue}
+          target={REVENUE_TARGET}
+          score={score}
+          scoreColor={scoreColor}
+          p1Count={headlineP1Count}
+          redManagerCount={headlineRedManagerCount}
+          daysLeftInWeek={daysLeftInWeek}
+          pathTiles={pathTiles}
+        />
+
+        {/* ─── 2. FIRE — Exception Feed (today's action layer) ───────── */}
+        <ExceptionFeed
+          census={census}
+          activityLog={activityLog}
+          coordinators={coordinators}
+          onJumpTo={(target, intent) => go(target, intent)}
+        />
+
+        {/* ─── 3. PEOPLE — Manager Scorecards ────────────────────────── */}
         <ManagerScorecards
           census={census}
           statusLog={statusLog}
           activityLog={activityLog}
           coordinators={coordinators}
           onScorecardClick={(sc) => {
-            // For now, drill scorecards into the regional manager view
-            // pre-filtered to the manager's regions. Phase 3 will get a
-            // dedicated "manager profile" drill-in.
             if (sc.regions === 'ALL') {
               go('ops-dashboard');
             } else if (sc.regions && sc.regions.length === 1) {
@@ -389,65 +619,62 @@ export default function DirectorDashboard({ onNavigate }) {
           }}
         />
 
-        <ExceptionFeed
-          census={census}
-          activityLog={activityLog}
-          coordinators={coordinators}
-          onJumpTo={(target, intent) => go(target, intent)}
-        />
+        {/* ─── 4. PULSE — Today's Visit Numbers (compact strip) ──────── */}
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            📊 This Week's Pulse
+            <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
+              Visit numbers · click any tile to drill in
+            </span>
+          </div>
 
-        <LieutenantSnapshots
-          census={census}
-          intakeReferrals={intakeReferrals}
-          auths={auths}
-          activityLog={activityLog}
-          onJumpTo={(target) => go(target)}
-        />
-
-        {/* Revenue + Score Row */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:16 }}>
-          <RevenueGauge actual={m.weeklyRevenue} target={REVENUE_TARGET} />
-          <div style={{ background:'#0F1117', borderRadius:12, padding:'18px 24px', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minWidth:140 }}>
-            <div style={{ fontSize:10, fontWeight:700, color:'rgba(255,255,255,0.5)', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:6 }}>Ops Score</div>
-            <div style={{ fontSize:52, fontWeight:900, fontFamily:'DM Mono, monospace', color:scoreColor, lineHeight:1 }}>{score}</div>
-            <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', marginTop:4 }}>/100</div>
-            <div style={{ fontSize:9, color:scoreColor, marginTop:6, textAlign:'center', fontWeight:600 }}>
-              {score >= 80 ? 'Strong' : score >= 60 ? 'Needs Work' : 'Critical'}
-            </div>
+          {/* Visit pulse strip — five clickable tiles. Tighter padding than the
+              originally-duplicated dark Revenue/Score row (now in HeroBand).   */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
+            {[
+              { label:'Completed', val:m.completedThisWeek.length, color:'#059669', sub:`of ${WEEKLY_TARGET} target`, bg:'#F0FFF4', target:'visits', hint:'visit schedule' },
+              { label:'Cancelled', val:m.cancelledThisWeek.length, color:'#DC2626', sub:`${m.cancelRate}% cancel rate`, bg:m.cancelRate>10?'#FEF2F2':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
+              { label:'Missed', val:m.missedThisWeek.length, color:'#D97706', sub:'this week', bg:m.missedThisWeek.length>30?'#FEF3C7':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
+              { label:'Clinician Cap.', val:m.clinicianCapacity, color:'#1565C0', sub:'max visits/week', bg:'#EFF6FF', target:'staff', hint:'staff directory' },
+              { label:'Utilization', val:Math.round((m.completedThisWeek.length/m.clinicianCapacity)*100)+'%', color:m.completedThisWeek.length/m.clinicianCapacity>0.75?'#059669':'#D97706', sub:`${m.completedThisWeek.length}/${m.clinicianCapacity} capacity`, bg:'var(--card-bg)', target:'clinician-accountability', hint:'by clinician' },
+            ].map(c => {
+              const clickable = !!c.target;
+              return (
+                <div key={c.label}
+                  onClick={clickable ? () => go(c.target) : undefined}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onKeyDown={clickable ? e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); go(c.target); } } : undefined}
+                  style={{ background:c.bg, border:'1px solid var(--border)', borderRadius:10, padding:'10px 12px', textAlign:'center', cursor: clickable ? 'pointer' : 'default', transition:'transform 0.1s ease, box-shadow 0.15s ease' }}
+                  onMouseEnter={clickable ? e => { e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'; } : undefined}
+                  onMouseLeave={clickable ? e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; } : undefined}>
+                  <div style={{ fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
+                  <div style={{ fontSize:24, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:2 }}>{c.val}</div>
+                  <div style={{ fontSize:9, color:'var(--gray)', marginTop:1 }}>{c.sub}</div>
+                  {clickable && (
+                    <div style={{ fontSize:8, color:c.color, marginTop:3, opacity:0.65, fontWeight:600 }}>open {c.hint} →</div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        {/* Today's Visit Pulse — each tile routes to the relevant drill-down
-            so Liam can jump straight from the snapshot to the detail page
-            instead of scanning the sidebar. */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
-          {[
-            { label:'Completed', val:m.completedThisWeek.length, color:'#059669', sub:`of ${WEEKLY_TARGET} target`, bg:'#F0FFF4', target:'visits', hint:'visit schedule' },
-            { label:'Cancelled', val:m.cancelledThisWeek.length, color:'#DC2626', sub:`${m.cancelRate}% cancel rate`, bg:m.cancelRate>10?'#FEF2F2':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
-            { label:'Missed', val:m.missedThisWeek.length, color:'#D97706', sub:'this week', bg:m.missedThisWeek.length>30?'#FEF3C7':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
-            { label:'Clinician Cap.', val:m.clinicianCapacity, color:'#1565C0', sub:'max visits/week', bg:'#EFF6FF', target:'staff', hint:'staff directory' },
-            { label:'Utilization', val:Math.round((m.completedThisWeek.length/m.clinicianCapacity)*100)+'%', color:m.completedThisWeek.length/m.clinicianCapacity>0.75?'#059669':'#D97706', sub:`${m.completedThisWeek.length}/${m.clinicianCapacity} capacity`, bg:'var(--card-bg)', target:'clinician-accountability', hint:'by clinician' },
-          ].map(c => {
-            const clickable = !!c.target;
-            return (
-              <div key={c.label}
-                onClick={clickable ? () => go(c.target) : undefined}
-                role={clickable ? 'button' : undefined}
-                tabIndex={clickable ? 0 : undefined}
-                onKeyDown={clickable ? e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); go(c.target); } } : undefined}
-                style={{ background:c.bg, border:'1px solid var(--border)', borderRadius:10, padding:'10px 12px', textAlign:'center', cursor: clickable ? 'pointer' : 'default', transition:'transform 0.1s ease, box-shadow 0.15s ease' }}
-                onMouseEnter={clickable ? e => { e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'; } : undefined}
-                onMouseLeave={clickable ? e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; } : undefined}>
-                <div style={{ fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
-                <div style={{ fontSize:24, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:2 }}>{c.val}</div>
-                <div style={{ fontSize:9, color:'var(--gray)', marginTop:1 }}>{c.sub}</div>
-                {clickable && (
-                  <div style={{ fontSize:8, color:c.color, marginTop:3, opacity:0.65, fontWeight:600 }}>open {c.hint} →</div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        {/* ─── 5. DETAIL — Collapsed by default (deep ops view) ──────── */}
+        <details style={{ background: 'white', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+          <summary style={{
+            padding: '12px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: '#111827',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              🔎 Detail View — Revenue Recovery / Region Health / Auth / Clinician
+              <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
+                Folded by default · open for weekly review
+              </span>
+            </span>
+            <span style={{ fontSize: 10, color: '#6B7280' }}>click to expand ▾</span>
+          </summary>
+          <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 16, borderTop: '1px solid var(--border)' }}>
 
         {/* TRIAGE — 5 Priority Actions */}
         <div>
@@ -617,10 +844,12 @@ export default function DirectorDashboard({ onNavigate }) {
           </div>
         </div>
 
-        {/* Path to $200K */}
+        {/* Path to $200K — kept as full breakdown inside Detail. The compressed
+            version lives in the HeroBand for the daily-glance view; this version
+            keeps the original label phrasing for the weekly-review context.   */}
         <div style={{ background:'#0F1117', borderRadius:12, padding:'16px 20px', color:'#fff' }}>
           <div style={{ fontSize:12, fontWeight:800, color:'rgba(255,255,255,0.5)', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:12 }}>
-            📈 Path to $200K Weekly Revenue
+            📈 Path to $200K Weekly Revenue — Full Breakdown
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
             {[
@@ -657,6 +886,9 @@ export default function DirectorDashboard({ onNavigate }) {
             ))}
           </div>
         </div>
+
+          </div>
+        </details>
 
       </div>
     </div>
