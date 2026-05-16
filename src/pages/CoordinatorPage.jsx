@@ -298,6 +298,8 @@ export default function CoordinatorPage(props) {
   var [tasks, setTasks] = useState([]);
   var [authRecords, setAuthRecords] = useState([]);
   var [census, setCensus] = useState([]);
+  var [clinicians, setClinicians] = useState([]);
+  var [weekVisits, setWeekVisits] = useState([]);
   var [autoResponses, setAutoResponses] = useState({});
   var [loading, setLoading] = useState(true);
   var [activeTab, setActiveTab] = useState('today');
@@ -308,6 +310,10 @@ export default function CoordinatorPage(props) {
   // Clicking a cell number opens an inline patient list directly below the grid;
   // clicking the same cell again closes it. Click a patient row → status edit modal.
   var [expandedCell, setExpandedCell] = useState(null);
+  // Click-to-expand state for the priority opportunity cards. Stores the index
+  // of the expanded card or null. Each opp carries its own `.items` array which
+  // renders directly below the clicked card.
+  var [expandedOpp, setExpandedOpp] = useState(null);
 
   function fetchTasks() {
     Promise.all([
@@ -329,6 +335,14 @@ export default function CoordinatorPage(props) {
       supabase.from('census_data')
         .select('id, patient_name, region, status, previous_status, insurance, last_visit_date, first_seen_date, last_seen_date, days_overdue')
         .in('region', regions),
+      // Clinicians assigned to the coordinator's regions — used by the
+      // productivity widget. Includes pariox_name + aliases for visit
+      // attribution and weekly_visit_target/employment_type for pacing math.
+      supabase.from('clinicians')
+        .select('id, full_name, discipline, employment_type, region, weekly_visit_target, pariox_name, aliases, is_telehealth, is_active')
+        .eq('is_active', true)
+        .in('region', regions)
+        .order('full_name'),
     ]).then(function(results) {
       setTasks(results[0].data || []);
       setAuthRecords(results[1].data || []);
@@ -337,6 +351,41 @@ export default function CoordinatorPage(props) {
       (results[2].data || []).forEach(function(r) { respMap[r.action_key] = r; });
       setAutoResponses(respMap);
       setCensus(results[3].data || []);
+      setClinicians(results[4].data || []);
+
+      // Visits for this week — paginated because a busy week can exceed
+      // PostgREST's 1000-row default. We dedupe Pariox's duplicate
+      // "Level 3 + Cancelled" pairs (matching ProductivityPage's logic).
+      var weekStart = new Date();
+      weekStart.setHours(0,0,0,0);
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
+      var weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      var weekStartStr = weekStart.toISOString().slice(0,10);
+      var weekEndStr = weekEnd.toISOString().slice(0,10);
+
+      var allVisits = [];
+      function pull(from) {
+        return supabase.from('visit_schedule_data')
+          .select('staff_name,staff_name_normalized,visit_date,status,event_type,patient_name,region')
+          .gte('visit_date', weekStartStr).lte('visit_date', weekEndStr)
+          .not('event_type', 'ilike', '%(PDF)%')
+          .range(from, from + 999)
+          .then(function(res) {
+            if (res.error || !res.data || res.data.length === 0) {
+              setWeekVisits(allVisits);
+              return;
+            }
+            for (var i = 0; i < res.data.length; i++) allVisits.push(res.data[i]);
+            if (res.data.length < 1000) {
+              setWeekVisits(allVisits);
+              return;
+            }
+            return pull(from + 1000);
+          });
+      }
+      pull(0);
+
       setLoading(false);
     });
   }
@@ -481,17 +530,19 @@ export default function CoordinatorPage(props) {
   var opportunities = useMemo(function() {
     var opps = [];
 
-    // SOC Pending > 3 days
+    // SOC Pending > 3 days — items annotated with daysSinceFirstSeen for display
     var stuckSoc = census.filter(function(p) {
       var s = (p.status || '').toLowerCase();
       if (!(s.indexOf('soc') >= 0 && s.indexOf('pending') >= 0)) return false;
       var d = daysSinceLocal(p.first_seen_date);
       return d !== null && d > 3;
-    });
+    }).map(function(p) { return Object.assign({}, p, { _daysStuck: daysSinceLocal(p.first_seen_date) }); })
+      .sort(function(a, b) { return b._daysStuck - a._daysStuck; });
     if (stuckSoc.length) opps.push({
-      icon: '🚦', urgency: 'critical', sortKey: stuckSoc.length * 16,
+      icon: '🚦', urgency: 'critical', sortKey: stuckSoc.length * 16, sourceType: 'census', metric: 'daysStuck',
       title: stuckSoc.length + ' patient' + (stuckSoc.length > 1 ? 's' : '') + ' stuck in SOC Pending > 3 days',
       subtitle: 'Push the auth team to submit. Each accepted patient unlocks an episode of visits.',
+      items: stuckSoc,
     });
 
     // Eval Pending > 3 days
@@ -500,11 +551,13 @@ export default function CoordinatorPage(props) {
       if (!(s.indexOf('eval') >= 0 && s.indexOf('pending') >= 0)) return false;
       var d = daysSinceLocal(p.first_seen_date);
       return d !== null && d > 3;
-    });
+    }).map(function(p) { return Object.assign({}, p, { _daysStuck: daysSinceLocal(p.first_seen_date) }); })
+      .sort(function(a, b) { return b._daysStuck - a._daysStuck; });
     if (stuckEval.length) opps.push({
-      icon: '📅', urgency: 'critical', sortKey: stuckEval.length * 12,
+      icon: '📅', urgency: 'critical', sortKey: stuckEval.length * 12, sourceType: 'census', metric: 'daysStuck',
       title: stuckEval.length + ' patient' + (stuckEval.length > 1 ? 's' : '') + ' stuck in Eval Pending > 3 days',
       subtitle: 'Auth is done — schedule the eval visit. First eval unlocks the rest.',
+      items: stuckEval,
     });
 
     // On Hold > 14 days — recoverable
@@ -513,11 +566,13 @@ export default function CoordinatorPage(props) {
       if (s.indexOf('on hold') < 0 && s.indexOf('on_hold') < 0) return false;
       var d = daysSinceLocal(p.last_seen_date);
       return d !== null && d > 14;
-    });
+    }).map(function(p) { return Object.assign({}, p, { _daysStuck: daysSinceLocal(p.last_seen_date) }); })
+      .sort(function(a, b) { return b._daysStuck - a._daysStuck; });
     if (recoverableHold.length) opps.push({
-      icon: '🔁', urgency: 'urgent', sortKey: recoverableHold.length * 6,
+      icon: '🔁', urgency: 'urgent', sortKey: recoverableHold.length * 6, sourceType: 'census', metric: 'daysOnHold',
       title: recoverableHold.length + ' on-hold patient' + (recoverableHold.length > 1 ? 's' : '') + ' > 14 days — recoverable',
       subtitle: 'Call to re-engage or coordinate with the clinical team.',
+      items: recoverableHold,
     });
 
     // Active overdue (no visit in 7+ days)
@@ -526,14 +581,16 @@ export default function CoordinatorPage(props) {
       if (s.indexOf('active') !== 0) return false;
       var d = daysSinceLocal(p.last_visit_date);
       return d !== null && d > 7;
-    });
+    }).map(function(p) { return Object.assign({}, p, { _daysStuck: daysSinceLocal(p.last_visit_date) }); })
+      .sort(function(a, b) { return b._daysStuck - a._daysStuck; });
     if (overdueActive.length) opps.push({
-      icon: '⏰', urgency: 'urgent', sortKey: overdueActive.length,
+      icon: '⏰', urgency: 'urgent', sortKey: overdueActive.length, sourceType: 'census', metric: 'daysSinceVisit',
       title: overdueActive.length + ' active patient' + (overdueActive.length > 1 ? 's' : '') + ' overdue (no visit in 7+ days)',
       subtitle: 'Schedule the next visit ASAP to keep cadence on track.',
+      items: overdueActive,
     });
 
-    // Auths with unused visits expiring < 60 days
+    // Auths with unused visits expiring < 60 days — different source data shape
     var underUsed = authRecords.filter(function(a) {
       if (a.auth_status !== 'active') return false;
       var remaining = (a.visits_authorized || 0) - (a.visits_used || 0);
@@ -541,20 +598,132 @@ export default function CoordinatorPage(props) {
       if (!a.auth_expiry_date) return false;
       var dte = daysUntilLocal(a.auth_expiry_date);
       return dte !== null && dte > 0 && dte <= 60;
-    });
+    }).map(function(a) {
+      return Object.assign({}, a, {
+        _remaining: Math.max(0, (a.visits_authorized || 0) - (a.visits_used || 0)),
+        _daysToExpiry: daysUntilLocal(a.auth_expiry_date),
+      });
+    }).sort(function(a, b) { return a._daysToExpiry - b._daysToExpiry; });
     if (underUsed.length) {
-      var totalUnused = underUsed.reduce(function(s, a) {
-        return s + Math.max(0, (a.visits_authorized || 0) - (a.visits_used || 0));
-      }, 0);
+      var totalUnused = underUsed.reduce(function(s, a) { return s + a._remaining; }, 0);
       opps.push({
-        icon: '📈', urgency: 'medium', sortKey: totalUnused,
+        icon: '📈', urgency: 'medium', sortKey: totalUnused, sourceType: 'auth', metric: 'visitsLeft',
         title: underUsed.length + ' auth' + (underUsed.length > 1 ? 's' : '') + ' with unused visits expiring < 60 days',
         subtitle: totalUnused + ' authorized visits at risk of expiring unused. Consider increasing visit frequency.',
+        items: underUsed,
       });
     }
 
     return opps.sort(function(a, b) { return b.sortKey - a.sortKey; });
   }, [census, authRecords]);
+
+  // Helper: when a coord clicks a row in an auth-source opportunity, we
+  // look up the matching census row by patient_name + region to open the
+  // existing StatusChangeModal. Falls back to a minimal pseudo-patient
+  // record if the census row doesn't exist (rare).
+  function openPatientFromAuth(authRow) {
+    var match = census.find(function(c) {
+      return c.patient_name && authRow.patient_name &&
+        c.patient_name.toLowerCase().trim() === authRow.patient_name.toLowerCase().trim() &&
+        c.region === authRow.region;
+    });
+    if (match) {
+      setStatusPatient(match);
+    } else {
+      // No census row — show a friendly note instead of opening a broken modal
+      window.alert('No active census record for ' + authRow.patient_name + ' in Region ' + authRow.region + '. The patient may not be on service yet.');
+    }
+  }
+
+  // ── Clinician Productivity (this week) ─────────────────────────────────
+  // Matches ProductivityPage's logic: TARGETS by employment_type, dedupe
+  // Pariox's duplicate "Level 3 + Cancelled" pairs, attribute by
+  // pariox_name + aliases.
+  var TARGETS = { ft: 25, pt: 15, prn: 10 };
+  var TYPE_LABELS = { ft: 'FT', pt: 'PT', prn: 'PRN' };
+
+  var clinicianStats = useMemo(function() {
+    // Step 1: name → clinician_id map (includes pariox_name + aliases)
+    var nameMap = {};
+    clinicians.forEach(function(c) {
+      if (c.full_name) nameMap[c.full_name.toLowerCase()] = c.id;
+      if (c.pariox_name) nameMap[c.pariox_name.toLowerCase()] = c.id;
+      (c.aliases || []).forEach(function(a) { if (a) nameMap[a.toLowerCase()] = c.id; });
+    });
+
+    // Step 2: group visits by (patient, date, staff). If any row in a group
+    // has cancel/attempt/missed in event_type, mark the whole slot as
+    // cancelled (matches ProductivityPage dedup).
+    var NON_REAL = /cancel|attempt|missed|no[ -]?show/i;
+    var groups = {};
+    weekVisits.forEach(function(v) {
+      var rawName = (v.staff_name_normalized || v.staff_name || '').trim();
+      if (!rawName || !v.patient_name || !v.visit_date) return;
+      var dateKey = (v.visit_date + '').slice(0, 10);
+      var key = v.patient_name + '|' + dateKey + '|' + rawName.toLowerCase();
+      if (!groups[key]) groups[key] = { rows: [], cancelled: false };
+      if (NON_REAL.test(v.event_type || '')) groups[key].cancelled = true;
+      else groups[key].rows.push(v);
+    });
+
+    // Step 3: accumulate stats per clinician
+    var statsByCid = {};
+    Object.keys(groups).forEach(function(key) {
+      var g = groups[key];
+      if (g.cancelled) return;
+      g.rows.forEach(function(v) {
+        var rawName = (v.staff_name_normalized || v.staff_name || '').trim();
+        var id = nameMap[rawName.toLowerCase()];
+        if (!id) return;
+        if (!statsByCid[id]) statsByCid[id] = { completed: 0, scheduled: 0, missed: 0, cancelled: 0, missedActive: 0 };
+        var s = (v.status || '').toLowerCase();
+        if (s === 'missed (active)')      statsByCid[id].missedActive++;
+        else if (s.indexOf('completed') >= 0) statsByCid[id].completed++;
+        else if (s.indexOf('scheduled') >= 0) statsByCid[id].scheduled++;
+        else if (s.indexOf('missed') >= 0)    statsByCid[id].missed++;
+        else if (s.indexOf('cancelled') >= 0) statsByCid[id].cancelled++;
+      });
+    });
+
+    // Step 4: enrich each clinician with target, done, pct, flag
+    return clinicians.map(function(c) {
+      var s = statsByCid[c.id] || { completed: 0, scheduled: 0, missed: 0, cancelled: 0, missedActive: 0 };
+      var target = c.weekly_visit_target || TARGETS[c.employment_type] || 25;
+      var done = s.completed + s.missedActive;
+      var totalAssigned = done + s.scheduled + s.missed + s.cancelled;
+      var pct = target > 0 ? Math.round((done / target) * 100) : 0;
+      var projected = done + s.scheduled;
+      var projectedPct = target > 0 ? Math.round((projected / target) * 100) : 0;
+
+      // Flag logic (mirrors PRD §7.1 pacing flag rules, but with the
+      // simpler thresholds the existing ProductivityPage uses):
+      //   * Over-Scheduled: PRN with totalAssigned > target (hard cap)
+      //                     OR FT/PT with totalAssigned > target * 1.1
+      //   * Under-Scheduled: FT/PT with totalAssigned > 0 but < (target - 2)
+      //   * At Risk: FT/PT with done > 0 and pct < 70
+      //   * On Track: anything else with activity
+      //   * No Activity: zero visits this week
+      var flag = 'on_track';
+      if (totalAssigned === 0) flag = 'no_activity';
+      else if (c.employment_type === 'prn' && totalAssigned > target) flag = 'over';
+      else if (c.employment_type !== 'prn' && totalAssigned > target * 1.1) flag = 'over';
+      else if (c.employment_type !== 'prn' && totalAssigned < target - 2) flag = 'under';
+      else if (c.employment_type !== 'prn' && done > 0 && pct < 70) flag = 'at_risk';
+
+      return Object.assign({}, c, {
+        target: target, done: done, scheduled: s.scheduled,
+        missed: s.missed, cancelled: s.cancelled,
+        totalAssigned: totalAssigned, pct: pct, projectedPct: projectedPct,
+        flag: flag,
+      });
+    });
+  }, [clinicians, weekVisits]);
+
+  var productivitySummary = useMemo(function() {
+    var counts = { under: 0, at_risk: 0, over: 0, on_track: 0, no_activity: 0 };
+    clinicianStats.forEach(function(c) { counts[c.flag]++; });
+    return counts;
+  }, [clinicianStats]);
 
   var displayTasks = activeTab === 'today' ? todayTasks : allTasks;
   var today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
@@ -823,13 +992,19 @@ export default function CoordinatorPage(props) {
           );
         })()}
 
-        {/* ── PRIORITY OPPORTUNITIES (no $ shown to coordinators) ─────── */}
+        {/* ── PRIORITY OPPORTUNITIES (clickable; no $ shown to coordinators) ─ */}
         <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 4 }}>
-            🎯 Priority Opportunities
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>🎯 Priority Opportunities</div>
+            {expandedOpp !== null && (
+              <button onClick={function() { setExpandedOpp(null); }}
+                style={{ fontSize: 10, color: '#6B7280', background: 'none', border: '1px solid #E5E7EB', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                Close list
+              </button>
+            )}
           </div>
           <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
-            What to tackle first to keep patients moving through the pipeline
+            Click any card to see the patients · click a patient row to edit
           </div>
           {opportunities.length === 0 ? (
             <div style={{ padding: 18, textAlign: 'center', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 8 }}>
@@ -844,24 +1019,264 @@ export default function CoordinatorPage(props) {
                   urgent:   { bg: '#FFFBEB', border: '#FCD34D', title: '#92400E' },
                   medium:   { bg: '#EFF6FF', border: '#BFDBFE', title: '#1E40AF' },
                 }[opp.urgency] || { bg: '#F9FAFB', border: '#E5E7EB', title: '#111827' };
+                var isExpanded = expandedOpp === i;
                 return (
-                  <div key={i} style={{
-                    background: styles.bg, border: '1px solid ' + styles.border, borderRadius: 8,
-                    padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 12,
+                  <div key={i}>
+                    {/* Clickable card */}
+                    <div
+                      onClick={function() { setExpandedOpp(isExpanded ? null : i); }}
+                      style={{
+                        background: styles.bg,
+                        border: '1px solid ' + (isExpanded ? styles.title : styles.border),
+                        borderRadius: isExpanded ? '8px 8px 0 0' : 8,
+                        padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 12,
+                        cursor: 'pointer', transition: 'border-color 0.15s',
+                      }}
+                      onMouseEnter={function(e) { if (!isExpanded) e.currentTarget.style.borderColor = styles.title; }}
+                      onMouseLeave={function(e) { if (!isExpanded) e.currentTarget.style.borderColor = styles.border; }}
+                    >
+                      <div style={{ fontSize: 20, width: 28, textAlign: 'center', flexShrink: 0 }}>{opp.icon}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: styles.title, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {opp.title}
+                          <span style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 500 }}>{isExpanded ? '▾' : '▸'}</span>
+                        </div>
+                        <div style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>{opp.subtitle}</div>
+                      </div>
+                      <div style={{
+                        fontSize: 9, fontWeight: 700, color: styles.title,
+                        background: '#fff', padding: '3px 9px', borderRadius: 999,
+                        border: '1px solid ' + styles.border, textTransform: 'uppercase', letterSpacing: '0.05em',
+                        flexShrink: 0,
+                      }}>
+                        {opp.urgency}
+                      </div>
+                    </div>
+
+                    {/* Inline expansion: items list directly below the clicked card */}
+                    {isExpanded && opp.items && (
+                      <div style={{
+                        background: '#fff',
+                        border: '1px solid ' + styles.title,
+                        borderTop: 'none',
+                        borderRadius: '0 0 8px 8px',
+                        overflow: 'hidden',
+                      }}>
+                        {/* Header row */}
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: opp.sourceType === 'auth'
+                            ? '50px 1.6fr 1fr 80px 90px'
+                            : '50px 1.6fr 1.1fr 1fr 100px',
+                          padding: '7px 14px', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB',
+                          fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em',
+                        }}>
+                          <span>Rgn</span>
+                          <span>Patient</span>
+                          {opp.sourceType === 'auth' ? (
+                            <>
+                              <span>Insurance</span>
+                              <span style={{ textAlign: 'center' }}>Visits Left</span>
+                              <span style={{ textAlign: 'right' }}>Expires In</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>Status</span>
+                              <span>Insurance</span>
+                              <span style={{ textAlign: 'right' }}>
+                                {opp.metric === 'daysSinceVisit' ? 'Days Since Visit' : 'Days Stuck'}
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Scrollable rows */}
+                        <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                          {opp.items.map(function(it, idx) {
+                            var rowBg = idx % 2 === 0 ? '#fff' : '#F9FAFB';
+                            if (opp.sourceType === 'auth') {
+                              return (
+                                <div key={(it.id || it.patient_name) + '|' + idx}
+                                  onClick={function() { openPatientFromAuth(it); }}
+                                  style={{
+                                    display: 'grid', gridTemplateColumns: '50px 1.6fr 1fr 80px 90px',
+                                    padding: '9px 14px', borderBottom: '1px solid #F3F4F6',
+                                    background: rowBg, alignItems: 'center', fontSize: 12, cursor: 'pointer',
+                                    transition: 'background 0.1s',
+                                  }}
+                                  onMouseEnter={function(e) { e.currentTarget.style.background = '#EFF6FF'; }}
+                                  onMouseLeave={function(e) { e.currentTarget.style.background = rowBg; }}>
+                                  <span style={{ fontWeight: 700, color: '#374151' }}>{it.region}</span>
+                                  <span style={{ fontWeight: 600, color: '#111827' }}>{it.patient_name}</span>
+                                  <span style={{ color: '#6B7280', fontSize: 11 }}>{it.insurance || '—'}</span>
+                                  <span style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'DM Mono, monospace', color: '#1565C0' }}>{it._remaining}</span>
+                                  <span style={{
+                                    textAlign: 'right', fontWeight: 700, fontFamily: 'DM Mono, monospace',
+                                    color: it._daysToExpiry <= 14 ? '#DC2626' : it._daysToExpiry <= 30 ? '#D97706' : '#374151', fontSize: 11,
+                                  }}>
+                                    {it._daysToExpiry}d
+                                  </span>
+                                </div>
+                              );
+                            }
+                            // Census-source row
+                            var metricLabel = opp.metric === 'daysSinceVisit' ? 'd ago' : 'd';
+                            var metricColor = it._daysStuck > 14 ? '#DC2626' : it._daysStuck > 7 ? '#D97706' : '#374151';
+                            return (
+                              <div key={(it.id || it.patient_name) + '|' + idx}
+                                onClick={function() { setStatusPatient(it); }}
+                                style={{
+                                  display: 'grid', gridTemplateColumns: '50px 1.6fr 1.1fr 1fr 100px',
+                                  padding: '9px 14px', borderBottom: '1px solid #F3F4F6',
+                                  background: rowBg, alignItems: 'center', fontSize: 12, cursor: 'pointer',
+                                  transition: 'background 0.1s',
+                                }}
+                                onMouseEnter={function(e) { e.currentTarget.style.background = '#EFF6FF'; }}
+                                onMouseLeave={function(e) { e.currentTarget.style.background = rowBg; }}>
+                                <span style={{ fontWeight: 700, color: '#374151' }}>{it.region}</span>
+                                <span style={{ fontWeight: 600, color: '#111827' }}>{it.patient_name}</span>
+                                <span style={{ color: '#6B7280', fontSize: 11 }}>{it.status || '—'}</span>
+                                <span style={{ color: '#6B7280', fontSize: 11 }}>{it.insurance || '—'}</span>
+                                <span style={{
+                                  textAlign: 'right', fontWeight: 700, fontFamily: 'DM Mono, monospace',
+                                  color: metricColor, fontSize: 11,
+                                }}>
+                                  {it._daysStuck}{metricLabel}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ── CLINICIAN PRODUCTIVITY — THIS WEEK ───────────────────────── */}
+        <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>
+              👥 Clinician Productivity &mdash; This Week
+            </div>
+            <div style={{ fontSize: 10, color: '#9CA3AF' }}>
+              {clinicianStats.length} clinician{clinicianStats.length === 1 ? '' : 's'} in your regions
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
+            Watch for clinicians who are under-scheduled (need more visits) or over-scheduled (need offload)
+          </div>
+
+          {/* Alert badges — only render counts > 0 */}
+          {(productivitySummary.under + productivitySummary.at_risk + productivitySummary.over) > 0 && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              {productivitySummary.under > 0 && (
+                <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#DC2626' }}>{productivitySummary.under}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#991B1B' }}>under-scheduled · need more visits added</span>
+                </div>
+              )}
+              {productivitySummary.at_risk > 0 && (
+                <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#D97706' }}>{productivitySummary.at_risk}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#92400E' }}>at risk · below 70% of weekly target</span>
+                </div>
+              )}
+              {productivitySummary.over > 0 && (
+                <div style={{ background: '#EDE9FE', border: '1px solid #C4B5FD', borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#7C3AED' }}>{productivitySummary.over}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#5B21B6' }}>over-scheduled · may need offload</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {clinicianStats.length === 0 ? (
+            <div style={{ padding: 20, textAlign: 'center', color: '#9CA3AF', fontSize: 12 }}>
+              No active clinicians assigned to your regions.
+            </div>
+          ) : (
+            <div style={{ overflow: 'auto', border: '1px solid #F3F4F6', borderRadius: 8 }}>
+              {/* Table header */}
+              <div style={{
+                display: 'grid', gridTemplateColumns: '1.5fr 60px 60px 80px 70px 70px 1fr 90px',
+                padding: '8px 12px', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB',
+                fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em',
+              }}>
+                <span>Clinician</span>
+                <span style={{ textAlign: 'center' }}>Rgn</span>
+                <span style={{ textAlign: 'center' }}>Type</span>
+                <span style={{ textAlign: 'center' }}>Target</span>
+                <span style={{ textAlign: 'center' }}>Done</span>
+                <span style={{ textAlign: 'center' }}>Sched</span>
+                <span>Pacing</span>
+                <span style={{ textAlign: 'right' }}>Flag</span>
+              </div>
+
+              {/* Sort: most-urgent flags first, then % asc within flag */}
+              {clinicianStats.slice().sort(function(a, b) {
+                var order = { under: 0, over: 1, at_risk: 2, no_activity: 3, on_track: 4 };
+                var ao = order[a.flag] ?? 9, bo = order[b.flag] ?? 9;
+                if (ao !== bo) return ao - bo;
+                return a.pct - b.pct;
+              }).map(function(c, i) {
+                var flagCfg = {
+                  under:        { label: 'UNDER', bg: '#FEF2F2', color: '#DC2626', borderColor: '#FECACA' },
+                  over:         { label: 'OVER',  bg: '#EDE9FE', color: '#7C3AED', borderColor: '#C4B5FD' },
+                  at_risk:      { label: 'AT RISK', bg: '#FEF3C7', color: '#D97706', borderColor: '#FCD34D' },
+                  on_track:     { label: 'ON TRACK', bg: '#ECFDF5', color: '#059669', borderColor: '#A7F3D0' },
+                  no_activity:  { label: 'NO ACTIVITY', bg: '#F3F4F6', color: '#6B7280', borderColor: '#E5E7EB' },
+                }[c.flag];
+
+                var barColor = c.pct >= 80 ? '#10B981' : c.pct >= 60 ? '#F59E0B' : '#EF4444';
+                var displayPct = Math.min(c.pct, 150);
+
+                return (
+                  <div key={c.id} style={{
+                    display: 'grid', gridTemplateColumns: '1.5fr 60px 60px 80px 70px 70px 1fr 90px',
+                    padding: '9px 12px', borderBottom: '1px solid #F3F4F6',
+                    background: i % 2 === 0 ? 'white' : '#F9FAFB',
+                    alignItems: 'center', fontSize: 12,
                   }}>
-                    <div style={{ fontSize: 20, width: 28, textAlign: 'center', flexShrink: 0 }}>{opp.icon}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: styles.title }}>{opp.title}</div>
-                      <div style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>{opp.subtitle}</div>
+                    <div>
+                      <div style={{ fontWeight: 600, color: '#111827' }}>{c.full_name}</div>
+                      <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 1 }}>{c.discipline || '—'}{c.is_telehealth ? ' · Telehealth' : ''}</div>
                     </div>
-                    <div style={{
-                      fontSize: 9, fontWeight: 700, color: styles.title,
-                      background: '#fff', padding: '3px 9px', borderRadius: 999,
-                      border: '1px solid ' + styles.border, textTransform: 'uppercase', letterSpacing: '0.05em',
-                      flexShrink: 0,
-                    }}>
-                      {opp.urgency}
+                    <span style={{ textAlign: 'center', fontWeight: 700, color: '#374151', fontFamily: 'DM Mono, monospace' }}>{c.region}</span>
+                    <span style={{ textAlign: 'center' }}>
+                      <span style={{
+                        fontSize: 9, fontWeight: 700,
+                        color: c.employment_type === 'ft' ? '#065F46' : c.employment_type === 'pt' ? '#1E40AF' : '#92400E',
+                        background: c.employment_type === 'ft' ? '#ECFDF5' : c.employment_type === 'pt' ? '#EFF6FF' : '#FEF3C7',
+                        padding: '2px 6px', borderRadius: 999, letterSpacing: '0.04em',
+                      }}>
+                        {TYPE_LABELS[c.employment_type] || (c.employment_type || '—').toUpperCase()}
+                      </span>
+                    </span>
+                    <span style={{ textAlign: 'center', fontFamily: 'DM Mono, monospace', color: '#6B7280' }}>{c.target}</span>
+                    <span style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'DM Mono, monospace', color: '#065F46' }}>{c.done}</span>
+                    <span style={{ textAlign: 'center', fontFamily: 'DM Mono, monospace', color: '#6B7280' }}>{c.scheduled}</span>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 2 }}>
+                        <span style={{ fontWeight: 700, color: barColor, fontFamily: 'DM Mono, monospace' }}>{c.pct}%</span>
+                        <span style={{ color: '#9CA3AF' }}>{c.done}/{c.target}</span>
+                      </div>
+                      <div style={{ height: 4, background: '#E5E7EB', borderRadius: 999, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: Math.min(displayPct, 100) + '%', background: barColor, transition: 'width 0.4s' }} />
+                      </div>
                     </div>
+                    <span style={{ textAlign: 'right' }}>
+                      <span style={{
+                        fontSize: 9, fontWeight: 700, color: flagCfg.color,
+                        background: flagCfg.bg, border: '1px solid ' + flagCfg.borderColor,
+                        padding: '3px 8px', borderRadius: 999, letterSpacing: '0.05em',
+                      }}>
+                        {flagCfg.label}
+                      </span>
+                    </span>
                   </div>
                 );
               })}
