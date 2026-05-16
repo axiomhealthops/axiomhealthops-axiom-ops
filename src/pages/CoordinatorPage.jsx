@@ -314,6 +314,12 @@ export default function CoordinatorPage(props) {
   // of the expanded card or null. Each opp carries its own `.items` array which
   // renders directly below the clicked card.
   var [expandedOpp, setExpandedOpp] = useState(null);
+  // Click-to-expand state for the clinician productivity table. Holds the
+  // expanded clinician object or null. Used to render the assignment panel
+  // below the table.
+  var [expandedClinician, setExpandedClinician] = useState(null);
+  var [assignSaving, setAssignSaving] = useState(false);
+  var [assignError, setAssignError] = useState('');
 
   function fetchTasks() {
     Promise.all([
@@ -333,7 +339,7 @@ export default function CoordinatorPage(props) {
       // Census data for the pipeline overview and priority opportunities.
       // We fetch only the columns we need to keep the payload small.
       supabase.from('census_data')
-        .select('id, patient_name, region, status, previous_status, insurance, last_visit_date, first_seen_date, last_seen_date, days_overdue')
+        .select('id, patient_name, region, status, previous_status, insurance, last_visit_date, first_seen_date, last_seen_date, days_overdue, pipeline_assigned_to, pipeline_notes, discipline')
         .in('region', regions),
       // Clinicians assigned to the coordinator's regions — used by the
       // productivity widget. Includes pariox_name + aliases for visit
@@ -724,6 +730,99 @@ export default function CoordinatorPage(props) {
     clinicianStats.forEach(function(c) { counts[c.flag]++; });
     return counts;
   }, [clinicianStats]);
+
+  // Parse a clinician.region value like 'B' or 'B,C,G' or 'M,N' into an array
+  // of canonical letter regions. Matches the multi-region clinician pattern
+  // documented in the codebase.
+  function parseClinicianRegions(region) {
+    if (!region) return [];
+    return region.toString().split(',').map(function(r) { return r.trim().toUpperCase(); }).filter(Boolean);
+  }
+
+  // Returns true if a census row's pipeline_assigned_to matches this clinician
+  // (case-insensitive against full_name, pariox_name, and aliases).
+  function isAssignedTo(censusRow, clin) {
+    var v = (censusRow.pipeline_assigned_to || '').trim().toLowerCase();
+    if (!v) return false;
+    if (clin.full_name && v === clin.full_name.toLowerCase()) return true;
+    if (clin.pariox_name && v === clin.pariox_name.toLowerCase()) return true;
+    if (Array.isArray(clin.aliases)) {
+      for (var i = 0; i < clin.aliases.length; i++) {
+        if (clin.aliases[i] && v === clin.aliases[i].toLowerCase()) return true;
+      }
+    }
+    return false;
+  }
+
+  // Whether a patient is eligible to be assigned (active, eval pending, SOC
+  // pending, on hold). Excludes discharged / non-admit / hospitalized — those
+  // shouldn't get new clinician assignments.
+  function isAssignableStatus(status) {
+    var s = (status || '').toLowerCase();
+    if (!s) return false;
+    if (s.indexOf('discharge') >= 0) return false;
+    if (s.indexOf('non-admit') >= 0) return false;
+    if (s.indexOf('hospital') >= 0) return false;
+    return s.indexOf('active') >= 0
+        || (s.indexOf('eval') >= 0 && s.indexOf('pending') >= 0)
+        || (s.indexOf('soc') >= 0 && s.indexOf('pending') >= 0)
+        || s.indexOf('on hold') >= 0 || s.indexOf('on_hold') >= 0
+        || s.indexOf('waitlist') >= 0;
+  }
+
+  // Update census_data.pipeline_assigned_to with the clinician's name and
+  // log a pipeline_note for audit trail (matches ReassignModal's pattern in
+  // ClinicianAssignmentPage). Refreshes the local census state after save.
+  async function assignPatientToClinician(censusRow, clin) {
+    setAssignSaving(true);
+    setAssignError('');
+    var assignmentName = clin.full_name; // canonical display name
+    var prior = (censusRow.pipeline_assigned_to || '').trim();
+    var noteSuffix = prior && prior.toLowerCase() !== assignmentName.toLowerCase()
+      ? 'Reassigned from ' + prior + ' to ' + assignmentName
+      : 'Assigned to ' + assignmentName;
+    var noteText = noteSuffix + ' by ' + (coordName || 'Coordinator') + ' on ' + new Date().toLocaleDateString();
+    var combinedNotes = censusRow.pipeline_notes
+      ? (censusRow.pipeline_notes + '\n' + noteText)
+      : noteText;
+    var { error } = await supabase.from('census_data').update({
+      pipeline_assigned_to: assignmentName,
+      pipeline_notes: combinedNotes,
+    }).eq('id', censusRow.id);
+    setAssignSaving(false);
+    if (error) { setAssignError(error.message); return; }
+    // Optimistically update local state so the UI flips immediately
+    setCensus(function(prev) {
+      return prev.map(function(p) {
+        return p.id === censusRow.id
+          ? Object.assign({}, p, { pipeline_assigned_to: assignmentName, pipeline_notes: combinedNotes })
+          : p;
+      });
+    });
+  }
+
+  async function unassignPatient(censusRow) {
+    setAssignSaving(true);
+    setAssignError('');
+    var prior = (censusRow.pipeline_assigned_to || '').trim();
+    var noteText = 'Unassigned from ' + (prior || 'previous clinician') + ' by ' + (coordName || 'Coordinator') + ' on ' + new Date().toLocaleDateString();
+    var combinedNotes = censusRow.pipeline_notes
+      ? (censusRow.pipeline_notes + '\n' + noteText)
+      : noteText;
+    var { error } = await supabase.from('census_data').update({
+      pipeline_assigned_to: null,
+      pipeline_notes: combinedNotes,
+    }).eq('id', censusRow.id);
+    setAssignSaving(false);
+    if (error) { setAssignError(error.message); return; }
+    setCensus(function(prev) {
+      return prev.map(function(p) {
+        return p.id === censusRow.id
+          ? Object.assign({}, p, { pipeline_assigned_to: null, pipeline_notes: combinedNotes })
+          : p;
+      });
+    });
+  }
 
   var displayTasks = activeTab === 'today' ? todayTasks : allTasks;
   var today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
@@ -1234,18 +1333,25 @@ export default function CoordinatorPage(props) {
                 var barColor = c.pct >= 80 ? '#10B981' : c.pct >= 60 ? '#F59E0B' : '#EF4444';
                 var displayPct = Math.min(c.pct, 150);
 
+                var isExpandedC = expandedClinician && expandedClinician.id === c.id;
                 return (
-                  <div key={c.id} style={{
-                    display: 'grid', gridTemplateColumns: '1.5fr 60px 60px 80px 70px 70px 1fr 90px',
-                    padding: '9px 12px', borderBottom: '1px solid #F3F4F6',
-                    background: i % 2 === 0 ? 'white' : '#F9FAFB',
-                    alignItems: 'center', fontSize: 12,
-                  }}>
+                  <div key={c.id}
+                    onClick={function() { setExpandedClinician(isExpandedC ? null : c); }}
+                    style={{
+                      display: 'grid', gridTemplateColumns: '1.5fr 60px 60px 80px 70px 70px 1fr 90px',
+                      padding: '9px 12px', borderBottom: '1px solid #F3F4F6',
+                      background: isExpandedC ? '#0F1117' : (i % 2 === 0 ? 'white' : '#F9FAFB'),
+                      color: isExpandedC ? '#fff' : 'inherit',
+                      alignItems: 'center', fontSize: 12, cursor: 'pointer',
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={function(e) { if (!isExpandedC) e.currentTarget.style.background = '#EFF6FF'; }}
+                    onMouseLeave={function(e) { if (!isExpandedC) e.currentTarget.style.background = i % 2 === 0 ? 'white' : '#F9FAFB'; }}>
                     <div>
-                      <div style={{ fontWeight: 600, color: '#111827' }}>{c.full_name}</div>
-                      <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 1 }}>{c.discipline || '—'}{c.is_telehealth ? ' · Telehealth' : ''}</div>
+                      <div style={{ fontWeight: 600, color: isExpandedC ? '#fff' : '#111827' }}>{c.full_name}</div>
+                      <div style={{ fontSize: 10, color: isExpandedC ? '#9CA3AF' : '#9CA3AF', marginTop: 1 }}>{c.discipline || '—'}{c.is_telehealth ? ' · Telehealth' : ''}</div>
                     </div>
-                    <span style={{ textAlign: 'center', fontWeight: 700, color: '#374151', fontFamily: 'DM Mono, monospace' }}>{c.region}</span>
+                    <span style={{ textAlign: 'center', fontWeight: 700, color: isExpandedC ? '#fff' : '#374151', fontFamily: 'DM Mono, monospace' }}>{c.region}</span>
                     <span style={{ textAlign: 'center' }}>
                       <span style={{
                         fontSize: 9, fontWeight: 700,
@@ -1282,6 +1388,147 @@ export default function CoordinatorPage(props) {
               })}
             </div>
           )}
+
+          {/* ── ASSIGNMENT PANEL: opens when a clinician row is clicked ── */}
+          {expandedClinician && (function renderAssignPanel() {
+            var clin = expandedClinician;
+            var clinRegions = parseClinicianRegions(clin.region);
+            // Patients currently assigned to this clinician
+            var currentAssigned = census.filter(function(p) {
+              return isAssignedTo(p, clin) && isAssignableStatus(p.status);
+            }).sort(function(a, b) { return (a.patient_name || '').localeCompare(b.patient_name || ''); });
+            // Patients in clinician's region(s) that are assignable but not already on this clinician
+            var availableToAssign = census.filter(function(p) {
+              if (!isAssignableStatus(p.status)) return false;
+              if (isAssignedTo(p, clin)) return false;
+              return clinRegions.length > 0 && clinRegions.indexOf((p.region || '').toUpperCase()) >= 0;
+            }).sort(function(a, b) {
+              // Prioritize unassigned patients first, then by status urgency
+              var aUn = !a.pipeline_assigned_to;
+              var bUn = !b.pipeline_assigned_to;
+              if (aUn !== bUn) return aUn ? -1 : 1;
+              return (a.patient_name || '').localeCompare(b.patient_name || '');
+            });
+
+            return (
+              <div style={{ marginTop: 16, border: '2px solid #0F1117', borderRadius: 10, overflow: 'hidden' }}>
+                {/* Header */}
+                <div style={{ padding: '11px 14px', background: '#0F1117', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>
+                      {clin.full_name} <span style={{ color: '#9CA3AF', fontWeight: 400 }}>·</span> Region {clin.region}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
+                      {(TYPE_LABELS[clin.employment_type] || clin.employment_type || '—')} · {clin.discipline || '—'} · target {clin.weekly_visit_target || TARGETS[clin.employment_type] || 25} visits/wk · {clin.done} done · {clin.scheduled} scheduled
+                    </div>
+                  </div>
+                  <button onClick={function() { setExpandedClinician(null); }}
+                    style={{ background: 'none', border: '1px solid #4B5563', color: '#D1D5DB', borderRadius: 5, padding: '3px 10px', fontSize: 11, cursor: 'pointer' }}>
+                    Close ×
+                  </button>
+                </div>
+
+                {assignError && (
+                  <div style={{ padding: '8px 14px', background: '#FEF2F2', borderBottom: '1px solid #FECACA', fontSize: 11, color: '#DC2626' }}>
+                    Save failed: {assignError}
+                  </div>
+                )}
+
+                {/* Currently Assigned */}
+                <div style={{ padding: '12px 14px', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#111827', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Currently Assigned ({currentAssigned.length})
+                  </div>
+                  {currentAssigned.length === 0 ? (
+                    <div style={{ fontSize: 11, color: '#9CA3AF', padding: '4px 0' }}>
+                      No patients currently assigned to this clinician. Use the list below to assign.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+                      {currentAssigned.map(function(p) {
+                        return (
+                          <div key={p.id} style={{
+                            display: 'grid', gridTemplateColumns: '50px 1.5fr 1.1fr 1fr auto',
+                            padding: '7px 10px', background: '#fff', border: '1px solid #E5E7EB',
+                            borderRadius: 6, alignItems: 'center', fontSize: 12, gap: 8,
+                          }}>
+                            <span style={{ fontWeight: 700, color: '#374151' }}>{p.region}</span>
+                            <span onClick={function() { setStatusPatient(p); }}
+                              style={{ fontWeight: 600, color: '#111827', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: '#D1D5DB' }}>
+                              {p.patient_name}
+                            </span>
+                            <span style={{ color: '#6B7280', fontSize: 11 }}>{p.status || '—'}</span>
+                            <span style={{ color: '#6B7280', fontSize: 11 }}>{p.insurance || '—'}</span>
+                            <button onClick={function() { unassignPatient(p); }}
+                              disabled={assignSaving}
+                              style={{
+                                fontSize: 10, fontWeight: 700, color: '#DC2626',
+                                background: '#FEF2F2', border: '1px solid #FECACA',
+                                padding: '4px 10px', borderRadius: 5, cursor: assignSaving ? 'wait' : 'pointer',
+                              }}>
+                              Unassign
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Available to Assign — scoped to clinician's region(s) ∩ coord's regions */}
+                <div style={{ padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#111827', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Available to Assign · Region{clinRegions.length > 1 ? 's' : ''} {clinRegions.join(', ')} ({availableToAssign.length})
+                    </div>
+                    <div style={{ fontSize: 10, color: '#9CA3AF' }}>
+                      Patients in this clinician's region · click Assign to set
+                    </div>
+                  </div>
+                  {availableToAssign.length === 0 ? (
+                    <div style={{ fontSize: 11, color: '#9CA3AF', padding: '8px 0', textAlign: 'center' }}>
+                      No assignable patients in this clinician's region right now.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 340, overflowY: 'auto' }}>
+                      {availableToAssign.map(function(p) {
+                        var currentAssignee = (p.pipeline_assigned_to || '').trim();
+                        return (
+                          <div key={p.id} style={{
+                            display: 'grid', gridTemplateColumns: '50px 1.5fr 1.1fr 1.2fr auto',
+                            padding: '7px 10px', background: currentAssignee ? '#FFFBEB' : '#fff',
+                            border: '1px solid ' + (currentAssignee ? '#FCD34D' : '#E5E7EB'),
+                            borderRadius: 6, alignItems: 'center', fontSize: 12, gap: 8,
+                          }}>
+                            <span style={{ fontWeight: 700, color: '#374151' }}>{p.region}</span>
+                            <span onClick={function() { setStatusPatient(p); }}
+                              style={{ fontWeight: 600, color: '#111827', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: '#D1D5DB' }}>
+                              {p.patient_name}
+                            </span>
+                            <span style={{ color: '#6B7280', fontSize: 11 }}>{p.status || '—'}</span>
+                            <span style={{ color: currentAssignee ? '#92400E' : '#9CA3AF', fontSize: 11 }}>
+                              {currentAssignee
+                                ? <>Currently: <strong>{currentAssignee}</strong></>
+                                : <em>Unassigned</em>}
+                            </span>
+                            <button onClick={function() { assignPatientToClinician(p, clin); }}
+                              disabled={assignSaving}
+                              style={{
+                                fontSize: 10, fontWeight: 700, color: '#fff',
+                                background: currentAssignee ? '#D97706' : '#059669', border: 'none',
+                                padding: '4px 12px', borderRadius: 5, cursor: assignSaving ? 'wait' : 'pointer',
+                              }}>
+                              {currentAssignee ? 'Reassign' : 'Assign'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Tabs + Add */}
