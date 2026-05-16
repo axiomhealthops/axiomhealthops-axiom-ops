@@ -846,46 +846,75 @@ export default function CoordinatorPage(props) {
  
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 20px' }}>
  
-        {/* Summary tiles */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-          {[
+        {/* \u2500\u2500 Top row: 4 KPI tiles + compact Auth Status widget on the right \u2500\u2500 */}
+        {(function renderTopRow() {
+          // Precompute auth status numbers
+          var authActive  = authRecords.filter(function(r){return r.auth_status==='active'}).length;
+          var authPending = authRecords.filter(function(r){return r.auth_status==='pending'}).length;
+          var authLow     = authRecords.filter(function(r){return Math.max((r.visits_authorized||0)-(r.visits_used||0),0)<=7 && r.auth_status==='active'}).length;
+          var authExp30   = authRecords.filter(function(r){ if(!r.auth_expiry_date) return false; var d=Math.round((new Date(r.auth_expiry_date)-new Date())/(1000*60*60*24)); return d>=0&&d<=30; }).length;
+
+          var kpiTiles = [
             { label: 'Total Open Tasks',  val: allTasks.length,   color: '#111827', bg: 'white' },
             { label: 'Critical',          val: counts.critical,   color: '#DC2626', bg: '#FEF2F2', alert: counts.critical > 0 },
             { label: 'High Priority',     val: counts.high,       color: '#D97706', bg: '#FEF3C7', alert: counts.high > 0 },
             { label: 'Auth Issues',       val: counts.auth,       color: '#7C3AED', bg: '#EDE9FE', alert: counts.auth > 0 },
-          ].map(function(tile) {
-            return (
-              <div key={tile.label} style={{ background: tile.bg || 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: '14px 16px', textAlign: 'center', boxShadow: tile.alert ? '0 0 0 2px ' + tile.color + '33' : 'none' }}>
-                <div style={{ fontSize: 10, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{tile.label}</div>
-                <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 4 }}>{tile.val}</div>
-              </div>
-            );
-          })}
-        </div>
- 
-        {/* Auth quick view */}
-        {authRecords.length > 0 && (
-          <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 12 }}>
-              Auth Status &mdash; Regions {regions.join(', ')} ({authRecords.length} patients)
-            </div>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {[
-                { label: 'Active', count: authRecords.filter(function(r){return r.auth_status==='active'}).length, color: '#065F46', bg: '#ECFDF5' },
-                { label: 'Pending', count: authRecords.filter(function(r){return r.auth_status==='pending'}).length, color: '#92400E', bg: '#FEF3C7' },
-                { label: '\u22647 Visits Left', count: authRecords.filter(function(r){return Math.max((r.visits_authorized||0)-(r.visits_used||0),0)<=7 && r.auth_status==='active'}).length, color: '#DC2626', bg: '#FEF2F2' },
-                { label: 'Expiring 30d', count: authRecords.filter(function(r){ if(!r.auth_expiry_date) return false; var d=Math.round((new Date(r.auth_expiry_date)-new Date())/(1000*60*60*24)); return d>=0&&d<=30; }).length, color: '#D97706', bg: '#FEF3C7' },
-              ].map(function(s) {
+          ];
+
+          return (
+            <div style={{
+              display: 'grid',
+              // 4 flexible KPI tiles + fixed-width Auth Status panel
+              gridTemplateColumns: authRecords.length > 0 ? 'repeat(4, 1fr) 280px' : 'repeat(4, 1fr)',
+              gap: 12, marginBottom: 24, alignItems: 'stretch',
+            }}>
+              {kpiTiles.map(function(tile) {
                 return (
-                  <div key={s.label} style={{ background: s.bg, borderRadius: 8, padding: '8px 14px', textAlign: 'center', minWidth: 90 }}>
-                    <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: s.color }}>{s.count}</div>
-                    <div style={{ fontSize: 10, color: s.color, fontWeight: 600, marginTop: 2 }}>{s.label}</div>
+                  <div key={tile.label} style={{
+                    background: tile.bg || 'white', border: '1px solid #E5E7EB',
+                    borderRadius: 10, padding: '14px 16px', textAlign: 'center',
+                    boxShadow: tile.alert ? '0 0 0 2px ' + tile.color + '33' : 'none',
+                  }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{tile.label}</div>
+                    <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 4 }}>{tile.val}</div>
                   </div>
                 );
               })}
+
+              {/* Compact Auth Status \u2014 fits in the 5th column on the right */}
+              {authRecords.length > 0 && (
+                <div style={{
+                  background: 'white', border: '1px solid #E5E7EB', borderRadius: 10,
+                  padding: '10px 12px', display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Auth Status
+                    </div>
+                    <div style={{ fontSize: 10, color: '#9CA3AF', fontFamily: 'DM Mono, monospace' }}>
+                      {authRecords.length} pts \u00b7 {regions.join(',')}
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+                    {[
+                      { label: 'Active',  count: authActive,  color: '#065F46', bg: '#ECFDF5' },
+                      { label: 'Pend',    count: authPending, color: '#92400E', bg: '#FEF3C7' },
+                      { label: '\u22647 left', count: authLow,     color: '#DC2626', bg: '#FEF2F2' },
+                      { label: 'Exp 30d', count: authExp30,   color: '#D97706', bg: '#FEF3C7' },
+                    ].map(function(s) {
+                      return (
+                        <div key={s.label} style={{ background: s.bg, borderRadius: 6, padding: '5px 0', textAlign: 'center' }}>
+                          <div style={{ fontSize: 16, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: s.color, lineHeight: 1 }}>{s.count}</div>
+                          <div style={{ fontSize: 8, color: s.color, fontWeight: 700, marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{s.label}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── MY REGIONS — PIPELINE OVERVIEW ──────────────────────────── */}
         {/* Bucket helpers used by both the cell click handlers and the
