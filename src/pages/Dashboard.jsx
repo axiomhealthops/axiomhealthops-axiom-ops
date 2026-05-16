@@ -50,6 +50,7 @@ import FrequencyReviewPage from './dashboard/FrequencyReviewPage';
 import OpsReportsPage from './dashboard/OpsReportsPage';
 import ClinicianSchedulePage from './dashboard/ClinicianSchedulePage';
 import InsuranceSettingsPage from './dashboard/InsuranceSettingsPage';
+import OperationsManagerDashboard from './dashboard/OperationsManagerDashboard';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -100,6 +101,7 @@ const PAGE_COMPONENTS = {
   'ops-reports':             OpsReportsPage,
   'clinician-schedule':      ClinicianSchedulePage,
   'insurance-settings':      InsuranceSettingsPage,
+  'ops-dashboard':           OperationsManagerDashboard,
 };
 
 function AccessDenied() {
@@ -130,6 +132,8 @@ export default function Dashboard() {
     if (r === 'intake_coordinator') return 'intake-queue';
     if (r === 'care_coordinator')   return 'care-coord-patients';
     if (r === 'assoc_director')      return 'ad-dashboard';
+    if (r === 'admin')               return 'ops-dashboard';
+    if (r === 'pod_leader')          return 'ops-dashboard';
     if (r === 'telehealth')          return 'visits';
     if (r === 'pod_leader')         return 'intake-queue';
     if (r === 'clinician')          return 'visits';
