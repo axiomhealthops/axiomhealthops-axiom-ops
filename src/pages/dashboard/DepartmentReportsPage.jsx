@@ -115,12 +115,19 @@ const REPORTS = [
     id: 'auth_ppo',
     label: 'PPO Patients',
     dept: 'AUTHORIZATION',
-    description: 'Every patient on a PPO plan — different auth rules apply',
+    description: 'Every patient on a PPO plan — different auth rules apply. Uses is_ppo (from audit) OR insurance_type matching "ppo".',
     async run() {
-      var auths = await fetchAllPages(supabase.from('auth_tracker').select('patient_name,region,insurance,auth_status,visits_authorized,visits_used,auth_expiry_date,assigned_to').eq('is_currently_active', true).eq('is_ppo', true).order('region').order('patient_name'));
-      var rows = auths.map(function(a) {
+      // Use OR: either the audit-imported is_ppo flag, OR existing insurance_type
+      // contains "ppo" (case-insensitive). This makes the report work before AND
+      // after the audit import.
+      var auths = await fetchAllPages(supabase.from('auth_tracker').select('patient_name,region,insurance,insurance_type,is_ppo,auth_status,visits_authorized,visits_used,auth_expiry_date,assigned_to').eq('is_currently_active', true).order('region').order('patient_name'));
+      var rows = auths.filter(function(a) {
+        return a.is_ppo === true || (a.insurance_type && /ppo/i.test(a.insurance_type));
+      }).map(function(a) {
         return {
           'Patient': a.patient_name, 'Region': a.region, 'Insurance': a.insurance,
+          'Insurance Type': a.insurance_type || '—',
+          'PPO Source': a.is_ppo === true ? 'audit' : 'insurance_type',
           'Auth Status': a.auth_status, 'Visits Auth': a.visits_authorized, 'Visits Used': a.visits_used,
           'Auth Expires': a.auth_expiry_date, 'Assigned To': a.assigned_to,
         };
@@ -152,24 +159,48 @@ const REPORTS = [
   // ── CARE COORDINATION DEPARTMENT ──────────────────────────────────
   {
     id: 'cc_not_scheduled',
-    label: 'Patients Not Scheduled (SCHEDULED? = NO)',
+    label: 'Patients Not Scheduled (no visits next 14 days)',
     dept: 'CARE COORDINATION',
-    description: 'Active patients without scheduled visits — care coord follow-up list',
+    description: 'Active patients with NO scheduled visits in the next 14 days. Uses real visit_schedule_data — more accurate than the audit flag because it reflects the live calendar.',
     async run() {
-      var auths = await fetchAllPages(supabase.from('auth_tracker').select('patient_name,region,insurance,is_scheduled,assigned_to').eq('is_currently_active', true).eq('is_scheduled', false));
-      // Join with census for status
-      var census = await fetchAllPages(supabase.from('census_data').select('patient_name,region,status,inferred_frequency,pipeline_assigned_to'));
-      var censusMap = {};
-      census.forEach(function(c) { censusMap[(c.patient_name || '').toLowerCase().trim() + '|' + c.region] = c; });
-      var rows = auths.map(function(a) {
-        var c = censusMap[(a.patient_name || '').toLowerCase().trim() + '|' + a.region];
+      // Source 1 — active census patients (exclude statuses that legitimately
+      // wouldn't have scheduled visits)
+      var census = await fetchAllPages(supabase.from('census_data').select('patient_name,region,insurance,status,inferred_frequency,pipeline_assigned_to').not('status', 'in', '("Discharge","Discharge - Change Insurance","Discharged","Non-Admit","Non-admit","On Hold","On Hold - Facility","On Hold - Pt Request","On Hold - MD Request","Hospitalized","Waitlist","SOC Pending","Eval Pending")'));
+
+      // Source 2 — names of patients with at least one non-cancelled visit
+      // scheduled in the next 14 days. Build a set for O(1) lookup.
+      var today = new Date().toISOString().slice(0, 10);
+      var in14d = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+      var visits = await fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,status,event_type').gte('visit_date', today).lte('visit_date', in14d));
+      var scheduled = new Set();
+      visits.forEach(function(v) {
+        var status = (v.status || '').toLowerCase();
+        var et = (v.event_type || '').toLowerCase();
+        // Skip cancelled/attempted/missed — those aren't real scheduled visits
+        if (status.indexOf('cancel') >= 0 || et.indexOf('cancel') >= 0 || et.indexOf('attempted') >= 0) return;
+        scheduled.add((v.patient_name || '').toLowerCase().trim());
+      });
+
+      // Source 3 — auth_tracker for assigned_to + is_scheduled (audit confirm signal)
+      var auths = await fetchAllPages(supabase.from('auth_tracker').select('patient_name,region,is_scheduled,assigned_to').eq('is_currently_active', true));
+      var authMap = {};
+      auths.forEach(function(a) { authMap[(a.patient_name || '').toLowerCase().trim() + '|' + a.region] = a; });
+
+      // Cross-reference: active patient ∉ scheduled-set = needs scheduling
+      var rows = census.filter(function(c) {
+        var nameKey = (c.patient_name || '').toLowerCase().trim();
+        return !scheduled.has(nameKey);
+      }).map(function(c) {
+        var a = authMap[(c.patient_name || '').toLowerCase().trim() + '|' + c.region] || {};
         return {
-          'Patient': a.patient_name, 'Region': a.region, 'Insurance': a.insurance,
-          'Census Status': c ? c.status : '—', 'Frequency': c ? c.inferred_frequency : '—',
-          'Care Coord Owner': c ? c.pipeline_assigned_to || '⚠ unassigned' : '—',
-          'Auth Assigned To': a.assigned_to,
+          'Patient': c.patient_name, 'Region': c.region, 'Insurance': c.insurance,
+          'Status': c.status, 'Frequency': c.inferred_frequency || '⚠ missing',
+          'Audit Flag (SCHEDULED?)': a.is_scheduled === false ? 'NO' : a.is_scheduled === true ? 'YES (conflict)' : 'not audited',
+          'Care Coord Owner': c.pipeline_assigned_to || '⚠ unassigned',
+          'Auth Coord': a.assigned_to || '—',
         };
-      }).sort(function(a, b) { return (a['Region'] || '').localeCompare(b['Region'] || ''); });
+      }).sort(function(a, b) { return (a['Region'] || '').localeCompare(b['Region'] || '') || a['Patient'].localeCompare(b['Patient']); });
+
       return { filename: 'Not_Scheduled', sheets: [{ name: 'Not Scheduled', rows: rows }] };
     },
   },
