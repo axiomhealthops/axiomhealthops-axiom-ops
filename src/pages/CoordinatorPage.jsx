@@ -212,38 +212,70 @@ function TaskCard(props) {
  
 // ── ChecklistTaskItem ─────────────────────────────────────────────────────────
 // Compact one-line task row for the right-sidebar checklist. Reuses the same
-// backing complete/dismiss logic as TaskCard so behavior stays consistent;
-// just renders much smaller and adds a satisfying check animation.
+// backing complete/dismiss logic as TaskCard. Click the row body to expand
+// for full description + actions; click the checkbox to mark complete.
 function ChecklistTaskItem(props) {
   var task = props.task;
   var tc = TASK_CONFIG[task.task_type] || TASK_CONFIG.general;
   var pc = PRIORITY_STYLE[task.priority] || PRIORITY_STYLE.medium;
   var [completing, setCompleting] = useState(false);
   var [checked, setChecked] = useState(false);
+  var [expanded, setExpanded] = useState(false);
+  var [notes, setNotes] = useState('');
+  var [dismissing, setDismissing] = useState(false);
   var isAuto = task.auto_generated && typeof task.id === 'string' && task.id.startsWith('auto_');
 
   async function complete(e) {
     if (e) { e.stopPropagation(); }
     setChecked(true);
     setCompleting(true);
+    var n = notes || null;
     if (isAuto) {
       var existing = props.autoResponses && props.autoResponses[task.id];
       if (existing) {
         await supabase.from('action_responses').update({
-          status: 'completed', updated_at: new Date().toISOString(),
+          status: 'completed', notes: n, updated_at: new Date().toISOString(),
         }).eq('action_key', task.id);
       } else {
         await supabase.from('action_responses').insert({
-          action_key: task.id, status: 'completed', responder_name: props.coordName || 'Coordinator',
+          action_key: task.id, status: 'completed', notes: n,
+          responder_name: props.coordName || 'Coordinator',
         });
       }
     } else {
       await supabase.from('coordinator_tasks').update({
         status: 'completed', completed_at: new Date().toISOString(),
+        completion_notes: n,
       }).eq('id', task.id);
     }
-    // Brief delay so the user sees the check animation before the row vanishes
     setTimeout(function() { props.onRefresh(); }, 280);
+  }
+
+  async function dismiss(e) {
+    if (e) { e.stopPropagation(); }
+    if (!window.confirm('Dismiss this task? It will be removed from your list.')) return;
+    setDismissing(true);
+    if (isAuto) {
+      var existing = props.autoResponses && props.autoResponses[task.id];
+      if (existing) {
+        await supabase.from('action_responses').update({
+          status: 'dismissed', updated_at: new Date().toISOString(),
+        }).eq('action_key', task.id);
+      } else {
+        await supabase.from('action_responses').insert({
+          action_key: task.id, status: 'dismissed', responder_name: props.coordName || 'Coordinator',
+        });
+      }
+    } else {
+      await supabase.from('coordinator_tasks').update({ status: 'dismissed' }).eq('id', task.id);
+    }
+    props.onRefresh();
+  }
+
+  function openPatient() {
+    if (task.patient_name && props.onStatusChange) {
+      props.onStatusChange(task.patient_name, task.region || task.coordinator_region);
+    }
   }
 
   // Build a short patient/clinician meta line
@@ -263,61 +295,133 @@ function ChecklistTaskItem(props) {
 
   return (
     <div style={{
-      display: 'flex', alignItems: 'flex-start', gap: 8,
-      padding: '7px 10px', borderBottom: '1px solid #F3F4F6',
-      background: checked ? '#ECFDF5' : 'transparent',
+      borderBottom: '1px solid #F3F4F6',
+      background: checked ? '#ECFDF5' : (expanded ? '#F9FAFB' : 'transparent'),
       transition: 'background 0.2s',
-      opacity: completing ? 0.55 : 1,
+      opacity: completing || dismissing ? 0.55 : 1,
     }}>
-      {/* Checkbox button */}
-      <button onClick={complete} disabled={completing}
-        title="Mark complete"
-        style={{
-          flexShrink: 0, marginTop: 1,
-          width: 18, height: 18, borderRadius: 4,
-          border: '1.5px solid ' + (checked ? '#10B981' : '#D1D5DB'),
-          background: checked ? '#10B981' : 'white',
-          cursor: completing ? 'wait' : 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: 0, transition: 'all 0.15s',
-          color: '#fff', fontSize: 12, fontWeight: 800,
-        }}
-        onMouseEnter={function(e) { if (!checked) e.currentTarget.style.borderColor = '#10B981'; }}
-        onMouseLeave={function(e) { if (!checked) e.currentTarget.style.borderColor = '#D1D5DB'; }}>
-        {checked ? '✓' : ''}
-      </button>
+      {/* Always-visible row */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 10px' }}>
+        {/* Checkbox button */}
+        <button onClick={complete} disabled={completing || dismissing}
+          title="Mark complete"
+          style={{
+            flexShrink: 0, marginTop: 1,
+            width: 18, height: 18, borderRadius: 4,
+            border: '1.5px solid ' + (checked ? '#10B981' : '#D1D5DB'),
+            background: checked ? '#10B981' : 'white',
+            cursor: (completing || dismissing) ? 'wait' : 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 0, transition: 'all 0.15s',
+            color: '#fff', fontSize: 12, fontWeight: 800,
+          }}
+          onMouseEnter={function(e) { if (!checked) e.currentTarget.style.borderColor = '#10B981'; }}
+          onMouseLeave={function(e) { if (!checked) e.currentTarget.style.borderColor = '#D1D5DB'; }}>
+          {checked ? '✓' : ''}
+        </button>
 
-      {/* Title + meta */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          display: 'flex', alignItems: 'baseline', gap: 6,
-          fontSize: 11, fontWeight: 600, color: '#111827',
-          textDecoration: checked ? 'line-through' : 'none',
-          textDecorationColor: '#10B981',
-        }}>
-          <span style={{ fontSize: 12, flexShrink: 0 }}>{tc.icon}</span>
-          <span style={{
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-          }}>{task.title}</span>
-        </div>
-        {metaBits.length > 0 && (
+        {/* Title + meta — clickable area for expansion */}
+        <div onClick={function() { setExpanded(!expanded); }}
+          style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
           <div style={{
-            fontSize: 9, color: '#6B7280', marginTop: 2,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            display: 'flex', alignItems: 'baseline', gap: 6,
+            fontSize: 11, fontWeight: 600, color: '#111827',
+            textDecoration: checked ? 'line-through' : 'none',
+            textDecorationColor: '#10B981',
           }}>
-            {metaBits.join(' · ')}
+            <span style={{ fontSize: 12, flexShrink: 0 }}>{tc.icon}</span>
+            <span style={{
+              overflow: 'hidden',
+              textOverflow: expanded ? 'clip' : 'ellipsis',
+              whiteSpace: expanded ? 'normal' : 'nowrap',
+              minWidth: 0,
+            }}>{task.title}</span>
+            <span style={{ fontSize: 9, color: '#9CA3AF', fontWeight: 500, marginLeft: 'auto', flexShrink: 0 }}>
+              {expanded ? '▾' : '▸'}
+            </span>
           </div>
-        )}
+          {metaBits.length > 0 && (
+            <div style={{
+              fontSize: 9, color: '#6B7280', marginTop: 2,
+              overflow: 'hidden',
+              textOverflow: expanded ? 'clip' : 'ellipsis',
+              whiteSpace: expanded ? 'normal' : 'nowrap',
+            }}>
+              {metaBits.join(' · ')}
+            </div>
+          )}
+        </div>
+
+        {/* Priority pill */}
+        <span style={{
+          fontSize: 8, fontWeight: 700, color: pc.color, background: pc.bg,
+          padding: '2px 5px', borderRadius: 999, flexShrink: 0,
+          textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 1,
+        }}>
+          {pc.label}
+        </span>
       </div>
 
-      {/* Priority pill */}
-      <span style={{
-        fontSize: 8, fontWeight: 700, color: pc.color, background: pc.bg,
-        padding: '2px 5px', borderRadius: 999, flexShrink: 0,
-        textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 1,
-      }}>
-        {pc.label}
-      </span>
+      {/* Expanded panel — appears below the row on click */}
+      {expanded && (
+        <div style={{
+          padding: '6px 12px 10px 36px', // left-indent aligns with content above
+          background: '#F9FAFB',
+          borderTop: '1px dashed #E5E7EB',
+        }}>
+          {task.description && (
+            <div style={{
+              fontSize: 11, color: '#374151', lineHeight: 1.45,
+              background: '#fff', border: '1px solid #E5E7EB', borderRadius: 6,
+              padding: '7px 9px', marginBottom: 8, whiteSpace: 'pre-wrap',
+            }}>
+              {task.description}
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {task.patient_name && (
+              <button onClick={function(e) { e.stopPropagation(); openPatient(); }}
+                style={{
+                  padding: '4px 10px', background: '#fff', border: '1px solid #1565C0',
+                  color: '#1565C0', borderRadius: 5, fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                }}>
+                Open Patient
+              </button>
+            )}
+            <button onClick={function(e) { e.stopPropagation(); complete(); }}
+              disabled={completing}
+              style={{
+                padding: '4px 10px', background: '#10B981', border: 'none',
+                color: '#fff', borderRadius: 5, fontSize: 10, fontWeight: 700,
+                cursor: completing ? 'wait' : 'pointer',
+              }}>
+              ✓ Done
+            </button>
+            <button onClick={function(e) { e.stopPropagation(); dismiss(); }}
+              disabled={dismissing}
+              style={{
+                padding: '4px 10px', background: '#fff', border: '1px solid #E5E7EB',
+                color: '#6B7280', borderRadius: 5, fontSize: 10, fontWeight: 600,
+                cursor: dismissing ? 'wait' : 'pointer',
+              }}>
+              Dismiss
+            </button>
+          </div>
+
+          {/* Optional completion notes */}
+          <div style={{ marginTop: 8 }}>
+            <input type="text" value={notes} onChange={function(e) { setNotes(e.target.value); }}
+              placeholder="Optional completion note…"
+              onClick={function(e) { e.stopPropagation(); }}
+              style={{
+                width: '100%', padding: '5px 8px', border: '1px solid #E5E7EB',
+                borderRadius: 5, fontSize: 10, background: '#fff', outline: 'none', boxSizing: 'border-box',
+              }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -435,6 +539,9 @@ export default function CoordinatorPage(props) {
   // Right-sidebar slide-in panel for Auth Status tile drill-downs.
   // Stores the bucket key ('active' | 'pending' | 'low' | 'expiring') or null.
   var [authPanel, setAuthPanel] = useState(null);
+  // Quick filter for the task checklist — clicking a KPI tile filters tasks to
+  // matching priority / type. Values: null (no filter) | 'critical' | 'high' | 'auth'
+  var [taskFilter, setTaskFilter] = useState(null);
 
   function fetchTasks() {
     Promise.all([
@@ -940,6 +1047,10 @@ export default function CoordinatorPage(props) {
   }
 
   var displayTasks = activeTab === 'today' ? todayTasks : allTasks;
+  // Apply KPI-tile filter on top of tab selection
+  if (taskFilter === 'critical') displayTasks = displayTasks.filter(function(t) { return t.priority === 'critical'; });
+  else if (taskFilter === 'high') displayTasks = displayTasks.filter(function(t) { return t.priority === 'high'; });
+  else if (taskFilter === 'auth') displayTasks = displayTasks.filter(function(t) { return (t.task_type || '').startsWith('auth'); });
   var today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
  
   return (
@@ -970,10 +1081,10 @@ export default function CoordinatorPage(props) {
           var authExp30   = authRecords.filter(function(r){ if(!r.auth_expiry_date) return false; var d=Math.round((new Date(r.auth_expiry_date)-new Date())/(1000*60*60*24)); return d>=0&&d<=30; }).length;
 
           var kpiTiles = [
-            { label: 'Total Open Tasks',  val: allTasks.length,   color: '#111827', bg: 'white' },
-            { label: 'Critical',          val: counts.critical,   color: '#DC2626', bg: '#FEF2F2', alert: counts.critical > 0 },
-            { label: 'High Priority',     val: counts.high,       color: '#D97706', bg: '#FEF3C7', alert: counts.high > 0 },
-            { label: 'Auth Issues',       val: counts.auth,       color: '#7C3AED', bg: '#EDE9FE', alert: counts.auth > 0 },
+            { label: 'Total Open Tasks',  val: allTasks.length,   color: '#111827', bg: 'white',   filter: null,       sub: 'Show all' },
+            { label: 'Critical',          val: counts.critical,   color: '#DC2626', bg: '#FEF2F2', alert: counts.critical > 0, filter: 'critical', sub: 'Filter task list' },
+            { label: 'High Priority',     val: counts.high,       color: '#D97706', bg: '#FEF3C7', alert: counts.high > 0,     filter: 'high',     sub: 'Filter task list' },
+            { label: 'Auth Issues',       val: counts.auth,       color: '#7C3AED', bg: '#EDE9FE', alert: counts.auth > 0,     filter: 'auth',     sub: 'Filter task list' },
           ];
 
           return (
@@ -983,14 +1094,32 @@ export default function CoordinatorPage(props) {
               gap: 10, marginBottom: 14, alignItems: 'stretch',
             }}>
               {kpiTiles.map(function(tile) {
+                var isActiveFilter = taskFilter === tile.filter && tile.filter !== null;
+                var canClick = tile.filter !== null ? tile.val > 0 : taskFilter !== null;
                 return (
-                  <div key={tile.label} style={{
-                    background: tile.bg || 'white', border: '1px solid #E5E7EB',
-                    borderRadius: 10, padding: '10px 12px', textAlign: 'center',
-                    boxShadow: tile.alert ? '0 0 0 2px ' + tile.color + '33' : 'none',
-                  }}>
+                  <div key={tile.label}
+                    onClick={canClick ? function() {
+                      setTaskFilter(isActiveFilter ? null : tile.filter);
+                    } : null}
+                    title={tile.filter ? (isActiveFilter ? 'Click to clear filter' : 'Click to filter task list to ' + tile.label) : (taskFilter ? 'Click to clear current task filter' : null)}
+                    style={{
+                      background: tile.bg || 'white',
+                      border: '1px solid ' + (isActiveFilter ? tile.color : '#E5E7EB'),
+                      borderRadius: 10, padding: '10px 12px', textAlign: 'center',
+                      boxShadow: isActiveFilter ? '0 0 0 3px ' + tile.color + '33' : (tile.alert ? '0 0 0 2px ' + tile.color + '33' : 'none'),
+                      cursor: canClick ? 'pointer' : 'default',
+                      transition: 'transform 0.1s, border-color 0.15s, box-shadow 0.15s',
+                      position: 'relative',
+                    }}
+                    onMouseEnter={canClick ? function(e) { if (!isActiveFilter) e.currentTarget.style.transform = 'translateY(-1px)'; } : null}
+                    onMouseLeave={canClick ? function(e) { if (!isActiveFilter) e.currentTarget.style.transform = 'translateY(0)'; } : null}>
                     <div style={{ fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{tile.label}</div>
                     <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 2, lineHeight: 1.1 }}>{tile.val}</div>
+                    {isActiveFilter && (
+                      <div style={{ position: 'absolute', bottom: 3, right: 6, fontSize: 8, fontWeight: 700, color: tile.color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        ▼ filtered
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1728,6 +1857,23 @@ export default function CoordinatorPage(props) {
               + Add
             </button>
           </div>
+
+          {/* Active filter indicator */}
+          {taskFilter && (
+            <div style={{
+              padding: '6px 12px', background: '#FEF3C7', borderBottom: '1px solid #FCD34D',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              fontSize: 10, color: '#92400E', fontWeight: 700,
+            }}>
+              <span>
+                Filtered: {taskFilter === 'critical' ? 'Critical only' : taskFilter === 'high' ? 'High Priority only' : 'Auth Issues only'}
+              </span>
+              <button onClick={function() { setTaskFilter(null); }}
+                style={{ background: 'none', border: '1px solid #92400E', borderRadius: 4, padding: '1px 7px', fontSize: 9, color: '#92400E', fontWeight: 700, cursor: 'pointer' }}>
+                Clear ×
+              </button>
+            </div>
+          )}
 
           {/* Tabs + filter */}
           <div style={{ padding: '8px 10px', borderBottom: '1px solid #F3F4F6', background: '#FAFAFA' }}>
