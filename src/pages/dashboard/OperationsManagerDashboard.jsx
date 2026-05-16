@@ -215,10 +215,10 @@ export default function OperationsManagerDashboard(props) {
   function load() {
     setLoading(true);
     Promise.all([
-      // Current census state
+      // Current census state — pipeline_assigned_to gives us care-coord owner
       fetchAllPages(
         supabase.from('census_data')
-          .select('id, patient_name, region, status, insurance, status_changed_at, first_seen_date, last_seen_date, last_visit_date, days_overdue')
+          .select('id, patient_name, region, status, insurance, status_changed_at, first_seen_date, last_seen_date, last_visit_date, days_overdue, pipeline_assigned_to')
       ),
       // Status transitions (last 60 days — enough for trend math)
       fetchAllPages(
@@ -233,10 +233,10 @@ export default function OperationsManagerDashboard(props) {
           .select('id, patient_name, region, insurance, referral_status, date_received, welcome_call, first_appt, chart_status')
           .gte('date_received', new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10))
       ),
-      // Auth lifecycle
+      // Auth lifecycle — assigned_to gives us the auth coordinator owning each row
       fetchAllPages(
         supabase.from('auth_tracker')
-          .select('id, patient_name, region, auth_status, visits_authorized, visits_used, auth_submitted_date, auth_approved_date, auth_expiry_date, soc_date, is_currently_active')
+          .select('id, patient_name, region, auth_status, visits_authorized, visits_used, auth_submitted_date, auth_approved_date, auth_expiry_date, soc_date, is_currently_active, assigned_to, insurance')
           .eq('is_currently_active', true)
       ),
       // Active coordinators (for team productivity)
@@ -968,6 +968,54 @@ export default function OperationsManagerDashboard(props) {
             </div>
             {/* Body */}
             <div style={{ flex: 1, overflowY: 'auto' }}>
+              {/* Owner accountability summary — count unassigned + owner breakdown */}
+              {drilldown.patients.length > 0 && drilldown.key && drilldown.key.indexOf('intake:') !== 0 && (() => {
+                var unassignedCount = drilldown.patients.filter(function(p) {
+                  return !(p.assigned_to || p.pipeline_assigned_to);
+                }).length;
+                var ownerCounts = {};
+                drilldown.patients.forEach(function(p) {
+                  var o = p.assigned_to || p.pipeline_assigned_to;
+                  if (o) ownerCounts[o] = (ownerCounts[o] || 0) + 1;
+                });
+                var topOwners = Object.entries(ownerCounts)
+                  .sort(function(a, b) { return b[1] - a[1]; })
+                  .slice(0, 3);
+                return (
+                  <div style={{
+                    padding: '10px 18px', background: '#FAFAFA',
+                    borderBottom: '1px solid #E5E7EB',
+                    fontSize: 10, color: '#374151',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+                  }}>
+                    <div>
+                      {unassignedCount > 0 ? (
+                        <span style={{ color: '#991B1B', fontWeight: 700 }}>
+                          ⚠ {unassignedCount} unassigned · accountability gap
+                        </span>
+                      ) : (
+                        <span style={{ color: '#059669', fontWeight: 700 }}>
+                          ✓ All assigned
+                        </span>
+                      )}
+                    </div>
+                    {topOwners.length > 0 && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {topOwners.map(function(entry) {
+                          return (
+                            <span key={entry[0]} style={{
+                              padding: '2px 7px', background: 'white', border: '1px solid #E5E7EB',
+                              borderRadius: 10, fontSize: 9, fontWeight: 700, color: '#374151',
+                            }}>
+                              {entry[0]} · <span style={{ color: '#6B7280' }}>{entry[1]}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {drilldown.patients.length === 0 ? (
                 <div style={{ padding: 36, textAlign: 'center', color: '#10B981', fontSize: 13 }}>
                   ✅ Nothing here right now.
@@ -990,6 +1038,19 @@ export default function OperationsManagerDashboard(props) {
                   // Status / extra context line
                   var statusLine = p.status || p.auth_status || p.referral_status || '';
                   var canOpenModal = !!p.patient_name;
+                  // Resolve owner: auth rows use assigned_to, census rows use pipeline_assigned_to.
+                  // Intake referrals have no per-row assignment — show "Intake Team".
+                  var owner = p.assigned_to || p.pipeline_assigned_to || null;
+                  var isIntakeRow = drilldown.key && drilldown.key.indexOf('intake:') === 0;
+                  var ownerLabel, ownerColor, ownerBg, ownerBorder;
+                  if (owner) {
+                    ownerLabel = owner;
+                    ownerColor = '#1E40AF'; ownerBg = '#EFF6FF'; ownerBorder = '#BFDBFE';
+                  } else if (isIntakeRow) {
+                    ownerLabel = 'Intake Team'; ownerColor = '#6B7280'; ownerBg = '#F3F4F6'; ownerBorder = '#E5E7EB';
+                  } else {
+                    ownerLabel = '⚠ Unassigned'; ownerColor = '#991B1B'; ownerBg = '#FEF2F2'; ownerBorder = '#FECACA';
+                  }
                   return (
                     <div key={(p.id || p.patient_name) + '|' + i}
                       onClick={canOpenModal ? function() { openPatient(p.patient_name, p.region); } : null}
@@ -1019,6 +1080,20 @@ export default function OperationsManagerDashboard(props) {
                         </div>
                         <div style={{ fontSize: 10, color: '#6B7280', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {statusLine}{p.insurance ? ' · ' + p.insurance : ''}
+                        </div>
+                        <div style={{
+                          marginTop: 4,
+                          display: 'inline-block',
+                          padding: '2px 7px',
+                          background: ownerBg,
+                          border: '1px solid ' + ownerBorder,
+                          borderRadius: 4,
+                          fontSize: 9, fontWeight: 700,
+                          color: ownerColor,
+                          textTransform: 'uppercase', letterSpacing: '0.04em',
+                          maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {ownerLabel}
                         </div>
                       </div>
                       <div style={{ textAlign: 'right', flexShrink: 0 }}>
