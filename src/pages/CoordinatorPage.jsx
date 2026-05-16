@@ -320,6 +320,9 @@ export default function CoordinatorPage(props) {
   var [expandedClinician, setExpandedClinician] = useState(null);
   var [assignSaving, setAssignSaving] = useState(false);
   var [assignError, setAssignError] = useState('');
+  // Right-sidebar slide-in panel for Auth Status tile drill-downs.
+  // Stores the bucket key ('active' | 'pending' | 'low' | 'expiring') or null.
+  var [authPanel, setAuthPanel] = useState(null);
 
   function fetchTasks() {
     Promise.all([
@@ -844,7 +847,7 @@ export default function CoordinatorPage(props) {
         </div>
       </div>
  
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 20px' }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '14px 16px' }}>
  
         {/* \u2500\u2500 Top row: 4 KPI tiles + compact Auth Status widget on the right \u2500\u2500 */}
         {(function renderTopRow() {
@@ -864,24 +867,25 @@ export default function CoordinatorPage(props) {
           return (
             <div style={{
               display: 'grid',
-              // 4 flexible KPI tiles + fixed-width Auth Status panel
               gridTemplateColumns: authRecords.length > 0 ? 'repeat(4, 1fr) 280px' : 'repeat(4, 1fr)',
-              gap: 12, marginBottom: 24, alignItems: 'stretch',
+              gap: 10, marginBottom: 14, alignItems: 'stretch',
             }}>
               {kpiTiles.map(function(tile) {
                 return (
                   <div key={tile.label} style={{
                     background: tile.bg || 'white', border: '1px solid #E5E7EB',
-                    borderRadius: 10, padding: '14px 16px', textAlign: 'center',
+                    borderRadius: 10, padding: '10px 12px', textAlign: 'center',
                     boxShadow: tile.alert ? '0 0 0 2px ' + tile.color + '33' : 'none',
                   }}>
-                    <div style={{ fontSize: 10, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{tile.label}</div>
-                    <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 4 }}>{tile.val}</div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{tile.label}</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 2, lineHeight: 1.1 }}>{tile.val}</div>
                   </div>
                 );
               })}
 
-              {/* Compact Auth Status \u2014 fits in the 5th column on the right */}
+              {/* Compact Auth Status \u2014 fits in the 5th column on the right.
+                  Tiles are clickable: each opens a right-sidebar drilldown
+                  with the patients matching that bucket. */}
               {authRecords.length > 0 && (
                 <div style={{
                   background: 'white', border: '1px solid #E5E7EB', borderRadius: 10,
@@ -897,13 +901,24 @@ export default function CoordinatorPage(props) {
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
                     {[
-                      { label: 'Active',  count: authActive,  color: '#065F46', bg: '#ECFDF5' },
-                      { label: 'Pend',    count: authPending, color: '#92400E', bg: '#FEF3C7' },
-                      { label: '\u22647 left', count: authLow,     color: '#DC2626', bg: '#FEF2F2' },
-                      { label: 'Exp 30d', count: authExp30,   color: '#D97706', bg: '#FEF3C7' },
+                      { key: 'active',   label: 'Active',  count: authActive,  color: '#065F46', bg: '#ECFDF5' },
+                      { key: 'pending',  label: 'Pend',    count: authPending, color: '#92400E', bg: '#FEF3C7' },
+                      { key: 'low',      label: '\u22647 left', count: authLow,     color: '#DC2626', bg: '#FEF2F2' },
+                      { key: 'expiring', label: 'Exp 30d', count: authExp30,   color: '#D97706', bg: '#FEF3C7' },
                     ].map(function(s) {
+                      var isActiveTile = authPanel === s.key;
+                      var canClick = s.count > 0;
                       return (
-                        <div key={s.label} style={{ background: s.bg, borderRadius: 6, padding: '5px 0', textAlign: 'center' }}>
+                        <div key={s.label}
+                          onClick={canClick ? function() { setAuthPanel(isActiveTile ? null : s.key); } : null}
+                          style={{
+                            background: s.bg, borderRadius: 6, padding: '5px 0', textAlign: 'center',
+                            border: '2px solid ' + (isActiveTile ? s.color : 'transparent'),
+                            cursor: canClick ? 'pointer' : 'default',
+                            transition: 'transform 0.1s, border-color 0.15s',
+                          }}
+                          onMouseEnter={canClick && !isActiveTile ? function(e) { e.currentTarget.style.transform = 'translateY(-1px)'; } : null}
+                          onMouseLeave={canClick && !isActiveTile ? function(e) { e.currentTarget.style.transform = 'translateY(0)'; } : null}>
                           <div style={{ fontSize: 16, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: s.color, lineHeight: 1 }}>{s.count}</div>
                           <div style={{ fontSize: 8, color: s.color, fontWeight: 700, marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{s.label}</div>
                         </div>
@@ -916,18 +931,18 @@ export default function CoordinatorPage(props) {
           );
         })()}
 
-        {/* ── TODAY'S TASKS (moved to top per Liam — critical for daily ops) ── */}
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* ── TODAY'S TASKS (critical for daily ops — sits at top) ── */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
             📋 Today's Tasks
-            <span style={{ fontSize: 11, fontWeight: 400, color: '#6B7280' }}>
-              Note submissions, auth follow-ups, and patient outreach you need to act on
+            <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
+              Note submissions, auth follow-ups, patient outreach
             </span>
           </div>
 
-          {/* Tabs + Add */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <div style={{ display: 'flex', gap: 4, background: 'white', border: '1px solid #E5E7EB', borderRadius: 8, padding: 4 }}>
+          {/* Tabs + Add — compact */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 4, background: 'white', border: '1px solid #E5E7EB', borderRadius: 7, padding: 3 }}>
               {[
                 { key: 'today', label: "Today's Priority (" + todayTasks.length + ')' },
                 { key: 'all',   label: 'All Tasks (' + allTasks.length + ')' },
@@ -935,7 +950,7 @@ export default function CoordinatorPage(props) {
                 var isActive = activeTab === tab.key;
                 return (
                   <button key={tab.key} onClick={function() { setActiveTab(tab.key); }}
-                    style={{ padding: '7px 16px', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: isActive ? 600 : 500, cursor: 'pointer', background: isActive ? '#0F1117' : 'none', color: isActive ? '#fff' : '#6B7280' }}>
+                    style={{ padding: '5px 12px', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: isActive ? 700 : 500, cursor: 'pointer', background: isActive ? '#0F1117' : 'none', color: isActive ? '#fff' : '#6B7280' }}>
                     {tab.label}
                   </button>
                 );
@@ -1044,24 +1059,26 @@ export default function CoordinatorPage(props) {
           }
 
           return (
-            <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>🗺 My Regions &mdash; Pipeline Overview</div>
+            <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  🗺 Pipeline Overview
+                  <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
+                    Click any number to drill into the patient list
+                  </span>
+                </div>
                 {expandedCell && (
                   <button onClick={function() { setExpandedCell(null); }}
                     style={{ fontSize: 10, color: '#6B7280', background: 'none', border: '1px solid #E5E7EB', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                    Close patient list
+                    Close list
                   </button>
                 )}
-              </div>
-              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
-                Click any number to see the patient list · click a patient to edit their record
               </div>
               <div style={{ overflow: 'auto' }}>
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
-                  padding: '8px 10px', background: '#F9FAFB', borderRadius: 6,
+                  gridTemplateColumns: '70px repeat(8, minmax(54px, 1fr))',
+                  padding: '5px 10px', background: '#F9FAFB', borderRadius: 6,
                   fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em',
                 }}>
                   <span>Region</span>
@@ -1079,11 +1096,11 @@ export default function CoordinatorPage(props) {
                   return (
                     <div key={r} style={{
                       display: 'grid',
-                      gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
-                      padding: '8px 10px', borderBottom: i < regions.length - 1 ? '1px solid #F3F4F6' : 'none',
-                      alignItems: 'center', fontSize: 14, fontFamily: 'DM Mono, monospace',
+                      gridTemplateColumns: '70px repeat(8, minmax(54px, 1fr))',
+                      padding: '5px 10px', borderBottom: i < regions.length - 1 ? '1px solid #F3F4F6' : 'none',
+                      alignItems: 'center', fontSize: 13, fontFamily: 'DM Mono, monospace',
                     }}>
-                      <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif', color: '#111827' }}>Region {r}</span>
+                      <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif', color: '#111827', fontSize: 12 }}>Region {r}</span>
                       <Cell region={r} bucket="active"        count={c.active}        color="#059669" weight={700} />
                       <Cell region={r} bucket="evalPending"   count={c.evalPending}   color={c.evalPending>0?'#1565C0':'#9CA3AF'} />
                       <Cell region={r} bucket="socPending"    count={c.socPending}    color={c.socPending>0?'#1565C0':'#9CA3AF'} />
@@ -1098,11 +1115,11 @@ export default function CoordinatorPage(props) {
                 {regions.length > 1 && (
                   <div style={{
                     display: 'grid',
-                    gridTemplateColumns: '80px repeat(8, minmax(60px, 1fr))',
-                    padding: '8px 10px', marginTop: 4, background: '#0F1117', color: '#fff', borderRadius: 6,
-                    alignItems: 'center', fontSize: 14, fontFamily: 'DM Mono, monospace',
+                    gridTemplateColumns: '70px repeat(8, minmax(54px, 1fr))',
+                    padding: '6px 10px', marginTop: 4, background: '#0F1117', color: '#fff', borderRadius: 6,
+                    alignItems: 'center', fontSize: 13, fontFamily: 'DM Mono, monospace',
                   }}>
-                    <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif' }}>Total</span>
+                    <span style={{ fontWeight: 700, fontFamily: 'DM Sans, sans-serif', fontSize: 12 }}>Total</span>
                     <Cell region="__TOTAL__" bucket="active"        count={regionPipeline.totals.active}        color="#fff" weight={800} />
                     <Cell region="__TOTAL__" bucket="evalPending"   count={regionPipeline.totals.evalPending}   color="#fff" weight={700} />
                     <Cell region="__TOTAL__" bucket="socPending"    count={regionPipeline.totals.socPending}    color="#fff" weight={700} />
@@ -1193,9 +1210,14 @@ export default function CoordinatorPage(props) {
         })()}
 
         {/* ── PRIORITY OPPORTUNITIES (clickable; no $ shown to coordinators) ─ */}
-        <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>🎯 Priority Opportunities</div>
+        <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
+              🎯 Priority Opportunities
+              <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
+                Click any card to drill in
+              </span>
+            </div>
             {expandedOpp !== null && (
               <button onClick={function() { setExpandedOpp(null); }}
                 style={{ fontSize: 10, color: '#6B7280', background: 'none', border: '1px solid #E5E7EB', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
@@ -1203,16 +1225,13 @@ export default function CoordinatorPage(props) {
               </button>
             )}
           </div>
-          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
-            Click any card to see the patients · click a patient row to edit
-          </div>
           {opportunities.length === 0 ? (
             <div style={{ padding: 18, textAlign: 'center', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 8 }}>
               <div style={{ fontSize: 22, marginBottom: 4 }}>✅</div>
               <div style={{ fontSize: 12, fontWeight: 600, color: '#065F46' }}>No obvious blockers right now — pipelines flowing!</div>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               {opportunities.map(function(opp, i) {
                 var styles = {
                   critical: { bg: '#FEF2F2', border: '#FECACA', title: '#DC2626' },
@@ -1222,30 +1241,30 @@ export default function CoordinatorPage(props) {
                 var isExpanded = expandedOpp === i;
                 return (
                   <div key={i}>
-                    {/* Clickable card */}
+                    {/* Clickable card (compact) */}
                     <div
                       onClick={function() { setExpandedOpp(isExpanded ? null : i); }}
                       style={{
                         background: styles.bg,
                         border: '1px solid ' + (isExpanded ? styles.title : styles.border),
-                        borderRadius: isExpanded ? '8px 8px 0 0' : 8,
-                        padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 12,
+                        borderRadius: isExpanded ? '7px 7px 0 0' : 7,
+                        padding: '7px 11px', display: 'flex', alignItems: 'center', gap: 10,
                         cursor: 'pointer', transition: 'border-color 0.15s',
                       }}
                       onMouseEnter={function(e) { if (!isExpanded) e.currentTarget.style.borderColor = styles.title; }}
                       onMouseLeave={function(e) { if (!isExpanded) e.currentTarget.style.borderColor = styles.border; }}
                     >
-                      <div style={{ fontSize: 20, width: 28, textAlign: 'center', flexShrink: 0 }}>{opp.icon}</div>
+                      <div style={{ fontSize: 15, width: 20, textAlign: 'center', flexShrink: 0 }}>{opp.icon}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: styles.title, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: styles.title, display: 'flex', alignItems: 'center', gap: 6 }}>
                           {opp.title}
                           <span style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 500 }}>{isExpanded ? '▾' : '▸'}</span>
                         </div>
-                        <div style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>{opp.subtitle}</div>
+                        <div style={{ fontSize: 9, color: '#6B7280', marginTop: 1 }}>{opp.subtitle}</div>
                       </div>
                       <div style={{
-                        fontSize: 9, fontWeight: 700, color: styles.title,
-                        background: '#fff', padding: '3px 9px', borderRadius: 999,
+                        fontSize: 8, fontWeight: 700, color: styles.title,
+                        background: '#fff', padding: '2px 7px', borderRadius: 999,
                         border: '1px solid ' + styles.border, textTransform: 'uppercase', letterSpacing: '0.05em',
                         flexShrink: 0,
                       }}>
@@ -1357,38 +1376,38 @@ export default function CoordinatorPage(props) {
         </div>
 
         {/* ── CLINICIAN PRODUCTIVITY — THIS WEEK ───────────────────────── */}
-        <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 16, marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>
-              👥 Clinician Productivity &mdash; This Week
+        <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
+              👥 Clinician Productivity
+              <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
+                This week · click a row to assign patients
+              </span>
             </div>
             <div style={{ fontSize: 10, color: '#9CA3AF' }}>
-              {clinicianStats.length} clinician{clinicianStats.length === 1 ? '' : 's'} in your regions
+              {clinicianStats.length} in your regions
             </div>
           </div>
-          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
-            Watch for clinicians who are under-scheduled (need more visits) or over-scheduled (need offload)
-          </div>
 
-          {/* Alert badges — only render counts > 0 */}
+          {/* Alert badges — compact inline pills */}
           {(productivitySummary.under + productivitySummary.at_risk + productivitySummary.over) > 0 && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
               {productivitySummary.under > 0 && (
-                <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#DC2626' }}>{productivitySummary.under}</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: '#991B1B' }}>under-scheduled · need more visits added</span>
+                <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 999, padding: '3px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#DC2626' }}>{productivitySummary.under}</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#991B1B' }}>under-scheduled</span>
                 </div>
               )}
               {productivitySummary.at_risk > 0 && (
-                <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#D97706' }}>{productivitySummary.at_risk}</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: '#92400E' }}>at risk · below 70% of weekly target</span>
+                <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 999, padding: '3px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#D97706' }}>{productivitySummary.at_risk}</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#92400E' }}>at risk (&lt; 70%)</span>
                 </div>
               )}
               {productivitySummary.over > 0 && (
-                <div style={{ background: '#EDE9FE', border: '1px solid #C4B5FD', borderRadius: 8, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#7C3AED' }}>{productivitySummary.over}</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: '#5B21B6' }}>over-scheduled · may need offload</span>
+                <div style={{ background: '#EDE9FE', border: '1px solid #C4B5FD', borderRadius: 999, padding: '3px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#7C3AED' }}>{productivitySummary.over}</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#5B21B6' }}>over-scheduled</span>
                 </div>
               )}
             </div>
@@ -1402,8 +1421,8 @@ export default function CoordinatorPage(props) {
             <div style={{ overflow: 'auto', border: '1px solid #F3F4F6', borderRadius: 8 }}>
               {/* Table header */}
               <div style={{
-                display: 'grid', gridTemplateColumns: '1.5fr 60px 60px 80px 70px 70px 1fr 90px',
-                padding: '8px 12px', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB',
+                display: 'grid', gridTemplateColumns: '1.4fr 48px 50px 60px 55px 55px 1fr 76px',
+                padding: '5px 10px', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB',
                 fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em',
               }}>
                 <span>Clinician</span>
@@ -1439,11 +1458,11 @@ export default function CoordinatorPage(props) {
                   <div key={c.id}
                     onClick={function() { setExpandedClinician(isExpandedC ? null : c); }}
                     style={{
-                      display: 'grid', gridTemplateColumns: '1.5fr 60px 60px 80px 70px 70px 1fr 90px',
-                      padding: '9px 12px', borderBottom: '1px solid #F3F4F6',
+                      display: 'grid', gridTemplateColumns: '1.4fr 48px 50px 60px 55px 55px 1fr 76px',
+                      padding: '6px 10px', borderBottom: '1px solid #F3F4F6',
                       background: isExpandedC ? '#0F1117' : (i % 2 === 0 ? 'white' : '#F9FAFB'),
                       color: isExpandedC ? '#fff' : 'inherit',
-                      alignItems: 'center', fontSize: 12, cursor: 'pointer',
+                      alignItems: 'center', fontSize: 11, cursor: 'pointer',
                       transition: 'background 0.15s',
                     }}
                     onMouseEnter={function(e) { if (!isExpandedC) e.currentTarget.style.background = '#EFF6FF'; }}
@@ -1634,6 +1653,136 @@ export default function CoordinatorPage(props) {
 
       </div>
  
+      {/* ── AUTH STATUS RIGHT SIDEBAR (slide-in patient drilldown) ── */}
+      {authPanel && (function renderAuthPanel() {
+        var bucketCfg = {
+          active:   { label: 'Active Authorizations',     color: '#065F46', bg: '#ECFDF5', desc: 'Auths currently in active use' },
+          pending:  { label: 'Pending Authorizations',    color: '#92400E', bg: '#FEF3C7', desc: 'Auths submitted but not yet approved by payor' },
+          low:      { label: '≤7 Visits Remaining',       color: '#DC2626', bg: '#FEF2F2', desc: 'Active auths with 7 or fewer visits left — renewal needed' },
+          expiring: { label: 'Expiring within 30 Days',   color: '#D97706', bg: '#FEF3C7', desc: 'Active auths with expiry date in the next 30 days' },
+        }[authPanel];
+
+        var matches = authRecords.filter(function(r) {
+          if (authPanel === 'active')   return r.auth_status === 'active';
+          if (authPanel === 'pending')  return r.auth_status === 'pending';
+          if (authPanel === 'low')      return r.auth_status === 'active' && Math.max((r.visits_authorized||0)-(r.visits_used||0), 0) <= 7;
+          if (authPanel === 'expiring') {
+            if (!r.auth_expiry_date) return false;
+            var d = Math.round((new Date(r.auth_expiry_date) - new Date()) / (1000*60*60*24));
+            return d >= 0 && d <= 30;
+          }
+          return false;
+        }).sort(function(a, b) {
+          // Most urgent first: lowest visits remaining or soonest expiry
+          if (authPanel === 'low') {
+            var av = Math.max((a.visits_authorized||0)-(a.visits_used||0), 0);
+            var bv = Math.max((b.visits_authorized||0)-(b.visits_used||0), 0);
+            return av - bv;
+          }
+          if (authPanel === 'expiring') {
+            var ad = a.auth_expiry_date ? new Date(a.auth_expiry_date).getTime() : Infinity;
+            var bd = b.auth_expiry_date ? new Date(b.auth_expiry_date).getTime() : Infinity;
+            return ad - bd;
+          }
+          return (a.patient_name || '').localeCompare(b.patient_name || '');
+        });
+
+        return (
+          <>
+            {/* Backdrop — clicking closes the panel */}
+            <div onClick={function() { setAuthPanel(null); }}
+              style={{
+                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)',
+                zIndex: 1400,
+              }} />
+            {/* Slide-in panel from the right */}
+            <div style={{
+              position: 'fixed', top: 0, right: 0, bottom: 0, width: '420px', maxWidth: '90vw',
+              background: 'white', boxShadow: '-12px 0 32px rgba(0,0,0,0.2)',
+              zIndex: 1500, display: 'flex', flexDirection: 'column',
+              animation: 'slideInRight 0.2s ease-out',
+            }}>
+              {/* Header */}
+              <div style={{ padding: '14px 18px', background: bucketCfg.color, color: '#fff',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>{bucketCfg.label}</div>
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)', marginTop: 3 }}>
+                    {matches.length} patient{matches.length === 1 ? '' : 's'} · Regions {regions.join(', ')}
+                  </div>
+                </div>
+                <button onClick={function() { setAuthPanel(null); }}
+                  style={{ background: 'rgba(255,255,255,0.18)', border: 'none', color: '#fff',
+                    width: 30, height: 30, borderRadius: 6, fontSize: 18, cursor: 'pointer' }}>×</button>
+              </div>
+
+              {/* Description strip */}
+              <div style={{ padding: '8px 18px', background: bucketCfg.bg, borderBottom: '1px solid #E5E7EB',
+                fontSize: 11, color: bucketCfg.color, fontWeight: 600 }}>
+                {bucketCfg.desc}
+              </div>
+
+              {/* Patient list */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+                {matches.length === 0 ? (
+                  <div style={{ padding: 24, textAlign: 'center', color: '#9CA3AF', fontSize: 12 }}>
+                    No patients in this bucket.
+                  </div>
+                ) : (
+                  matches.map(function(r) {
+                    var visitsLeft = Math.max((r.visits_authorized || 0) - (r.visits_used || 0), 0);
+                    var expDays = r.auth_expiry_date
+                      ? Math.round((new Date(r.auth_expiry_date) - new Date()) / (1000*60*60*24))
+                      : null;
+                    return (
+                      <div key={r.id || r.patient_name + r.region}
+                        onClick={function() { openPatientFromAuth(r); }}
+                        style={{
+                          padding: '11px 18px', borderBottom: '1px solid #F3F4F6',
+                          cursor: 'pointer', transition: 'background 0.1s',
+                        }}
+                        onMouseEnter={function(e) { e.currentTarget.style.background = '#F9FAFB'; }}
+                        onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {r.patient_name}
+                          </div>
+                          <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: '#6B7280', flexShrink: 0 }}>
+                            Region {r.region}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#6B7280', marginTop: 3 }}>
+                          {r.insurance || '—'}{r.frequency ? ' · ' + r.frequency : ''}
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, marginTop: 6, fontSize: 11 }}>
+                          <span style={{ color: visitsLeft <= 3 ? '#DC2626' : visitsLeft <= 7 ? '#D97706' : '#374151', fontWeight: 600 }}>
+                            {visitsLeft} of {r.visits_authorized || 0} visits left
+                          </span>
+                          {expDays !== null && (
+                            <span style={{ color: expDays <= 14 ? '#DC2626' : expDays <= 30 ? '#D97706' : '#374151' }}>
+                              · {expDays >= 0 ? 'expires in ' + expDays + 'd' : 'expired ' + Math.abs(expDays) + 'd ago'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Footer hint */}
+              <div style={{ padding: '8px 18px', borderTop: '1px solid #E5E7EB', background: '#F9FAFB', fontSize: 10, color: '#9CA3AF' }}>
+                Click any patient to open their record for editing
+              </div>
+            </div>
+            {/* Inline keyframes for the slide-in animation */}
+            <style>{
+              '@keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }'
+            }</style>
+          </>
+        );
+      })()}
+
       {showModal && (
         <AddTaskModal
           coordName={coordName}
