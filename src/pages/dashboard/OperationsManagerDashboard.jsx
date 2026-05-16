@@ -26,6 +26,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
+import StatusChangeModal from '../../components/StatusChangeModal';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -165,14 +166,17 @@ function DepartmentHealthCard({ title, items, accentColor }) {
 }
 
 // ─── Main dashboard ─────────────────────────────────────────────────────
-export default function OperationsManagerDashboard() {
+export default function OperationsManagerDashboard(props) {
   const { profile } = useAuth();
+  const onNavigate = props && props.onNavigate;
   const [census, setCensus] = useState([]);
   const [statusLog, setStatusLog] = useState([]);
   const [intakeReferrals, setIntakeReferrals] = useState([]);
   const [auths, setAuths] = useState([]);
   const [coordinators, setCoordinators] = useState([]);
+  const [activityLog, setActivityLog] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [statusPatient, setStatusPatient] = useState(null);
 
   function load() {
     setLoading(true);
@@ -207,12 +211,20 @@ export default function OperationsManagerDashboard() {
           .select('id, full_name, role, job_title, team, regions, is_active')
           .eq('is_active', true)
       ),
+      // Activity log — 24h window powers the "are coords working" monitor
+      fetchAllPages(
+        supabase.from('coordinator_activity_log')
+          .select('coordinator_name, coordinator_role, action_type, created_at')
+          .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+          .order('created_at', { ascending: false })
+      ),
     ]).then(function(r) {
       setCensus(r[0]);
       setStatusLog(r[1]);
       setIntakeReferrals(r[2]);
       setAuths(r[3]);
       setCoordinators(r[4]);
+      setActivityLog(r[5]);
       setLoading(false);
     }).catch(function(err) {
       console.error('[OperationsManagerDashboard] load error:', err);
@@ -220,7 +232,54 @@ export default function OperationsManagerDashboard() {
     });
   }
   useEffect(function() { load(); }, []);
-  useRealtimeTable(['census_data', 'census_status_log', 'intake_referrals', 'auth_tracker', 'coordinators'], load);
+  useRealtimeTable(['census_data', 'census_status_log', 'intake_referrals', 'auth_tracker', 'coordinators', 'coordinator_activity_log'], load);
+
+  // Helper to look up a census row by patient_name (for opening StatusChangeModal
+  // from any clickable row anywhere on the page)
+  function openPatient(patientName, region) {
+    if (!patientName) return;
+    var match = census.find(function(c) {
+      return c.patient_name && c.patient_name.toLowerCase().trim() === patientName.toLowerCase().trim()
+        && (region ? c.region === region : true);
+    });
+    if (match) setStatusPatient(match);
+  }
+
+  // Per-coordinator activity summary used by the Activity Monitor strip
+  var coordinatorActivity = useMemo(function() {
+    var byName = {};
+    activityLog.forEach(function(a) {
+      var name = a.coordinator_name;
+      if (!name || name === 'System') return;
+      if (!byName[name]) byName[name] = { name: name, role: a.coordinator_role, count: 0, lastAt: null };
+      byName[name].count++;
+      if (!byName[name].lastAt || a.created_at > byName[name].lastAt) byName[name].lastAt = a.created_at;
+    });
+    // Merge in coordinators who haven't acted today so we can flag them
+    coordinators.forEach(function(c) {
+      if (['admin', 'super_admin'].indexOf(c.role) >= 0) return; // skip admins from worker activity panel
+      var name = c.full_name;
+      if (!byName[name]) byName[name] = { name: name, role: c.role, count: 0, lastAt: null };
+      byName[name].coord_id = c.id;
+      byName[name].team = c.team || c.role;
+      byName[name].regions = c.regions;
+    });
+    // Score: minutes since last action (Infinity if never)
+    return Object.values(byName).map(function(c) {
+      var minsAgo = c.lastAt ? Math.floor((Date.now() - new Date(c.lastAt).getTime()) / 60000) : Infinity;
+      var status = minsAgo === Infinity ? 'offline'
+        : minsAgo < 60 ? 'active'
+        : minsAgo < 240 ? 'idle'
+        : 'stale';
+      return Object.assign({}, c, { minsAgo: minsAgo, status: status });
+    }).sort(function(a, b) {
+      // Sort: most recent activity first; never-acted at the bottom
+      if (a.minsAgo === Infinity && b.minsAgo === Infinity) return a.name.localeCompare(b.name);
+      if (a.minsAgo === Infinity) return 1;
+      if (b.minsAgo === Infinity) return -1;
+      return a.minsAgo - b.minsAgo;
+    });
+  }, [activityLog, coordinators]);
 
   // ─── Pipeline stage metrics ───────────────────────────────────────────
   // For each stage:
@@ -464,35 +523,120 @@ export default function OperationsManagerDashboard() {
             </span>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <DepartmentHealthCard
-              title="Intake Team"
-              accentColor="#1565C0"
-              items={[
-                { label: 'Referrals this week', value: referralStats.thisWeek },
-                { label: 'Acceptance rate', value: referralStats.acceptanceRate + '%' },
-                { label: 'Awaiting decision', value: referralStats.pending, alert: referralStats.pending > 10 },
-                { label: 'Welcome call backlog', value: referralStats.welcomeBacklog, alert: referralStats.welcomeBacklog > 0 },
-              ]}
-            />
-            <DepartmentHealthCard
-              title="Authorization Team"
-              accentColor="#7C3AED"
-              items={[
-                { label: 'Open auths', value: authStats.open },
-                { label: 'Median submission → approval', value: authStats.medianLag !== null ? authStats.medianLag + 'd' : '—' },
-                { label: 'Stalled (> 5 days pending)', value: authStats.stalled, alert: authStats.stalled > 0 },
-              ]}
-            />
-            <DepartmentHealthCard
-              title="Care Coordination"
-              accentColor="#059669"
-              items={[
-                { label: 'Eval pending', value: careStats.evalPending },
-                { label: 'Overdue evals (> 48h)', value: careStats.overdueEvals, alert: careStats.overdueEvals > 0 },
-                { label: 'Patients on hold', value: careStats.onHold },
-              ]}
-            />
+            <div style={{ flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column' }}>
+              <DepartmentHealthCard
+                title="Intake Team"
+                accentColor="#1565C0"
+                items={[
+                  { label: 'Referrals this week', value: referralStats.thisWeek },
+                  { label: 'Acceptance rate', value: referralStats.acceptanceRate + '%' },
+                  { label: 'Awaiting decision', value: referralStats.pending, alert: referralStats.pending > 10 },
+                  { label: 'Welcome call backlog', value: referralStats.welcomeBacklog, alert: referralStats.welcomeBacklog > 0 },
+                ]}
+              />
+              {onNavigate && (
+                <button onClick={function() { onNavigate('intake'); }}
+                  style={{ marginTop: 6, padding: '6px 10px', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 6, fontSize: 11, fontWeight: 700, color: '#1565C0', cursor: 'pointer' }}>
+                  → Jump to Intake Dashboard
+                </button>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column' }}>
+              <DepartmentHealthCard
+                title="Authorization Team"
+                accentColor="#7C3AED"
+                items={[
+                  { label: 'Open auths', value: authStats.open },
+                  { label: 'Median submission → approval', value: authStats.medianLag !== null ? authStats.medianLag + 'd' : '—' },
+                  { label: 'Stalled (> 5 days pending)', value: authStats.stalled, alert: authStats.stalled > 0 },
+                ]}
+              />
+              {onNavigate && (
+                <button onClick={function() { onNavigate('auth-coordinator'); }}
+                  style={{ marginTop: 6, padding: '6px 10px', background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 6, fontSize: 11, fontWeight: 700, color: '#7C3AED', cursor: 'pointer' }}>
+                  → Jump to Auth Dashboard
+                </button>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column' }}>
+              <DepartmentHealthCard
+                title="Care Coordination"
+                accentColor="#059669"
+                items={[
+                  { label: 'Eval pending', value: careStats.evalPending },
+                  { label: 'Overdue evals (> 48h)', value: careStats.overdueEvals, alert: careStats.overdueEvals > 0 },
+                  { label: 'Patients on hold', value: careStats.onHold },
+                ]}
+              />
+              {onNavigate && (
+                <button onClick={function() { onNavigate('coordinator-portal'); }}
+                  style={{ marginTop: 6, padding: '6px 10px', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 6, fontSize: 11, fontWeight: 700, color: '#059669', cursor: 'pointer' }}>
+                  → Jump to Care Coord Portal
+                </button>
+              )}
+            </div>
           </div>
+        </div>
+
+        {/* ── ACTIVITY MONITOR — are coordinators actually working today? ── */}
+        <div style={{
+          background: 'white', border: '1px solid #E5E7EB', borderRadius: 10,
+          padding: '12px 14px', marginBottom: 14,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
+              👁 Coordinator Activity — last 24h
+              <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
+                Live signal of who's actually working
+              </span>
+            </div>
+            <div style={{ fontSize: 10, color: '#6B7280', display: 'flex', gap: 12 }}>
+              <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#10B981', borderRadius: '50%', marginRight: 4 }} /> Active (&lt; 1h)</span>
+              <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#F59E0B', borderRadius: '50%', marginRight: 4 }} /> Idle (1-4h)</span>
+              <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#DC2626', borderRadius: '50%', marginRight: 4 }} /> Stale / Offline</span>
+            </div>
+          </div>
+          {coordinatorActivity.length === 0 ? (
+            <div style={{ padding: 12, fontSize: 11, color: '#9CA3AF', textAlign: 'center' }}>
+              No activity data yet today.
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 6 }}>
+              {coordinatorActivity.map(function(c) {
+                var dotColor = c.status === 'active' ? '#10B981' : c.status === 'idle' ? '#F59E0B' : '#DC2626';
+                var lastLabel = c.minsAgo === Infinity ? 'No activity today'
+                  : c.minsAgo < 60 ? c.minsAgo + 'm ago'
+                  : c.minsAgo < 1440 ? Math.floor(c.minsAgo / 60) + 'h ago'
+                  : Math.floor(c.minsAgo / 1440) + 'd ago';
+                return (
+                  <div key={c.name} style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '7px 10px', border: '1px solid #F3F4F6', borderRadius: 6,
+                    background: c.status === 'stale' || c.status === 'offline' ? '#FEF2F2' : '#FAFAFA',
+                  }}>
+                    <span style={{
+                      flexShrink: 0, width: 9, height: 9, background: dotColor, borderRadius: '50%',
+                      boxShadow: c.status === 'active' ? '0 0 0 3px ' + dotColor + '33' : 'none',
+                    }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.name}
+                      </div>
+                      <div style={{ fontSize: 9, color: '#6B7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.role || c.team || ''} · {lastLabel}
+                      </div>
+                    </div>
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, fontFamily: 'DM Mono, monospace',
+                      color: c.count > 0 ? '#111827' : '#9CA3AF',
+                    }}>
+                      {c.count}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* ── STUCK PATIENTS — flattened action list ──────────────────── */}
@@ -535,15 +679,20 @@ export default function OperationsManagerDashboard() {
                 var sevColor = p._daysInStage > p._threshold * 3 ? '#DC2626'
                   : p._daysInStage > p._threshold * 2 ? '#D97706'
                   : '#F59E0B';
+                var rowBg = i % 2 === 0 ? 'white' : '#F9FAFB';
                 return (
-                  <div key={(p.id || p.patient_name) + '|' + i} style={{
-                    display: 'grid', gridTemplateColumns: '60px 1.4fr 110px 110px 1fr 70px',
-                    padding: '8px 14px', borderBottom: '1px solid #F3F4F6',
-                    background: i % 2 === 0 ? 'white' : '#F9FAFB',
-                    alignItems: 'center', fontSize: 11,
-                  }}>
+                  <div key={(p.id || p.patient_name) + '|' + i}
+                    onClick={function() { openPatient(p.patient_name, p.region); }}
+                    style={{
+                      display: 'grid', gridTemplateColumns: '60px 1.4fr 110px 110px 1fr 70px',
+                      padding: '8px 14px', borderBottom: '1px solid #F3F4F6',
+                      background: rowBg, alignItems: 'center', fontSize: 11,
+                      cursor: 'pointer', transition: 'background 0.1s',
+                    }}
+                    onMouseEnter={function(e) { e.currentTarget.style.background = '#EFF6FF'; }}
+                    onMouseLeave={function(e) { e.currentTarget.style.background = rowBg; }}>
                     <span style={{ fontWeight: 700, color: '#374151', fontFamily: 'DM Mono, monospace' }}>{p.region}</span>
-                    <span style={{ fontWeight: 600, color: '#111827' }}>{p.patient_name}</span>
+                    <span style={{ fontWeight: 600, color: '#111827', textDecoration: 'underline', textDecorationColor: '#D1D5DB' }}>{p.patient_name}</span>
                     <span style={{ color: '#6B7280', fontSize: 10 }}>{p._stage}</span>
                     <span style={{ color: '#6B7280', fontSize: 10 }}>{p._ownerTeam}</span>
                     <span style={{ color: '#6B7280', fontSize: 10 }}>{p.insurance || '—'}</span>
@@ -564,10 +713,20 @@ export default function OperationsManagerDashboard() {
 
         {/* Footer reminder for Phase 2 features */}
         <div style={{ fontSize: 10, color: '#9CA3AF', textAlign: 'center', padding: '8px 0' }}>
-          v1 · Phase 2 will add coordinator productivity rollup, week-over-week trend charts, and SLA breach attribution
+          v1.1 · clickable stuck patients, activity monitor, dept quick-jumps · phase 2 will add week-over-week trend charts and SLA breach attribution
         </div>
 
       </div>
+
+      {statusPatient && (
+        <StatusChangeModal
+          patient={statusPatient}
+          coordinatorId={profile?.id}
+          coordinatorName={profile?.full_name}
+          onClose={function() { setStatusPatient(null); }}
+          onSaved={function() { setStatusPatient(null); load(); }}
+        />
+      )}
     </div>
   );
 }
