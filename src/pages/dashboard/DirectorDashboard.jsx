@@ -2,6 +2,9 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import TopBar from '../../components/TopBar';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import ManagerScorecards from '../../components/director/ManagerScorecards';
+import ExceptionFeed from '../../components/director/ExceptionFeed';
+import LieutenantSnapshots from '../../components/director/LieutenantSnapshots';
 
 const BLENDED_RATE = 230;
 const WEEKLY_TARGET = 750;
@@ -135,6 +138,17 @@ export default function DirectorDashboard({ onNavigate }) {
   const [waitlist, setWaitlist] = useState([]);
   const [clinicians, setClinicians] = useState([]);
   const [discharges, setDischarges] = useState([]);
+  // Added for Manager Accountability layer (Director Command v2):
+  //   - coordinators: org tree → who maps to which scorecard row
+  //   - statusLog: not strictly required by current scorecard logic but
+  //     wired through so we can add trend math without another fetch round
+  //   - activityLog: powers response-latency + inactive-coordinator alerts
+  //   - intakeReferrals + auths: feed Carla's Lieutenant Snapshot
+  const [coordinators, setCoordinators] = useState([]);
+  const [statusLog, setStatusLog] = useState([]);
+  const [activityLog, setActivityLog] = useState([]);
+  const [intakeReferrals, setIntakeReferrals] = useState([]);
+  const [auths, setAuths] = useState([]);
   const [lastRefresh, setLastRefresh] = useState(null);
 
   const load = useCallback(async () => {
@@ -157,16 +171,30 @@ export default function DirectorDashboard({ onNavigate }) {
     sunDate.setDate(monDate.getDate() + 6);
     const weekEndStr = `${sunDate.getFullYear()}-${String(sunDate.getMonth()+1).padStart(2,'0')}-${String(sunDate.getDate()).padStart(2,'0')}`;
 
+    // 30-day window for status_log (powers sparkline trend math without
+    // pulling all 4K+ historical transitions).
+    const thirtyDaysAgoIso = new Date(Date.now() - 30 * 86400000).toISOString();
+    // 7-day window for activity_log — sufficient for response-latency
+    // proxy and "inactive coordinator" detection on the Director view.
+    const sevenDaysAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
+    const thirtyDaysAgoDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+
     // All paginated — census (750+), visits this week (800+), and auth
     // tables are each capable of exceeding the 1000-row PostgREST cap.
-    const [c, v, ar, oh, wl, cl, dc] = await Promise.all([
-      fetchAllPages(supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date,inferred_frequency,overdue_threshold_days,days_overdue')),
+    const [c, v, ar, oh, wl, cl, dc, co, sl, al, ir, au] = await Promise.all([
+      fetchAllPages(supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date,inferred_frequency,overdue_threshold_days,days_overdue,status_changed_at,pipeline_assigned_to')),
       fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr)),
       fetchAllPages(supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")')),
       fetchAllPages(supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold')),
       fetchAllPages(supabase.from('waitlist_assignments').select('patient_name,region,assignment_status,assigned_clinician,waitlisted_since,priority')),
       fetchAllPages(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active').eq('is_active', true)),
       fetchAllPages(supabase.from('patient_discharges').select('patient_name,discharge_date,followup_30day_required,followup_30day_completed')),
+      // Director Command v2 — manager accountability layer:
+      fetchAllPages(supabase.from('coordinators').select('id,full_name,role,job_title,team,regions,is_active').eq('is_active', true)),
+      fetchAllPages(supabase.from('census_status_log').select('patient_name,region,old_status,new_status,changed_at').gte('changed_at', thirtyDaysAgoIso)),
+      fetchAllPages(supabase.from('coordinator_activity_log').select('coordinator_name,coordinator_role,action_type,created_at').gte('created_at', sevenDaysAgoIso)),
+      fetchAllPages(supabase.from('intake_referrals').select('patient_name,region,insurance,referral_status,date_received,welcome_call').gte('date_received', thirtyDaysAgoDate)),
+      fetchAllPages(supabase.from('auth_tracker').select('patient_name,region,auth_status,auth_submitted_date,auth_approved_date,is_currently_active,assigned_to').eq('is_currently_active', true)),
     ]);
 
     setCensus(c);
@@ -176,12 +204,17 @@ export default function DirectorDashboard({ onNavigate }) {
     setWaitlist(wl);
     setClinicians(cl);
     setDischarges(dc);
+    setCoordinators(co);
+    setStatusLog(sl);
+    setActivityLog(al);
+    setIntakeReferrals(ir);
+    setAuths(au);
     setLastRefresh(new Date());
     setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
-  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_renewal_tasks', 'on_hold_recovery', 'patient_discharges', 'clinicians', 'waitlist_assignments'], load);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_renewal_tasks', 'on_hold_recovery', 'patient_discharges', 'clinicians', 'waitlist_assignments', 'coordinators', 'census_status_log', 'coordinator_activity_log', 'intake_referrals', 'auth_tracker'], load);
 
   const metrics = useMemo(() => {
     if (!census.length) return null;
@@ -327,6 +360,49 @@ export default function DirectorDashboard({ onNavigate }) {
       />
 
       <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:16 }}>
+
+        {/* ───────────────────────────────────────────────────────────────
+            DIRECTOR COMMAND v2 — Manager Accountability Layer
+            Order is deliberate:
+              1. Scorecards     → who's effective, who's slipping
+              2. Exception feed → what specifically needs your attention
+              3. Lieutenants    → quick verify of Carla/Hervylie views
+            Existing revenue + triage rolls below — still useful for the
+            weekly review use case, just no longer the lead.
+            ─────────────────────────────────────────────────────────────── */}
+        <ManagerScorecards
+          census={census}
+          statusLog={statusLog}
+          activityLog={activityLog}
+          coordinators={coordinators}
+          onScorecardClick={(sc) => {
+            // For now, drill scorecards into the regional manager view
+            // pre-filtered to the manager's regions. Phase 3 will get a
+            // dedicated "manager profile" drill-in.
+            if (sc.regions === 'ALL') {
+              go('ops-dashboard');
+            } else if (sc.regions && sc.regions.length === 1) {
+              go('rm-dashboard', { region: sc.regions[0] });
+            } else {
+              go('rm-dashboard', { regions: sc.regions });
+            }
+          }}
+        />
+
+        <ExceptionFeed
+          census={census}
+          activityLog={activityLog}
+          coordinators={coordinators}
+          onJumpTo={(target, intent) => go(target, intent)}
+        />
+
+        <LieutenantSnapshots
+          census={census}
+          intakeReferrals={intakeReferrals}
+          auths={auths}
+          activityLog={activityLog}
+          onJumpTo={(target) => go(target)}
+        />
 
         {/* Revenue + Score Row */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:16 }}>
