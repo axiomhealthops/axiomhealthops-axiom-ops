@@ -72,15 +72,14 @@ function daysSince(iso) {
   if (!iso) return null;
   var d = new Date(iso).getTime();
   if (isNaN(d)) return null;
-  return Math.floor((Date.now() - d) / 86400000);
+  // Use ceiling so a patient who entered the stage 6 hours ago shows 1d
+  // (rather than 0d, which would hide everything fresher than a full day).
+  return Math.max(1, Math.ceil((Date.now() - d) / 86400000));
 }
-function businessDaysSince(iso) {
-  // Simple business-day approximation: subtract weekends from calendar days.
-  // Good enough for ops-level signals; exact holiday math can be a follow-up.
-  var d = daysSince(iso);
-  if (d === null) return null;
-  return Math.max(0, Math.floor(d * 5 / 7));
-}
+// Removed the business-day approximation — it was rounding every short
+// duration down to 0d (e.g. 3 calendar days × 5/7 = 2.14 → 2, but 1 day
+// × 5/7 = 0.71 → 0). For ops-level signals, calendar days are more
+// intuitive and match the rest of the system's conventions.
 function median(arr) {
   if (!arr || arr.length === 0) return null;
   var s = arr.slice().sort(function(a, b) { return a - b; });
@@ -89,49 +88,66 @@ function median(arr) {
 }
 
 // ─── Small reusable presentational components ───────────────────────────
-function StageCard({ stage, count, medianDays, stuckCount, trend }) {
+function StageCard({ stage, count, medianDays, stuckCount, trend, onClick, isActive }) {
   // Color the median by health: green ≤ threshold, amber close, red over.
   var t = stage.stuckThreshold;
   var medColor = (t === null || medianDays === null) ? '#374151'
     : medianDays > t ? '#DC2626'
     : medianDays > t * 0.7 ? '#D97706'
     : '#10B981';
+  var canClick = count > 0 && typeof onClick === 'function';
 
   return (
-    <div style={{
-      background: 'white', border: '1px solid #E5E7EB', borderRadius: 10,
-      padding: '10px 12px', minWidth: 140, flex: 1,
-      display: 'flex', flexDirection: 'column',
-    }}>
-      <div style={{ fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+    <div
+      onClick={canClick ? onClick : null}
+      style={{
+        background: isActive ? '#0F1117' : 'white',
+        color: isActive ? '#fff' : 'inherit',
+        border: '1px solid ' + (isActive ? '#0F1117' : '#E5E7EB'),
+        borderRadius: 10, padding: '10px 12px', minWidth: 140, flex: 1,
+        display: 'flex', flexDirection: 'column',
+        cursor: canClick ? 'pointer' : 'default',
+        transition: 'transform 0.1s, border-color 0.15s',
+        boxShadow: isActive ? '0 0 0 3px rgba(15,17,23,0.15)' : 'none',
+      }}
+      onMouseEnter={canClick && !isActive ? function(e) { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.borderColor = '#9CA3AF'; } : null}
+      onMouseLeave={canClick && !isActive ? function(e) { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = '#E5E7EB'; } : null}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: isActive ? '#9CA3AF' : '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {stage.label}
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-        <span style={{ fontSize: 26, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: '#111827', lineHeight: 1 }}>
+        <span style={{ fontSize: 26, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: isActive ? '#fff' : '#111827', lineHeight: 1 }}>
           {count}
         </span>
         {trend !== null && trend !== undefined && (
-          <span style={{ fontSize: 10, fontWeight: 700, color: trend > 0 ? '#DC2626' : trend < 0 ? '#10B981' : '#6B7280' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: trend > 0 ? '#FCA5A5' : trend < 0 ? '#86EFAC' : '#9CA3AF' }}>
             {trend > 0 ? '↑' : trend < 0 ? '↓' : '·'} {Math.abs(trend)}%
           </span>
         )}
       </div>
-      <div style={{ fontSize: 10, color: '#6B7280', marginTop: 4 }}>
+      <div style={{ fontSize: 10, color: isActive ? '#D1D5DB' : '#6B7280', marginTop: 4 }}>
         {medianDays !== null
-          ? <>median <span style={{ color: medColor, fontWeight: 700 }}>{medianDays}d</span></>
+          ? <>median <span style={{ color: isActive ? '#fff' : medColor, fontWeight: 700 }}>{medianDays}d</span></>
           : <span style={{ color: '#9CA3AF' }}>no data</span>}
       </div>
       {stage.stuckThreshold !== null && stuckCount > 0 && (
         <div style={{
-          marginTop: 6, padding: '3px 6px', background: '#FEF2F2', border: '1px solid #FECACA',
-          borderRadius: 5, fontSize: 10, color: '#DC2626', fontWeight: 700,
+          marginTop: 6, padding: '3px 6px',
+          background: isActive ? 'rgba(220,38,38,0.2)' : '#FEF2F2',
+          border: '1px solid ' + (isActive ? 'rgba(252,165,165,0.5)' : '#FECACA'),
+          borderRadius: 5, fontSize: 10, color: isActive ? '#FCA5A5' : '#DC2626', fontWeight: 700,
         }}>
           ⚠ {stuckCount} &gt; {stage.stuckThreshold}d
         </div>
       )}
-      <div style={{ marginTop: 6, fontSize: 9, color: '#9CA3AF', borderTop: '1px solid #F3F4F6', paddingTop: 5 }}>
-        Owner: <strong style={{ color: '#6B7280' }}>{stage.owner}</strong>
+      <div style={{ marginTop: 6, fontSize: 9, color: isActive ? '#6B7280' : '#9CA3AF', borderTop: '1px solid ' + (isActive ? '#374151' : '#F3F4F6'), paddingTop: 5 }}>
+        Owner: <strong style={{ color: isActive ? '#9CA3AF' : '#6B7280' }}>{stage.owner}</strong>
       </div>
+      {canClick && !isActive && (
+        <div style={{ marginTop: 4, fontSize: 9, color: '#9CA3AF', textAlign: 'center', fontStyle: 'italic' }}>
+          click to view patients
+        </div>
+      )}
     </div>
   );
 }
@@ -148,14 +164,29 @@ function DepartmentHealthCard({ title, items, accentColor }) {
       }}>
         {title}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {items.map(function(it, i) {
+          var clickable = typeof it.onClick === 'function' && (typeof it.value === 'number' ? it.value > 0 : true);
           return (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <span style={{ fontSize: 11, color: '#6B7280' }}>{it.label}</span>
+            <div key={i}
+              onClick={clickable ? it.onClick : null}
+              style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                padding: '4px 6px', margin: '0 -6px', borderRadius: 5,
+                cursor: clickable ? 'pointer' : 'default',
+                transition: 'background 0.1s',
+              }}
+              onMouseEnter={clickable ? function(e) { e.currentTarget.style.background = '#F3F4F6'; } : null}
+              onMouseLeave={clickable ? function(e) { e.currentTarget.style.background = 'transparent'; } : null}>
+              <span style={{ fontSize: 11, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 4 }}>
+                {it.label}
+                {clickable && <span style={{ fontSize: 9, color: '#9CA3AF' }}>↗</span>}
+              </span>
               <span style={{
                 fontSize: 13, fontWeight: 700, fontFamily: 'DM Mono, monospace',
                 color: it.alert ? '#DC2626' : '#111827',
+                textDecoration: clickable ? 'underline' : 'none',
+                textDecorationColor: '#D1D5DB',
               }}>{it.value}</span>
             </div>
           );
@@ -177,6 +208,9 @@ export default function OperationsManagerDashboard(props) {
   const [activityLog, setActivityLog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusPatient, setStatusPatient] = useState(null);
+  // Right-sidebar drilldown for Pipeline Flow stages & Dept Health metrics.
+  // Stores { title, subtitle, patients[], color } or null.
+  const [drilldown, setDrilldown] = useState(null);
 
   function load() {
     setLoading(true);
@@ -245,6 +279,48 @@ export default function OperationsManagerDashboard(props) {
     if (match) setStatusPatient(match);
   }
 
+  // Open a drilldown for a pipeline stage (SOC Pending / Auth Pending / etc.)
+  function openStageDrilldown(stage) {
+    var patients = census.filter(function(p) { return stage.statusMatches(p.status || ''); })
+      .map(function(p) {
+        // Find when they entered this stage for sorting by oldest-first
+        var logs = statusLog.filter(function(l) {
+          return l.patient_name === p.patient_name && stage.statusMatches(l.new_status || '');
+        });
+        var enteredAt = logs.length > 0 ? logs[0].changed_at : p.status_changed_at;
+        return Object.assign({}, p, {
+          _enteredAt: enteredAt,
+          _daysInStage: daysSince(enteredAt),
+        });
+      })
+      .sort(function(a, b) {
+        var ad = a._daysInStage === null ? 0 : a._daysInStage;
+        var bd = b._daysInStage === null ? 0 : b._daysInStage;
+        return bd - ad;
+      });
+    setDrilldown({
+      key: 'stage:' + stage.key,
+      title: stage.label,
+      subtitle: 'Owned by ' + stage.owner + (stage.stuckThreshold ? ' · stuck threshold ' + stage.stuckThreshold + 'd' : ''),
+      color: '#0F1117',
+      patients: patients,
+      metricColumn: 'daysInStage',
+    });
+  }
+
+  // Open a drilldown for a Department Health metric (e.g. eval pending, on hold,
+  // welcome call backlog). filterFn is a predicate against a list of source rows.
+  function openMetricDrilldown(opts) {
+    setDrilldown({
+      key: opts.key,
+      title: opts.title,
+      subtitle: opts.subtitle,
+      color: opts.color || '#1565C0',
+      patients: opts.patients,
+      metricColumn: opts.metricColumn,
+    });
+  }
+
   // Per-coordinator activity summary used by the Activity Monitor strip
   var coordinatorActivity = useMemo(function() {
     var byName = {};
@@ -301,7 +377,7 @@ export default function OperationsManagerDashboard(props) {
         var enteredAt = matchingLogs.length > 0
           ? matchingLogs[0].changed_at  // most recent (already sorted desc)
           : p.status_changed_at;
-        return businessDaysSince(enteredAt);
+        return daysSince(enteredAt);
       }).filter(function(d) { return d !== null; });
 
       var medianDays = median(daysList);
@@ -504,6 +580,8 @@ export default function OperationsManagerDashboard(props) {
                     medianDays={m.medianDays}
                     stuckCount={m.stuckCount}
                     trend={m.trend}
+                    onClick={function() { openStageDrilldown(m.stage); }}
+                    isActive={drilldown && drilldown.key === 'stage:' + m.stage.key}
                   />
                   {i < stageMetrics.length - 1 && (
                     <div style={{ color: '#D1D5DB', fontSize: 20, padding: '0 4px', flexShrink: 0 }}>→</div>
@@ -528,10 +606,58 @@ export default function OperationsManagerDashboard(props) {
                 title="Intake Team"
                 accentColor="#1565C0"
                 items={[
-                  { label: 'Referrals this week', value: referralStats.thisWeek },
+                  {
+                    label: 'Referrals this week',
+                    value: referralStats.thisWeek,
+                    onClick: function() {
+                      var weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+                      var pts = intakeReferrals.filter(function(r) { return r.date_received >= weekAgo; })
+                        .map(function(r) { return Object.assign({}, r, { _daysAgo: daysSince(r.date_received) }); })
+                        .sort(function(a, b) { return (b._daysAgo || 0) - (a._daysAgo || 0); });
+                      openMetricDrilldown({
+                        key: 'intake:thisweek', title: 'Referrals This Week', color: '#1565C0',
+                        subtitle: 'All referrals received in the last 7 days · oldest first',
+                        patients: pts, metricColumn: 'referralAge',
+                      });
+                    },
+                  },
                   { label: 'Acceptance rate', value: referralStats.acceptanceRate + '%' },
-                  { label: 'Awaiting decision', value: referralStats.pending, alert: referralStats.pending > 10 },
-                  { label: 'Welcome call backlog', value: referralStats.welcomeBacklog, alert: referralStats.welcomeBacklog > 0 },
+                  {
+                    label: 'Awaiting decision',
+                    value: referralStats.pending,
+                    alert: referralStats.pending > 10,
+                    onClick: function() {
+                      var weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+                      var pts = intakeReferrals.filter(function(r) {
+                        if (r.date_received < weekAgo) return false;
+                        var s = r.referral_status;
+                        return s !== 'Accepted' && s !== 'Denied';
+                      }).map(function(r) { return Object.assign({}, r, { _daysAgo: daysSince(r.date_received) }); })
+                        .sort(function(a, b) { return (b._daysAgo || 0) - (a._daysAgo || 0); });
+                      openMetricDrilldown({
+                        key: 'intake:pending', title: 'Referrals Awaiting Decision', color: '#1565C0',
+                        subtitle: 'Received this week · not yet accepted or denied',
+                        patients: pts, metricColumn: 'referralAge',
+                      });
+                    },
+                  },
+                  {
+                    label: 'Welcome call backlog',
+                    value: referralStats.welcomeBacklog,
+                    alert: referralStats.welcomeBacklog > 0,
+                    onClick: function() {
+                      var pts = intakeReferrals.filter(function(r) {
+                        return r.referral_status === 'Accepted' &&
+                          (!r.welcome_call || r.welcome_call === 'Not Called' || r.welcome_call === '');
+                      }).map(function(r) { return Object.assign({}, r, { _daysAgo: daysSince(r.date_received) }); })
+                        .sort(function(a, b) { return (b._daysAgo || 0) - (a._daysAgo || 0); });
+                      openMetricDrilldown({
+                        key: 'intake:welcome_backlog', title: 'Welcome Call Backlog', color: '#1565C0',
+                        subtitle: 'Accepted referrals with no welcome call logged · oldest first',
+                        patients: pts, metricColumn: 'referralAge',
+                      });
+                    },
+                  },
                 ]}
               />
               {onNavigate && (
@@ -546,9 +672,42 @@ export default function OperationsManagerDashboard(props) {
                 title="Authorization Team"
                 accentColor="#7C3AED"
                 items={[
-                  { label: 'Open auths', value: authStats.open },
+                  {
+                    label: 'Open auths',
+                    value: authStats.open,
+                    onClick: function() {
+                      var pts = auths.filter(function(a) {
+                        var s = (a.auth_status || '').toLowerCase();
+                        return s === 'submitted' || s === 'pending';
+                      }).map(function(a) { return Object.assign({}, a, { _daysAgo: daysSince(a.auth_submitted_date) }); })
+                        .sort(function(a, b) { return (b._daysAgo || 0) - (a._daysAgo || 0); });
+                      openMetricDrilldown({
+                        key: 'auth:open', title: 'Open Auths', color: '#7C3AED',
+                        subtitle: 'Submitted or pending · oldest-submitted first',
+                        patients: pts, metricColumn: 'authAge',
+                      });
+                    },
+                  },
                   { label: 'Median submission → approval', value: authStats.medianLag !== null ? authStats.medianLag + 'd' : '—' },
-                  { label: 'Stalled (> 5 days pending)', value: authStats.stalled, alert: authStats.stalled > 0 },
+                  {
+                    label: 'Stalled (> 5 days pending)',
+                    value: authStats.stalled,
+                    alert: authStats.stalled > 0,
+                    onClick: function() {
+                      var pts = auths.filter(function(a) {
+                        var s = (a.auth_status || '').toLowerCase();
+                        if (s !== 'submitted' && s !== 'pending') return false;
+                        var d = daysSince(a.auth_submitted_date);
+                        return d !== null && d > 5;
+                      }).map(function(a) { return Object.assign({}, a, { _daysAgo: daysSince(a.auth_submitted_date) }); })
+                        .sort(function(a, b) { return (b._daysAgo || 0) - (a._daysAgo || 0); });
+                      openMetricDrilldown({
+                        key: 'auth:stalled', title: 'Stalled Auths (> 5d)', color: '#DC2626',
+                        subtitle: 'Auths submitted more than 5 days ago, still not approved',
+                        patients: pts, metricColumn: 'authAge',
+                      });
+                    },
+                  },
                 ]}
               />
               {onNavigate && (
@@ -563,9 +722,52 @@ export default function OperationsManagerDashboard(props) {
                 title="Care Coordination"
                 accentColor="#059669"
                 items={[
-                  { label: 'Eval pending', value: careStats.evalPending },
-                  { label: 'Overdue evals (> 48h)', value: careStats.overdueEvals, alert: careStats.overdueEvals > 0 },
-                  { label: 'Patients on hold', value: careStats.onHold },
+                  {
+                    label: 'Eval pending',
+                    value: careStats.evalPending,
+                    onClick: function() {
+                      var pts = census.filter(function(p) { return /eval.*pending/i.test(p.status || ''); })
+                        .map(function(p) { return Object.assign({}, p, { _daysInStage: daysSince(p.status_changed_at) }); })
+                        .sort(function(a, b) { return (b._daysInStage || 0) - (a._daysInStage || 0); });
+                      openMetricDrilldown({
+                        key: 'cc:eval_pending', title: 'Eval Pending', color: '#059669',
+                        subtitle: 'Patients awaiting evaluation · 48h SLA',
+                        patients: pts, metricColumn: 'daysInStage',
+                      });
+                    },
+                  },
+                  {
+                    label: 'Overdue evals (> 48h)',
+                    value: careStats.overdueEvals,
+                    alert: careStats.overdueEvals > 0,
+                    onClick: function() {
+                      var pts = census.filter(function(p) {
+                        if (!/eval.*pending/i.test(p.status || '')) return false;
+                        var d = daysSince(p.status_changed_at);
+                        return d !== null && d > 2;
+                      }).map(function(p) { return Object.assign({}, p, { _daysInStage: daysSince(p.status_changed_at) }); })
+                        .sort(function(a, b) { return (b._daysInStage || 0) - (a._daysInStage || 0); });
+                      openMetricDrilldown({
+                        key: 'cc:overdue_evals', title: 'Overdue Evals (> 48h)', color: '#DC2626',
+                        subtitle: 'Eval Pending patients past the 48-hour SLA',
+                        patients: pts, metricColumn: 'daysInStage',
+                      });
+                    },
+                  },
+                  {
+                    label: 'Patients on hold',
+                    value: careStats.onHold,
+                    onClick: function() {
+                      var pts = census.filter(function(p) { return /on hold|on_hold/i.test(p.status || ''); })
+                        .map(function(p) { return Object.assign({}, p, { _daysInStage: daysSince(p.status_changed_at) }); })
+                        .sort(function(a, b) { return (b._daysInStage || 0) - (a._daysInStage || 0); });
+                      openMetricDrilldown({
+                        key: 'cc:on_hold', title: 'Patients On Hold', color: '#D97706',
+                        subtitle: 'Care coord needs to action recovery · oldest-on-hold first',
+                        patients: pts, metricColumn: 'daysInStage',
+                      });
+                    },
+                  },
                 ]}
               />
               {onNavigate && (
@@ -717,6 +919,147 @@ export default function OperationsManagerDashboard(props) {
         </div>
 
       </div>
+
+      {/* ── DRILLDOWN SLIDE-IN PANEL (right side) ──────────────────── */}
+      {drilldown && (
+        <>
+          {/* Click-away backdrop */}
+          <div
+            onClick={function() { setDrilldown(null); }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(15,17,23,0.35)', zIndex: 200,
+              animation: 'fadeIn 0.15s ease',
+            }} />
+          {/* Panel */}
+          <div style={{
+            position: 'fixed', top: 0, right: 0, bottom: 0,
+            width: 460, maxWidth: '92vw',
+            background: 'white', zIndex: 201,
+            boxShadow: '-8px 0 32px rgba(15,17,23,0.18)',
+            display: 'flex', flexDirection: 'column',
+            animation: 'slideInRight 0.2s ease',
+          }}>
+            {/* Header */}
+            <div style={{
+              padding: '14px 18px', borderBottom: '1px solid #E5E7EB',
+              background: drilldown.color, color: 'white',
+              display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12,
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.8 }}>
+                  Drilldown · {drilldown.patients.length} {drilldown.patients.length === 1 ? 'record' : 'records'}
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 800, marginTop: 4, lineHeight: 1.2 }}>
+                  {drilldown.title}
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.85, marginTop: 4 }}>
+                  {drilldown.subtitle}
+                </div>
+              </div>
+              <button
+                onClick={function() { setDrilldown(null); }}
+                style={{
+                  background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white',
+                  borderRadius: 6, padding: '4px 10px', fontSize: 16, cursor: 'pointer',
+                  fontWeight: 700, flexShrink: 0,
+                }}
+                title="Close">×</button>
+            </div>
+            {/* Body */}
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {drilldown.patients.length === 0 ? (
+                <div style={{ padding: 36, textAlign: 'center', color: '#10B981', fontSize: 13 }}>
+                  ✅ Nothing here right now.
+                </div>
+              ) : (
+                drilldown.patients.map(function(p, i) {
+                  // metricColumn drives the right-side number
+                  var metricValue = '';
+                  var metricColor = '#6B7280';
+                  if (drilldown.metricColumn === 'daysInStage') {
+                    metricValue = (p._daysInStage !== null && p._daysInStage !== undefined) ? p._daysInStage + 'd' : '—';
+                    metricColor = p._daysInStage > 7 ? '#DC2626' : p._daysInStage > 3 ? '#D97706' : '#059669';
+                  } else if (drilldown.metricColumn === 'referralAge') {
+                    metricValue = (p._daysAgo !== null && p._daysAgo !== undefined) ? p._daysAgo + 'd' : '—';
+                    metricColor = p._daysAgo > 5 ? '#DC2626' : p._daysAgo > 2 ? '#D97706' : '#059669';
+                  } else if (drilldown.metricColumn === 'authAge') {
+                    metricValue = (p._daysAgo !== null && p._daysAgo !== undefined) ? p._daysAgo + 'd' : '—';
+                    metricColor = p._daysAgo > 5 ? '#DC2626' : p._daysAgo > 3 ? '#D97706' : '#059669';
+                  }
+                  // Status / extra context line
+                  var statusLine = p.status || p.auth_status || p.referral_status || '';
+                  var canOpenModal = !!p.patient_name;
+                  return (
+                    <div key={(p.id || p.patient_name) + '|' + i}
+                      onClick={canOpenModal ? function() { openPatient(p.patient_name, p.region); } : null}
+                      style={{
+                        padding: '10px 18px', borderBottom: '1px solid #F3F4F6',
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        cursor: canOpenModal ? 'pointer' : 'default',
+                        transition: 'background 0.1s',
+                      }}
+                      onMouseEnter={canOpenModal ? function(e) { e.currentTarget.style.background = '#EFF6FF'; } : null}
+                      onMouseLeave={canOpenModal ? function(e) { e.currentTarget.style.background = 'white'; } : null}>
+                      <div style={{
+                        flexShrink: 0, width: 36, height: 36, borderRadius: 6,
+                        background: '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 11, fontWeight: 800, color: '#374151', fontFamily: 'DM Mono, monospace',
+                      }}>
+                        {p.region || '—'}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 700, color: '#111827',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          textDecoration: canOpenModal ? 'underline' : 'none',
+                          textDecorationColor: '#D1D5DB',
+                        }}>
+                          {p.patient_name || '—'}
+                        </div>
+                        <div style={{ fontSize: 10, color: '#6B7280', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {statusLine}{p.insurance ? ' · ' + p.insurance : ''}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{
+                          fontSize: 16, fontWeight: 800, fontFamily: 'DM Mono, monospace',
+                          color: metricColor, lineHeight: 1,
+                        }}>
+                          {metricValue}
+                        </div>
+                        <div style={{ fontSize: 8, color: '#9CA3AF', marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          {drilldown.metricColumn === 'daysInStage' ? 'in stage'
+                            : drilldown.metricColumn === 'authAge' ? 'submitted'
+                            : 'received'}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            {/* Footer */}
+            <div style={{
+              padding: '10px 18px', borderTop: '1px solid #E5E7EB',
+              background: '#FAFAFA', fontSize: 10, color: '#6B7280',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <span>Click a patient to open status editor</span>
+              <button
+                onClick={function() { setDrilldown(null); }}
+                style={{ background: 'none', border: '1px solid #D1D5DB', borderRadius: 5, padding: '4px 10px', fontSize: 10, cursor: 'pointer', color: '#6B7280' }}>
+                Close
+              </button>
+            </div>
+          </div>
+          {/* Inline keyframes for the slide-in animation */}
+          <style>{
+            '@keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } } ' +
+            '@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }'
+          }</style>
+        </>
+      )}
 
       {statusPatient && (
         <StatusChangeModal
