@@ -127,6 +127,7 @@ export default function AuthAuditImportPage() {
   const [parsedRows, setParsedRows] = useState([]);
   const [parseErrors, setParseErrors] = useState([]);
   const [stagingProgress, setStagingProgress] = useState({ done: 0, total: 0 });
+  const [stagingError, setStagingError] = useState(null);
   const [stagingBatch, setStagingBatch] = useState(null);
   const [stagingRows, setStagingRows] = useState([]);
   const [census, setCensus] = useState([]);
@@ -190,6 +191,7 @@ export default function AuthAuditImportPage() {
 
   async function stageRows() {
     setPhase('staging');
+    setStagingError(null);
     var batchId = parsedRows[0].imported_batch;
     setStagingBatch(batchId);
     setStagingProgress({ done: 0, total: parsedRows.length });
@@ -197,16 +199,45 @@ export default function AuthAuditImportPage() {
     var CHUNK = 100;
     for (var i = 0; i < parsedRows.length; i += CHUNK) {
       var slice = parsedRows.slice(i, i + CHUNK);
-      var { error } = await supabase.from('auth_audit_staging').insert(slice);
-      if (error) {
-        console.error('Stage chunk error:', error);
-        setParseErrors(function(prev) { return prev.concat(['Chunk ' + Math.floor(i/CHUNK) + ': ' + error.message]); });
+      try {
+        var resp = await supabase.from('auth_audit_staging').insert(slice).select('id');
+        if (resp.error) {
+          // Surface error directly in staging UI — not in parseErrors which only
+          // renders in the normalize phase.
+          var msg = 'Chunk ' + Math.floor(i/CHUNK) + ' (rows ' + i + '–' + Math.min(i + CHUNK, parsedRows.length) + '): ' + resp.error.message;
+          if (resp.error.code) msg += ' [code: ' + resp.error.code + ']';
+          if (resp.error.hint) msg += ' — hint: ' + resp.error.hint;
+          console.error('[AuditImport] stage chunk failed:', resp.error);
+          setStagingError(msg);
+          return;
+        }
+        // PostgREST quirk: RLS WITH CHECK violation returns 200 with empty data.
+        // Detect that case by checking how many rows actually inserted.
+        if (!resp.data || resp.data.length === 0) {
+          setStagingError('Chunk ' + Math.floor(i/CHUNK) + ': insert returned 0 rows. This usually means RLS rejected the insert. Confirm you are signed in as admin / super_admin / ceo / director.');
+          return;
+        }
+      } catch (e) {
+        console.error('[AuditImport] stage chunk threw:', e);
+        setStagingError('Chunk ' + Math.floor(i/CHUNK) + ' threw: ' + (e.message || String(e)));
         return;
       }
       setStagingProgress({ done: Math.min(i + CHUNK, parsedRows.length), total: parsedRows.length });
     }
     await loadPreviewData(batchId);
     setPhase('preview');
+  }
+
+  function resetImport() {
+    setPhase('upload');
+    setFile(null);
+    setParsedRows([]);
+    setParseErrors([]);
+    setStagingError(null);
+    setStagingBatch(null);
+    setStagingProgress({ done: 0, total: 0 });
+    setStagingRows([]);
+    setSelected({});
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -385,11 +416,37 @@ export default function AuthAuditImportPage() {
 
         {phase === 'staging' && (
           <div style={{ background: 'white', padding: 30, textAlign: 'center', borderRadius: 10 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Staging rows...</div>
-            <div style={{ fontSize: 24, fontFamily: 'DM Mono, monospace', fontWeight: 900 }}>{stagingProgress.done} / {stagingProgress.total}</div>
-            <div style={{ background: '#E5E7EB', borderRadius: 999, height: 8, marginTop: 12 }}>
-              <div style={{ width: ((stagingProgress.done / stagingProgress.total) * 100) + '%', height: '100%', background: '#10B981', borderRadius: 999, transition: 'width 0.3s' }} />
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>
+              {stagingError ? '✗ Staging halted' : 'Staging rows...'}
             </div>
+            <div style={{ fontSize: 24, fontFamily: 'DM Mono, monospace', fontWeight: 900, color: stagingError ? '#DC2626' : '#111827' }}>
+              {stagingProgress.done} / {stagingProgress.total}
+            </div>
+            <div style={{ background: '#E5E7EB', borderRadius: 999, height: 8, marginTop: 12 }}>
+              <div style={{ width: ((stagingProgress.done / stagingProgress.total) * 100) + '%', height: '100%', background: stagingError ? '#DC2626' : '#10B981', borderRadius: 999, transition: 'width 0.3s' }} />
+            </div>
+            {stagingError && (
+              <div style={{
+                marginTop: 16, padding: 14, background: '#FEF2F2', border: '1px solid #FECACA',
+                borderRadius: 8, textAlign: 'left',
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#991B1B', marginBottom: 6 }}>
+                  Insert failed before completion
+                </div>
+                <div style={{ fontSize: 11, color: '#7F1D1D', fontFamily: 'DM Mono, monospace', wordBreak: 'break-word' }}>
+                  {stagingError}
+                </div>
+                <div style={{ fontSize: 10, color: '#6B7280', marginTop: 10, lineHeight: 1.5 }}>
+                  Partial rows from completed chunks may exist in <code>auth_audit_staging</code>. You can either
+                  <strong> delete the batch </strong> (DELETE FROM auth_audit_staging WHERE imported_batch = '{stagingBatch}')
+                  via the Supabase SQL editor and retry, or just retry — duplicates within a batch are tolerated by the preview.
+                </div>
+                <button onClick={resetImport}
+                  style={{ marginTop: 12, padding: '6px 14px', background: '#DC2626', color: 'white', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                  ← Reset to Upload
+                </button>
+              </div>
+            )}
           </div>
         )}
 
