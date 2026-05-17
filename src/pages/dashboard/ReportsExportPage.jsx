@@ -3,17 +3,26 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import * as XLSX from 'xlsx';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
- 
-const RATE = 230;
+// Shared visit math (2026-05-17 refactor). The old local isCompleted(status)
+// signature was DIFFERENT from visitMath's (takes whole row) — wrappers below
+// preserve back-compat so existing call sites don't all need rewriting.
+import { BLENDED_RATE as RATE,
+         isCancelled as _isCancelledRow,
+         isCompleted as _isCompletedRow,
+         isEval as _isEvalRow } from '../../lib/visitMath';
+
 const REGIONAL_MANAGERS = {
   A:'Uma Jacobs', B:'Lia Davis', C:'Earl Dimaano', G:'Samantha Faliks',
   H:'Kaylee Ramsey', J:'Hollie Fincher', M:'Ariel Maboudi', N:'Ariel Maboudi',
   T:'Samantha Faliks', V:'Samantha Faliks',
 };
- 
-function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
-function isCompleted(s) { return /completed/i.test(s||''); }
-function isEval(e) { return /eval/i.test(e||''); }
+
+// Back-compat wrappers — preserve the old (event_type, status) / (status)
+// signatures used by existing report code so we don't have to rewrite every
+// call site. Internally they pass through to the shared visitMath helpers.
+function isCancelled(e, s) { return _isCancelledRow({ event_type: e, status: s }); }
+function isCompleted(s)    { return _isCompletedRow({ status: s, event_type: '' }); }
+function isEval(e)         { return _isEvalRow({ event_type: e }); }
 function fmtDate(d) { return d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}) : '' ; }
  
 const REPORTS = [
@@ -820,14 +829,19 @@ export default function ReportsExportPage() {
         }
 
         case 'cc_frequency_missing': {
-          const excludeStatuses = ['Discharge','Discharge - Change Insurance','Discharged','Non-Admit','Non-admit','On Hold','Hospitalized'];
-          const data = census.filter(c => (!c.inferred_frequency || c.needs_frequency_review) && !excludeStatuses.includes(c.status))
-            .map(c => ({
-              'Patient': c.patient_name, 'Region': c.region, 'Status': c.status,
-              'Current Frequency': c.inferred_frequency || 'MISSING',
-              'Needs Review?': c.needs_frequency_review ? 'YES' : 'NO',
-              'Owner': c.pipeline_assigned_to || 'unassigned',
-            })).sort((x,y) => (x.Region||'').localeCompare(y.Region||''));
+          // Scoped to truly-active patients only (matches the FrequencyReviewPage
+          // UI scope). Stale flags on Discharge/On Hold patients are auto-cleared
+          // by the trg_auto_clear_freq_review trigger as of 2026-05-17.
+          const data = census.filter(c => {
+            const s = (c.status || '').toLowerCase();
+            if (!s.startsWith('active')) return false;
+            return !c.inferred_frequency || c.needs_frequency_review;
+          }).map(c => ({
+            'Patient': c.patient_name, 'Region': c.region, 'Status': c.status,
+            'Current Frequency': c.inferred_frequency || 'MISSING',
+            'Needs Review?': c.needs_frequency_review ? 'YES' : 'NO',
+            'Owner': c.pipeline_assigned_to || 'unassigned',
+          })).sort((x,y) => (x.Region||'').localeCompare(y.Region||''));
           format === 'xlsx' ? exportXLSX(data, 'Frequency Review', 'Frequency_Review'+suffix) : exportCSV(data, 'Frequency_Review'+suffix);
           break;
         }

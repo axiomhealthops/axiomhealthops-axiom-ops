@@ -6,10 +6,11 @@ import ManagerScorecards from '../../components/director/ManagerScorecards';
 import ExceptionFeed from '../../components/director/ExceptionFeed';
 // LieutenantSnapshots removed in v2.1 rework — redundant with Manager Scorecards.
 // Carla's scorecard IS her snapshot; Hervylie's scorecard IS his. One source of truth.
+// Visit math from shared module (2026-05-17 refactor)
+import { BLENDED_RATE, WEEKLY_REVENUE_TARGET as REVENUE_TARGET,
+         isCancelled, isAttempted, isMissed, isCompleted, dedupEncounters } from '../../lib/visitMath';
 
-const BLENDED_RATE = 230;
 const WEEKLY_TARGET = 750;
-const REVENUE_TARGET = 200000;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
 function fmt$(n) { return '$' + Math.round(n).toLocaleString(); }
@@ -334,34 +335,15 @@ export default function DirectorDashboard({ onNavigate }) {
     const onHoldPts = census.filter(p => /on.?hold/i.test(p.status || ''));
     const pendingStart = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status || ''));
 
-    // Visits this week — deduplicate co-treats (PT+PTA same patient same day = 1 encounter).
-    // Raw rows are kept for per-clinician utilization; encounter counts drive revenue.
-    //
-    // IMPORTANT: Pariox marks cancelled visits with event_type "Cancelled Treatment"
-    // but status "Completed". We must classify by event_type FIRST, then by status.
-    // Similarly, "Attempted Visit" events are not billable completed encounters.
-    const isCancelled = v => /cancel/i.test(v.event_type || '') || /cancel/i.test(v.status || '');
-    const isAttempted = v => /attempted/i.test(v.event_type || '');
-    const isMissed = v => /missed/i.test(v.status || '');
-    const isCompleted = v => /completed/i.test(v.status || '') && !isCancelled(v) && !isAttempted(v);
-
+    // Visits this week — uses shared visitMath helpers (2026-05-17 refactor).
+    // Raw rows kept for per-clinician utilization; deduped encounters drive revenue.
     const rawCompleted = visits.filter(isCompleted);
     const rawCancelled = visits.filter(isCancelled);
-    const rawMissed = visits.filter(v => isMissed(v) && !isCancelled(v));
+    const rawMissed = visits.filter(isMissed);
 
-    // Deduplicate: same patient + same date = 1 encounter per status bucket
-    function dedup(rows) {
-      const seen = new Set();
-      return rows.filter(v => {
-        const key = `${(v.patient_name||'').toLowerCase()}||${v.visit_date}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    }
-    const completedThisWeek = dedup(rawCompleted);
-    const cancelledThisWeek = dedup(rawCancelled);
-    const missedThisWeek = dedup(rawMissed);
+    const completedThisWeek = dedupEncounters(rawCompleted);
+    const cancelledThisWeek = dedupEncounters(rawCancelled);
+    const missedThisWeek = dedupEncounters(rawMissed);
 
     // Revenue — based on encounters (billing events), not raw clinician rows
     const weeklyRevenue = completedThisWeek.length * BLENDED_RATE;

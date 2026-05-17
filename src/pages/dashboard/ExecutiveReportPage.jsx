@@ -1,34 +1,12 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
-// Blended rate MUST match DirectorDashboard's. Was $185 here, $230 there,
-// which caused the Executive Report to under-report revenue by ~$36K/wk.
-// Single source of truth: $230 (Liam's confirmed blended Medicare/Commercial rate).
-const BLENDED_RATE = 230;
-const WEEKLY_CAPACITY = 1175;
-const WEEKLY_TARGET = 1000;
-
-// Visit classification helpers — MUST match DirectorDashboard exactly.
-// Pariox marks cancelled visits with status="Completed" + event_type="Cancelled
-// Treatment". Filtering on just /completed/i.test(status) overcounts.
-const isCancelled = v => /cancel/i.test(v.event_type || '') || /cancel/i.test(v.status || '');
-const isAttempted = v => /attempted/i.test(v.event_type || '');
-const isMissed    = v => /missed/i.test(v.status || '') && !isCancelled(v);
-const isCompleted = v => /completed/i.test(v.status || '') && !isCancelled(v) && !isAttempted(v);
-
-// Dedup co-treats: same patient + same date = 1 encounter for billing math.
-// (Multiple clinician rows for the same visit shouldn't multiply revenue.)
-function dedupEncounters(rows) {
-  const seen = new Set();
-  return rows.filter(v => {
-    const key = `${(v.patient_name || '').toLowerCase()}||${v.visit_date}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
+// All visit math now sourced from /lib/visitMath.js (2026-05-17 refactor)
+// so this page can never drift from DirectorDashboard / ReportsExportPage.
+import { BLENDED_RATE, WEEKLY_VISIT_CAPACITY as WEEKLY_CAPACITY, WEEKLY_VISIT_TARGET as WEEKLY_TARGET,
+         isCancelled, isAttempted, isMissed, isCompleted, dedupEncounters } from '../../lib/visitMath';
 
 function fmt$(n) { return '$' + Math.round(n || 0).toLocaleString(); }
 function fmtPct(a, b) { return b > 0 ? Math.round((a / b) * 100) : 0; }
@@ -86,28 +64,46 @@ export default function ExecutiveReportPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    // CRITICAL: Use fetchAllPages for tables that can exceed 1000 rows in the
+    // query window — without it, supabase-js silently truncates. We discovered
+    // 2026-05-17 that the 2-week visit query returns 1,641 rows in production
+    // but was being capped at 1,000, dropping ~640 visits and under-counting
+    // revenue by ~$30K. The patient census + intake referrals are likewise
+    // capable of crossing 1,000.
     const [v, c, a, i, r, cl] = await Promise.all([
-      supabase.from('visit_schedule_data')
-        .select('patient_name,visit_date,status,event_type,staff_name,staff_name_normalized,region,insurance')
-        .gte('visit_date', prevWeek.start).lte('visit_date', week.end),
-      supabase.from('census_data')
-        .select('patient_name,status,region,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,inferred_frequency,overdue_threshold_days,days_overdue'),
-      supabase.from('auth_tracker')
-        .select('auth_status,auth_expiry_date,visits_authorized,visits_used,insurance,region'),
-      supabase.from('intake_referrals')
-        .select('referral_status,date_received,region,insurance,patient_classification')
-        .gte('date_received', prevWeek.start),
-      supabase.from('auth_renewal_tasks')
-        .select('task_status,priority,days_until_expiry')
-        .not('task_status', 'in', '("approved","denied","closed")'),
-      supabase.from('clinicians').select('full_name,region,weekly_visit_target').eq('is_active', true),
+      fetchAllPages(
+        supabase.from('visit_schedule_data')
+          .select('patient_name,visit_date,status,event_type,staff_name,staff_name_normalized,region,insurance')
+          .gte('visit_date', prevWeek.start).lte('visit_date', week.end)
+      ),
+      fetchAllPages(
+        supabase.from('census_data')
+          .select('patient_name,status,region,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,inferred_frequency,overdue_threshold_days,days_overdue')
+      ),
+      fetchAllPages(
+        supabase.from('auth_tracker')
+          .select('auth_status,auth_expiry_date,visits_authorized,visits_used,insurance,region')
+      ),
+      fetchAllPages(
+        supabase.from('intake_referrals')
+          .select('referral_status,date_received,region,insurance,patient_classification')
+          .gte('date_received', prevWeek.start)
+      ),
+      fetchAllPages(
+        supabase.from('auth_renewal_tasks')
+          .select('task_status,priority,days_until_expiry')
+          .not('task_status', 'in', '("approved","denied","closed")')
+      ),
+      fetchAllPages(
+        supabase.from('clinicians').select('full_name,region,weekly_visit_target').eq('is_active', true)
+      ),
     ]);
-    setVisits(v.data || []);
-    setCensus(c.data || []);
-    setAuths(a.data || []);
-    setIntake(i.data || []);
-    setRenewals(r.data || []);
-    setClinicians(cl.data || []);
+    setVisits(v);
+    setCensus(c);
+    setAuths(a);
+    setIntake(i);
+    setRenewals(r);
+    setClinicians(cl);
     setLoading(false);
   }, [week.start, week.end, prevWeek.start]);
 
