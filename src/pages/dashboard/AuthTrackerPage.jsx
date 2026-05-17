@@ -775,7 +775,7 @@ export default function AuthTrackerPage() {
           {activeFilterCount > 0 && (
             <button onClick={clearAllFilters}
               style={{ marginLeft: 'auto', padding: '4px 10px', background: '#FEF2F2', color: '#991B1B', border: '1px solid #FECACA', borderRadius: 999, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
-              \u2715 Clear {activeFilterCount} active filter{activeFilterCount === 1 ? '' : 's'}
+              Clear {activeFilterCount} active filter{activeFilterCount === 1 ? '' : 's'}
             </button>
           )}
         </div>
@@ -786,11 +786,11 @@ export default function AuthTrackerPage() {
           background: 'var(--bg)', flexShrink: 0, flexWrap: 'wrap', alignItems: 'center',
           position: 'sticky', top: 0, zIndex: 5,
         }}>
-          <input placeholder="\ud83d\udd0d Patient, member ID, auth #..." value={search} onChange={function(e) { setSearch(e.target.value); }}
+          <input placeholder="Search patient, member ID, auth #..." value={search} onChange={function(e) { setSearch(e.target.value); }}
             style={{ padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, outline: 'none', background: 'var(--card-bg)', minWidth: 220 }} />
           <select value={regionFilter} onChange={function(e) { setRegionFilter(e.target.value); }} style={Object.assign({}, SEL, { fontSize: 11, padding: '5px 8px' })}>
             <option value="ALL">All Regions</option>
-            {REGIONS.map(function(r) { return <option key={r} value={r}>Region {r} \u2014 {COORD_MAP[r]||''}</option>; })}
+            {REGIONS.map(function(r) { return <option key={r} value={r}>Region {r} - {COORD_MAP[r]||''}</option>; })}
           </select>
           <select value={insuranceFilter} onChange={function(e) { setInsuranceFilter(e.target.value); }} style={Object.assign({}, SEL, { fontSize: 11, padding: '5px 8px', maxWidth: 180 })}>
             <option value="ALL">All Insurances</option>
@@ -801,12 +801,12 @@ export default function AuthTrackerPage() {
             {STATUSES.map(function(s) { return <option key={s.value} value={s.value}>{s.label}</option>; })}
           </select>
           <select value={sortBy} onChange={function(e) { setSortBy(e.target.value); }} style={Object.assign({}, SEL, { fontSize: 11, padding: '5px 8px' })}>
-            <option value="urgency">\u26a1 Most Urgent</option>
-            <option value="visits">\ud83d\udcca Fewest Visits Left</option>
-            <option value="expiry">\u23f0 Expiring Soonest</option>
-            <option value="soc">\ud83d\udcc5 SOC Date</option>
-            <option value="name">\ud83d\udd24 Patient Name</option>
-            <option value="region">\ud83d\uddfa Region</option>
+            <option value="urgency">Sort: Most Urgent</option>
+            <option value="visits">Sort: Fewest Visits Left</option>
+            <option value="expiry">Sort: Expiring Soonest</option>
+            <option value="soc">Sort: SOC Date</option>
+            <option value="name">Sort: Patient Name</option>
+            <option value="region">Sort: Region</option>
           </select>
           <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--gray)', fontWeight: 600 }}>
             {filtered.length} of {records.length} records
