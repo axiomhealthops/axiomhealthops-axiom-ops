@@ -3,9 +3,32 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
-const BLENDED_RATE = 185;
+// Blended rate MUST match DirectorDashboard's. Was $185 here, $230 there,
+// which caused the Executive Report to under-report revenue by ~$36K/wk.
+// Single source of truth: $230 (Liam's confirmed blended Medicare/Commercial rate).
+const BLENDED_RATE = 230;
 const WEEKLY_CAPACITY = 1175;
 const WEEKLY_TARGET = 1000;
+
+// Visit classification helpers — MUST match DirectorDashboard exactly.
+// Pariox marks cancelled visits with status="Completed" + event_type="Cancelled
+// Treatment". Filtering on just /completed/i.test(status) overcounts.
+const isCancelled = v => /cancel/i.test(v.event_type || '') || /cancel/i.test(v.status || '');
+const isAttempted = v => /attempted/i.test(v.event_type || '');
+const isMissed    = v => /missed/i.test(v.status || '') && !isCancelled(v);
+const isCompleted = v => /completed/i.test(v.status || '') && !isCancelled(v) && !isAttempted(v);
+
+// Dedup co-treats: same patient + same date = 1 encounter for billing math.
+// (Multiple clinician rows for the same visit shouldn't multiply revenue.)
+function dedupEncounters(rows) {
+  const seen = new Set();
+  return rows.filter(v => {
+    const key = `${(v.patient_name || '').toLowerCase()}||${v.visit_date}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 function fmt$(n) { return '$' + Math.round(n || 0).toLocaleString(); }
 function fmtPct(a, b) { return b > 0 ? Math.round((a / b) * 100) : 0; }
@@ -95,12 +118,21 @@ export default function ExecutiveReportPage() {
     const thisWeekVisits = visits.filter(v => v.visit_date >= week.start && v.visit_date <= week.end);
     const prevWeekVisits = visits.filter(v => v.visit_date >= prevWeek.start && v.visit_date <= prevWeek.end);
 
-    const thisCompleted  = thisWeekVisits.filter(v => /completed/i.test(v.status || '')).length;
-    const prevCompleted  = prevWeekVisits.filter(v => /completed/i.test(v.status || '')).length;
-    const thisCancelled  = thisWeekVisits.filter(v => /cancel/i.test(v.status || '') || /cancel/i.test(v.event_type || '')).length;
-    const thisMissed     = thisWeekVisits.filter(v => /missed/i.test(v.status || '')).length;
+    // Use isCompleted helper (excludes cancelled-marked-completed + attempted)
+    // + dedup by patient+date so co-treats count as 1 encounter for revenue.
+    const thisCompletedDeduped = dedupEncounters(thisWeekVisits.filter(isCompleted));
+    const prevCompletedDeduped = dedupEncounters(prevWeekVisits.filter(isCompleted));
+    const thisCancelledDeduped = dedupEncounters(thisWeekVisits.filter(isCancelled));
+    const thisMissedDeduped    = dedupEncounters(thisWeekVisits.filter(isMissed));
+    const thisCompleted  = thisCompletedDeduped.length;
+    const prevCompleted  = prevCompletedDeduped.length;
+    const thisCancelled  = thisCancelledDeduped.length;
+    const thisMissed     = thisMissedDeduped.length;
+    // Scheduled stays raw because each clinician's scheduled slot is real capacity
     const thisScheduled  = thisWeekVisits.filter(v => /scheduled/i.test(v.status || '')).length;
-    const totalThisWeek  = thisWeekVisits.length;
+    // Total = deduped encounter count for the denominator of rates (so completion%
+    // and cancel% reflect encounter-level not row-level math)
+    const totalThisWeek  = thisCompleted + thisCancelled + thisMissed;
 
     const estRevenue      = thisCompleted * BLENDED_RATE;
     const prevRevenue     = prevCompleted * BLENDED_RATE;
@@ -118,23 +150,26 @@ export default function ExecutiveReportPage() {
     const socPending     = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status || ''));
     const inactiveRevGap = inactiveActive.length * BLENDED_RATE * 2;
 
-    // Auth
-    const activeAuths    = auths.filter(a => a.auth_status === 'active');
+    // Auth — was using `=== 'active'` which excluded 95 'approved' rows and any
+    // case variations. Use case-insensitive match for both active + approved
+    // (both mean "patient has a working auth right now").
+    const activeAuths    = auths.filter(a => /^(active|approved)$/i.test(a.auth_status || ''));
     const urgentRenewals = renewals.filter(r => r.priority === 'urgent').length;
     const totalRenewals  = renewals.length;
-    const pendingAuths   = auths.filter(a => a.auth_status === 'pending').length;
+    const pendingAuths   = auths.filter(a => /^(pending|submitted)$/i.test(a.auth_status || '')).length;
 
     // Intake this week
     const thisWeekIntake = intake.filter(r => r.date_received >= week.start);
     const acceptedThisWeek = thisWeekIntake.filter(r => r.referral_status === 'Accepted').length;
     const newPatients    = thisWeekIntake.filter(r => r.patient_classification === 'new_patient').length;
 
-    // Region breakdown
+    // Region breakdown — use isCompleted helper + dedup so regional totals
+    // sum to the same number as the headline.
     const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
     const regionData = REGIONS.map(rgn => {
       const rgnActive     = activePatients.filter(p => p.region === rgn).length;
       const rgnInactive   = inactiveActive.filter(p => p.region === rgn).length;
-      const rgnCompleted  = thisWeekVisits.filter(v => v.region === rgn && /completed/i.test(v.status || '')).length;
+      const rgnCompleted  = dedupEncounters(thisWeekVisits.filter(v => v.region === rgn && isCompleted(v))).length;
       const rgnCapacity   = clinicians.filter(c => c.region === rgn).reduce((s, c) => s + (c.weekly_visit_target || 0), 0);
       const rgnUtil       = fmtPct(rgnCompleted, rgnCapacity);
       return { rgn, rgnActive, rgnInactive, rgnCompleted, rgnCapacity, rgnUtil };
