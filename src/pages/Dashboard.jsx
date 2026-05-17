@@ -27,7 +27,8 @@ import ReportsExportPage from './dashboard/ReportsExportPage';
 import RegionalManagerDashboard from './dashboard/RegionalManagerDashboard';
 import AssociateDirectorDashboard from './dashboard/AssociateDirectorDashboard';
 import HospitalizationTrackerPage from './dashboard/HospitalizationTrackerPage';
-import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
+// MissedCancelledReportPage moved into ReportsExportPage 2026-05-17 (consolidation)
+// import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
 import MyRegionPage from './dashboard/MyRegionPage';
 import MedicareTrackerPage from './dashboard/MedicareTrackerPage';
 import MarketingCRMPage from './dashboard/MarketingCRMPage';
@@ -52,7 +53,8 @@ import ClinicianSchedulePage from './dashboard/ClinicianSchedulePage';
 import InsuranceSettingsPage from './dashboard/InsuranceSettingsPage';
 import OperationsManagerDashboard from './dashboard/OperationsManagerDashboard';
 import AuthAuditImportPage from './dashboard/AuthAuditImportPage';
-import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
+// DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
+// import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
 const PAGE_COMPONENTS = {
   overview:             OverviewPage,
@@ -80,7 +82,7 @@ const PAGE_COMPONENTS = {
   'rm-dashboard':       RegionalManagerDashboard,
   'ad-dashboard':       AssociateDirectorDashboard,
   hospitalizations:     HospitalizationTrackerPage,
-  'missed-cancelled':       MissedCancelledReportPage,
+  // 'missed-cancelled':    MissedCancelledReportPage,  // moved to reports page
   'my-region':              MyRegionPage,
   'medicare-tracker':       MedicareTrackerPage,
   'marketing-crm':          MarketingCRMPage,
@@ -105,7 +107,7 @@ const PAGE_COMPONENTS = {
   'insurance-settings':      InsuranceSettingsPage,
   'ops-dashboard':           OperationsManagerDashboard,
   'audit-import':            AuthAuditImportPage,
-  'dept-reports':            DepartmentReportsPage,
+  // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 
 function AccessDenied() {

@@ -105,6 +105,33 @@ const REPORTS = [
     formats: ['xlsx','csv','template'],
     category: 'Operations',
   },
+
+  // ── 2026-05-17 consolidation: moved 14 dept reports + Missed/Cancelled here
+  //    from DepartmentReportsPage.jsx + MissedCancelledReportPage.jsx so all
+  //    exports live in one place. Categories use a "Dept · X" prefix to group
+  //    them visually in the category filter.
+
+  // AUTHORIZATION DEPARTMENT
+  { id: 'auth_all',             icon: '🔐', title: 'All Active Authorizations',           desc: 'Every currently-active auth with PPO?, dates, visit counts, status, and assigned auth coordinator.', formats: ['xlsx','csv'], category: 'Auth Dept' },
+  { id: 'auth_pending_active',  icon: '⏳', title: 'Active - Auth Pending Patients',      desc: 'Patients currently being seen with status "Active - Auth Pending" — owe an auth, still seeing them.', formats: ['xlsx','csv'], category: 'Auth Dept' },
+  { id: 'auth_stalled',         icon: '🪦', title: 'Stalled Auths (Submitted >5d)',       desc: 'Auths submitted more than 5 days ago that still have no approval — action list for the Auth team.', formats: ['xlsx','csv'], category: 'Auth Dept' },
+  { id: 'auth_ppo',             icon: '💳', title: 'PPO Patients',                        desc: 'Every patient on a PPO plan — different auth rules apply. Pulls from audit-imported is_ppo OR existing insurance_type match.', formats: ['xlsx','csv'], category: 'Auth Dept' },
+  { id: 'auth_renewal',         icon: '🔄', title: 'Renewal Pipeline (≤30 days)',         desc: 'Auths expiring in the next 30 days — sorted by days remaining.', formats: ['xlsx','csv'], category: 'Auth Dept' },
+  // CARE COORDINATION DEPARTMENT
+  { id: 'cc_not_scheduled',     icon: '📅', title: 'Patients Not Scheduled (next 14d)',   desc: 'Active patients with NO scheduled visits in the next 14 days. Uses real visit_schedule_data — more accurate than the audit flag.', formats: ['xlsx','csv'], category: 'Care Coord' },
+  { id: 'cc_frequency_missing', icon: '⚖', title: 'Frequency Missing / Needs Review',     desc: 'Active patients with no frequency set or marked for review.', formats: ['xlsx','csv'], category: 'Care Coord' },
+  { id: 'cc_notes_log',         icon: '📝', title: 'CC Notes Log (30 days)',              desc: 'All care coordination notes incl. audit imports — chronological view.', formats: ['xlsx','csv'], category: 'Care Coord' },
+  { id: 'cc_on_hold_waitlist',  icon: '⏸', title: 'On Hold + Waitlist Active List',      desc: 'Patients on hold or waitlisted — sorted by days inactive (recovery candidates).', formats: ['xlsx','csv'], category: 'Care Coord' },
+  // CLINICAL DEPARTMENT
+  { id: 'clinical_discipline',  icon: '🩺', title: 'Discipline Breakdown (PT vs OT)',    desc: 'How patients split between Lymphedema PT and OT, by region — capacity planning input. Multi-sheet (Summary + All Patients).', formats: ['xlsx','csv'], category: 'Clinical Dept' },
+  { id: 'clinical_eval_pending',icon: '⏱', title: 'Eval Pending Backlog',                desc: 'Patients awaiting clinical evaluation — 48h SLA.', formats: ['xlsx','csv'], category: 'Clinical Dept' },
+  // INTAKE DEPARTMENT
+  { id: 'intake_this_week',     icon: '📥', title: 'This Week\'s Referrals',              desc: 'New referrals received in the last 7 days — with welcome call + accept/decline status.', formats: ['xlsx','csv'], category: 'Intake Dept' },
+  { id: 'intake_ref_sources',   icon: '📊', title: 'Referral Source Breakdown',           desc: 'Which Pariox codes are sending referrals, mapped to insurance + accept rate.', formats: ['xlsx','csv'], category: 'Intake Dept' },
+  // OPERATIONS (cross-dept)
+  { id: 'ops_master',           icon: '📋', title: 'Full Patient Master',                 desc: 'Mirrors the original audit XLSX — every column for every active patient. Use this for the next round of the weekly audit.', formats: ['xlsx','csv'], category: 'Operations' },
+  { id: 'ops_stuck',            icon: '⚠️', title: 'Stuck Patients (all stages)',         desc: 'Every patient past their stage threshold — cross-department accountability list.', formats: ['xlsx','csv'], category: 'Operations' },
+  { id: 'ops_missed_cancelled', icon: '📉', title: 'Missed & Cancelled Visits',           desc: 'All missed and cancelled visits from visit_schedule_data — replaces the standalone Missed/Cancelled page.', formats: ['xlsx','csv'], category: 'Operations' },
 ];
  
 export default function ReportsExportPage() {
@@ -113,6 +140,8 @@ export default function ReportsExportPage() {
   const [auth, setAuth] = useState([]);
   const [census, setCensus] = useState([]);
   const [clinicians, setClinicians] = useState([]);
+  // Added 2026-05-17 for dept reports consolidation
+  const [careCoordNotes, setCareCoordNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -128,10 +157,14 @@ export default function ReportsExportPage() {
       fetchAllPages(supabase.from('auth_tracker').select('*')),
       fetchAllPages(supabase.from('census_data').select('*')),
       fetchAllPages(supabase.from('clinicians').select('*').eq('is_active', true)),
-    ]).then(([v,i,a,c,cl]) => {
+      // For cc_notes_log report (added 2026-05-17 in consolidation)
+      fetchAllPages(supabase.from('care_coord_notes').select('patient_name,region,note_type,note,contact_date,updated_by').order('contact_date', { ascending: false })),
+    ]).then(([v,i,a,c,cl,cn]) => {
       setVisits(v); setIntake(i);
       setAuth(a); setCensus(c);
-      setClinicians(cl); setLoading(false);
+      setClinicians(cl);
+      setCareCoordNotes(cn);
+      setLoading(false);
     });
   }
 
@@ -669,8 +702,309 @@ export default function ReportsExportPage() {
           XLSX.writeFile(wb, 'Patient_Census'+suffix+'.xlsx');
           break;
         }
+
+        // ──────────────────────────────────────────────────────────────────
+        // 2026-05-17 consolidation: 14 dept reports + Missed/Cancelled moved
+        // from DepartmentReportsPage. Internal helpers below — note these
+        // intentionally bypass the page-level region/date filters because
+        // each report has its own scoping logic (e.g., "last 7 days", "active
+        // patients only"). If you want to layer the page filters on top, add
+        // applyFilters(...) inside each case.
+        // ──────────────────────────────────────────────────────────────────
+
+        // ── AUTHORIZATION DEPARTMENT ─────────────────────────────────────
+        case 'auth_all': {
+          const data = auth.filter(a => a.is_currently_active).map(a => ({
+            'Patient': a.patient_name, 'Region': a.region, 'Insurance': a.insurance,
+            'PPO?': a.is_ppo === true ? 'YES' : a.is_ppo === false ? 'NO' : '',
+            'Auth Status': a.auth_status, 'SOC': fmtDate(a.soc_date),
+            'Auth Start': fmtDate(a.auth_start_date), 'Auth End': fmtDate(a.auth_expiry_date),
+            'Visits Auth': a.visits_authorized, 'Visits Used': a.visits_used,
+            'Visits Remaining': (a.visits_authorized || 0) - (a.visits_used || 0),
+            'Evals Auth': a.evals_authorized, 'Evals Used': a.evals_used,
+            'RAs Auth': a.reassessments_authorized, 'RAs Used': a.reassessments_used,
+            'Scheduled?': a.is_scheduled === true ? 'YES' : a.is_scheduled === false ? 'NO' : '',
+            'Assigned To': a.assigned_to, 'Notes': a.notes,
+          }));
+          format === 'xlsx' ? exportXLSX(data, 'Active Authorizations', 'Active_Authorizations'+suffix) : exportCSV(data, 'Active_Authorizations'+suffix);
+          break;
+        }
+
+        case 'auth_pending_active': {
+          const data = census.filter(c => c.status === 'Active - Auth Pending').map(c => {
+            const days = c.status_changed_at ? Math.ceil((Date.now() - new Date(c.status_changed_at).getTime()) / 86400000) : null;
+            return {
+              'Patient': c.patient_name, 'Region': c.region, 'Insurance': c.insurance,
+              'Frequency': c.inferred_frequency, 'Days Pending': days,
+              'Owner': c.pipeline_assigned_to || 'unassigned',
+            };
+          });
+          format === 'xlsx' ? exportXLSX(data, 'Active Auth Pending', 'Active_Auth_Pending'+suffix) : exportCSV(data, 'Active_Auth_Pending'+suffix);
+          break;
+        }
+
+        case 'auth_stalled': {
+          const data = auth.filter(a => a.is_currently_active && /^(submitted|pending)$/i.test(a.auth_status || '') && a.auth_submitted_date)
+            .map(a => {
+              const days = Math.ceil((Date.now() - new Date(a.auth_submitted_date).getTime()) / 86400000);
+              return { a, days };
+            })
+            .filter(x => x.days > 5)
+            .map(({a, days}) => ({
+              'Patient': a.patient_name, 'Region': a.region, 'Insurance': a.insurance,
+              'Submitted': fmtDate(a.auth_submitted_date), 'Days Stalled': days,
+              'Assigned To': a.assigned_to || 'unassigned', 'Notes': a.notes,
+            })).sort((x,y) => y['Days Stalled'] - x['Days Stalled']);
+          format === 'xlsx' ? exportXLSX(data, 'Stalled Auths', 'Stalled_Auths'+suffix) : exportCSV(data, 'Stalled_Auths'+suffix);
+          break;
+        }
+
+        case 'auth_ppo': {
+          const data = auth.filter(a => a.is_currently_active && (a.is_ppo === true || (a.insurance_type && /ppo/i.test(a.insurance_type))))
+            .map(a => ({
+              'Patient': a.patient_name, 'Region': a.region, 'Insurance': a.insurance,
+              'Insurance Type': a.insurance_type || '—',
+              'PPO Source': a.is_ppo === true ? 'audit' : 'insurance_type',
+              'Auth Status': a.auth_status, 'Visits Auth': a.visits_authorized, 'Visits Used': a.visits_used,
+              'Auth Expires': fmtDate(a.auth_expiry_date), 'Assigned To': a.assigned_to,
+            }));
+          format === 'xlsx' ? exportXLSX(data, 'PPO Patients', 'PPO_Patients'+suffix) : exportCSV(data, 'PPO_Patients'+suffix);
+          break;
+        }
+
+        case 'auth_renewal': {
+          const thirty = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+          const data = auth.filter(a => a.is_currently_active && a.auth_expiry_date && a.auth_expiry_date <= thirty)
+            .map(a => {
+              const d = Math.ceil((new Date(a.auth_expiry_date).getTime() - Date.now()) / 86400000);
+              return {
+                'Patient': a.patient_name, 'Region': a.region, 'Insurance': a.insurance,
+                'Expires': fmtDate(a.auth_expiry_date), 'Days Left': d,
+                'Visits Remaining': (a.visits_authorized || 0) - (a.visits_used || 0),
+                'Assigned To': a.assigned_to,
+              };
+            }).sort((x,y) => x['Days Left'] - y['Days Left']);
+          format === 'xlsx' ? exportXLSX(data, 'Renewal Pipeline', 'Renewal_Pipeline'+suffix) : exportCSV(data, 'Renewal_Pipeline'+suffix);
+          break;
+        }
+
+        // ── CARE COORDINATION DEPARTMENT ─────────────────────────────────
+        case 'cc_not_scheduled': {
+          // Active patients minus those with non-cancelled visits in next 14d
+          const today = new Date().toISOString().slice(0, 10);
+          const in14d = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+          const scheduled = new Set();
+          visits.forEach(v => {
+            if (!v.visit_date || v.visit_date < today || v.visit_date > in14d) return;
+            if (isCancelled(v.event_type, v.status)) return;
+            if (/attempted/i.test(v.event_type || '')) return;
+            scheduled.add((v.patient_name || '').toLowerCase().trim());
+          });
+          const excludeStatuses = ['Discharge','Discharge - Change Insurance','Discharged','Non-Admit','Non-admit','On Hold','On Hold - Facility','On Hold - Pt Request','On Hold - MD Request','Hospitalized','Waitlist','SOC Pending','Eval Pending'];
+          const authMap = {};
+          auth.filter(a => a.is_currently_active).forEach(a => { authMap[(a.patient_name||'').toLowerCase().trim() + '|' + a.region] = a; });
+          const data = census.filter(c => c.status && !excludeStatuses.includes(c.status))
+            .filter(c => !scheduled.has((c.patient_name||'').toLowerCase().trim()))
+            .map(c => {
+              const a = authMap[(c.patient_name||'').toLowerCase().trim() + '|' + c.region] || {};
+              return {
+                'Patient': c.patient_name, 'Region': c.region, 'Insurance': c.insurance,
+                'Status': c.status, 'Frequency': c.inferred_frequency || 'missing',
+                'Audit Flag (SCHEDULED?)': a.is_scheduled === false ? 'NO' : a.is_scheduled === true ? 'YES (conflict)' : 'not audited',
+                'Care Coord Owner': c.pipeline_assigned_to || 'unassigned',
+                'Auth Coord': a.assigned_to || '—',
+              };
+            }).sort((x,y) => (x.Region||'').localeCompare(y.Region||'') || x.Patient.localeCompare(y.Patient));
+          format === 'xlsx' ? exportXLSX(data, 'Not Scheduled', 'Not_Scheduled'+suffix) : exportCSV(data, 'Not_Scheduled'+suffix);
+          break;
+        }
+
+        case 'cc_frequency_missing': {
+          const excludeStatuses = ['Discharge','Discharge - Change Insurance','Discharged','Non-Admit','Non-admit','On Hold','Hospitalized'];
+          const data = census.filter(c => (!c.inferred_frequency || c.needs_frequency_review) && !excludeStatuses.includes(c.status))
+            .map(c => ({
+              'Patient': c.patient_name, 'Region': c.region, 'Status': c.status,
+              'Current Frequency': c.inferred_frequency || 'MISSING',
+              'Needs Review?': c.needs_frequency_review ? 'YES' : 'NO',
+              'Owner': c.pipeline_assigned_to || 'unassigned',
+            })).sort((x,y) => (x.Region||'').localeCompare(y.Region||''));
+          format === 'xlsx' ? exportXLSX(data, 'Frequency Review', 'Frequency_Review'+suffix) : exportCSV(data, 'Frequency_Review'+suffix);
+          break;
+        }
+
+        case 'cc_notes_log': {
+          const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+          const data = careCoordNotes.filter(n => n.contact_date && n.contact_date >= since).map(n => ({
+            'Date': fmtDate(n.contact_date), 'Patient': n.patient_name, 'Region': n.region,
+            'Note Type': n.note_type, 'Note': n.note, 'Logged By': n.updated_by,
+          }));
+          format === 'xlsx' ? exportXLSX(data, 'CC Notes Log', 'CC_Notes_Log'+suffix) : exportCSV(data, 'CC_Notes_Log'+suffix);
+          break;
+        }
+
+        case 'cc_on_hold_waitlist': {
+          const holdStatuses = ['On Hold','On Hold - Facility','On Hold - Pt Request','On Hold - MD Request','Waitlist'];
+          const data = census.filter(c => holdStatuses.includes(c.status)).map(c => {
+            const d = c.status_changed_at ? Math.ceil((Date.now() - new Date(c.status_changed_at).getTime()) / 86400000) : null;
+            return {
+              'Patient': c.patient_name, 'Region': c.region, 'Insurance': c.insurance,
+              'Status': c.status, 'Days In Status': d,
+              'Owner': c.pipeline_assigned_to || 'unassigned',
+            };
+          }).sort((x,y) => (y['Days In Status']||0) - (x['Days In Status']||0));
+          format === 'xlsx' ? exportXLSX(data, 'On Hold + Waitlist', 'OnHold_Waitlist'+suffix) : exportCSV(data, 'OnHold_Waitlist'+suffix);
+          break;
+        }
+
+        // ── CLINICAL DEPARTMENT ──────────────────────────────────────────
+        case 'clinical_discipline': {
+          const excludeStatuses = ['Discharge','Discharge - Change Insurance','Discharged','Non-Admit','Non-admit'];
+          const activeCensus = census.filter(c => !excludeStatuses.includes(c.status));
+          // Multi-sheet: summary + all patients
+          const summary = {};
+          activeCensus.forEach(c => {
+            const k = c.region + '|' + (c.discipline || 'UNKNOWN');
+            summary[k] = (summary[k] || 0) + 1;
+          });
+          const summaryRows = Object.entries(summary).map(([k, count]) => {
+            const [region, disc] = k.split('|');
+            return { 'Region': region, 'Discipline': disc, 'Count': count };
+          }).sort((a, b) => (a.Region||'').localeCompare(b.Region||'') || (a.Discipline||'').localeCompare(b.Discipline||''));
+          const detailRows = activeCensus.map(c => ({
+            'Patient': c.patient_name, 'Region': c.region, 'Discipline': c.discipline || '—',
+            'Status': c.status, 'Insurance': c.insurance,
+          }));
+          if (format === 'xlsx') {
+            const wb = XLSX.utils.book_new();
+            const ws1 = XLSX.utils.json_to_sheet(summaryRows);
+            XLSX.utils.book_append_sheet(wb, ws1, 'Summary by Region');
+            const ws2 = XLSX.utils.json_to_sheet(detailRows);
+            XLSX.utils.book_append_sheet(wb, ws2, 'All Patients');
+            XLSX.writeFile(wb, 'Discipline_Breakdown'+suffix+'.xlsx');
+          } else {
+            exportCSV(detailRows, 'Discipline_Breakdown'+suffix);
+          }
+          break;
+        }
+
+        case 'clinical_eval_pending': {
+          const data = census.filter(c => c.status === 'Eval Pending').map(c => {
+            const d = c.status_changed_at ? Math.ceil((Date.now() - new Date(c.status_changed_at).getTime()) / 86400000) : null;
+            return {
+              'Patient': c.patient_name, 'Region': c.region, 'Discipline': c.discipline,
+              'Insurance': c.insurance, 'Days Waiting': d,
+              'Past 48h SLA?': d > 2 ? 'YES' : 'NO',
+              'Owner': c.pipeline_assigned_to || 'unassigned',
+            };
+          }).sort((x,y) => (y['Days Waiting']||0) - (x['Days Waiting']||0));
+          format === 'xlsx' ? exportXLSX(data, 'Eval Pending', 'Eval_Pending'+suffix) : exportCSV(data, 'Eval_Pending'+suffix);
+          break;
+        }
+
+        // ── INTAKE DEPARTMENT ────────────────────────────────────────────
+        case 'intake_this_week': {
+          const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+          const data = intake.filter(r => r.date_received >= weekAgo).map(r => ({
+            'Date Received': fmtDate(r.date_received), 'Patient': r.patient_name, 'Region': r.region,
+            'Insurance': r.insurance, 'Referral Status': r.referral_status,
+            'Welcome Call': r.welcome_call || 'Not Called',
+            'First Appt': r.first_appt || '—', 'Chart Status': r.chart_status || '—',
+          })).sort((x,y) => (y['Date Received']||'').localeCompare(x['Date Received']||''));
+          format === 'xlsx' ? exportXLSX(data, 'This Week Referrals', 'This_Weeks_Referrals'+suffix) : exportCSV(data, 'This_Weeks_Referrals'+suffix);
+          break;
+        }
+
+        case 'intake_ref_sources': {
+          const summary = {};
+          intake.forEach(r => {
+            const k = r.region + '|' + (r.insurance || 'UNKNOWN');
+            if (!summary[k]) summary[k] = { region: r.region, insurance: r.insurance, total: 0, accepted: 0, denied: 0 };
+            summary[k].total++;
+            if (r.referral_status === 'Accepted') summary[k].accepted++;
+            if (r.referral_status === 'Denied') summary[k].denied++;
+          });
+          const data = Object.values(summary).map(s => ({
+            'Region': s.region, 'Insurance': s.insurance, 'Total Referrals': s.total,
+            'Accepted': s.accepted, 'Denied': s.denied,
+            'Acceptance Rate %': s.total > 0 ? Math.round(s.accepted / s.total * 100) : 0,
+          })).sort((x,y) => y['Total Referrals'] - x['Total Referrals']);
+          format === 'xlsx' ? exportXLSX(data, 'Referral Sources', 'Referral_Sources'+suffix) : exportCSV(data, 'Referral_Sources'+suffix);
+          break;
+        }
+
+        // ── OPERATIONS (cross-dept) ──────────────────────────────────────
+        case 'ops_master': {
+          const authMap = {};
+          auth.filter(a => a.is_currently_active).forEach(a => { authMap[(a.patient_name||'').toLowerCase().trim() + '|' + a.region] = a; });
+          const data = census.map(c => {
+            const a = authMap[(c.patient_name||'').toLowerCase().trim() + '|' + c.region] || {};
+            return {
+              'Patient': c.patient_name, 'Region': c.region, 'Address': c.address,
+              'Disc': c.discipline, 'Ref Source': c.ref_source, 'Insurance': c.insurance,
+              'SOC': fmtDate(a.soc_date), 'PPO?': a.is_ppo === true ? 'YES' : a.is_ppo === false ? 'NO' : '',
+              'AUTH START DATE': fmtDate(a.auth_start_date), 'AUTH END DATE': fmtDate(a.auth_expiry_date),
+              'APPROVED # VISITS': a.visits_authorized,
+              'APPROVED # EVALS': a.evals_authorized,
+              'APPROVED # RAs': a.reassessments_authorized,
+              'NOTES': a.notes, 'Status': c.status,
+              'SCHEDULED?': a.is_scheduled === true ? 'YES' : a.is_scheduled === false ? 'NO' : '',
+              'FREQUENCY': c.inferred_frequency,
+              'Auth Coord': a.assigned_to, 'Care Coord': c.pipeline_assigned_to,
+            };
+          });
+          format === 'xlsx' ? exportXLSX(data, 'Patient Master', 'Full_Patient_Master'+suffix) : exportCSV(data, 'Full_Patient_Master'+suffix);
+          break;
+        }
+
+        case 'ops_stuck': {
+          function stageFor(s) {
+            if (/soc.*pending/i.test(s)) return { label: 'SOC Pending', threshold: 3, owner: 'Auth Team' };
+            if (/auth.*pending/i.test(s) && !/active/i.test(s)) return { label: 'Auth Pending', threshold: 5, owner: 'Auth Team' };
+            if (/eval.*pending/i.test(s)) return { label: 'Eval Pending', threshold: 2, owner: 'Care Coord' };
+            return null;
+          }
+          const data = census.map(c => {
+            const stage = stageFor(c.status || '');
+            if (!stage) return null;
+            const d = c.status_changed_at ? Math.ceil((Date.now() - new Date(c.status_changed_at).getTime()) / 86400000) : null;
+            if (d === null || d <= stage.threshold) return null;
+            return {
+              'Patient': c.patient_name, 'Region': c.region, 'Insurance': c.insurance,
+              'Stage': stage.label, 'Days Stuck': d, 'Threshold': stage.threshold,
+              'Owner Team': stage.owner,
+              'Assigned': c.pipeline_assigned_to || 'unassigned',
+            };
+          }).filter(x => x !== null).sort((x,y) => y['Days Stuck'] - x['Days Stuck']);
+          format === 'xlsx' ? exportXLSX(data, 'Stuck Patients', 'Stuck_Patients'+suffix) : exportCSV(data, 'Stuck_Patients'+suffix);
+          break;
+        }
+
+        case 'ops_missed_cancelled': {
+          // Replaces the standalone MissedCancelledReportPage
+          const fv = applyFilters(visits);
+          const data = fv.filter(v => {
+            const s = (v.status||'').toLowerCase();
+            const e = (v.event_type||'').toLowerCase();
+            return s.includes('miss') || e.includes('cancel');
+          }).map(v => {
+            const cancelled = isCancelled(v.event_type, v.status);
+            const missed = /missed/i.test(v.status||'') && !cancelled;
+            return {
+              'Visit Date': fmtDate(v.visit_date),
+              'Patient': v.patient_name,
+              'Region': v.region,
+              'Clinician': v.staff_name,
+              'Event Type': v.event_type,
+              'Status': v.status,
+              'Classification': cancelled ? 'Cancelled' : missed ? 'Missed' : 'Other',
+              'Notes': v.notes || '',
+            };
+          }).sort((x,y) => (y['Visit Date']||'').localeCompare(x['Visit Date']||''));
+          format === 'xlsx' ? exportXLSX(data, 'Missed & Cancelled', 'Missed_Cancelled'+suffix) : exportCSV(data, 'Missed_Cancelled'+suffix);
+          break;
+        }
       }
- 
+
       setSuccess(reportId + '_' + format);
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -683,7 +1017,7 @@ export default function ReportsExportPage() {
   const categories = ['ALL', ...new Set(REPORTS.map(r => r.category))];
   const filtered = REPORTS.filter(r => categoryFilter === 'ALL' || r.category === categoryFilter);
  
-  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals'], loadData);
+  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals', 'care_coord_notes'], loadData);
 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
