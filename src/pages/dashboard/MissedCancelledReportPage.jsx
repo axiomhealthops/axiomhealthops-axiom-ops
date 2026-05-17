@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -100,12 +100,14 @@ export default function MissedCancelledReportPage() {
     if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setVisits([]); setLoading(false); return;
     }
+    // 2026-05-17: paginated via fetchAllPages — was capped at 1000 rows,
+    // hiding ~half of missed/cancelled visits at production scale.
     let query = supabase.from('visit_schedule_data')
       .select('*')
       .or('status.ilike.%miss%,event_type.ilike.%cancel%')
       .order('visit_date', { ascending: false });
     query = regionScope.applyToQuery(query);
-    query.then(({ data }) => { setVisits(data || []); setLoading(false); });
+    fetchAllPages(query).then(data => { setVisits(data || []); setLoading(false); });
   }
 
   useEffect(() => {

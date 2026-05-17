@@ -27,8 +27,10 @@ import ReportsExportPage from './dashboard/ReportsExportPage';
 import RegionalManagerDashboard from './dashboard/RegionalManagerDashboard';
 import AssociateDirectorDashboard from './dashboard/AssociateDirectorDashboard';
 import HospitalizationTrackerPage from './dashboard/HospitalizationTrackerPage';
-// MissedCancelledReportPage moved into ReportsExportPage 2026-05-17 (consolidation)
-// import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
+// 2026-05-17: Restored — Reports Export has an XLSX-only version, but Liam
+// needs the interactive viewer with sorting, regional/clinician breakdowns,
+// and live filters. Director Dashboard's "Missed" tile links here.
+import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
 import MyRegionPage from './dashboard/MyRegionPage';
 import MedicareTrackerPage from './dashboard/MedicareTrackerPage';
 import MarketingCRMPage from './dashboard/MarketingCRMPage';
@@ -82,7 +84,7 @@ const PAGE_COMPONENTS = {
   'rm-dashboard':       RegionalManagerDashboard,
   'ad-dashboard':       AssociateDirectorDashboard,
   hospitalizations:     HospitalizationTrackerPage,
-  // 'missed-cancelled':    MissedCancelledReportPage,  // moved to reports page
+  'missed-cancelled':       MissedCancelledReportPage,
   'my-region':              MyRegionPage,
   'medicare-tracker':       MedicareTrackerPage,
   'marketing-crm':          MarketingCRMPage,
