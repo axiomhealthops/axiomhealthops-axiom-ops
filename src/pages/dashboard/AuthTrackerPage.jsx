@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
-import { supabase, fetchAllPages } from '../../lib/supabase';
+import { supabase, fetchAllPages, safeUpdate, logActivity } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import { useAuth } from '../../hooks/useAuth';
 import AIDocExtractor from './AIDocExtractor';
@@ -555,6 +555,8 @@ export default function AuthTrackerPage() {
   var [activeTab, setActiveTab] = useState('all');
   var [showAIExtractor, setShowAIExtractor] = useState(false);
   var [censusPatients, setCensusPatients] = useState([]);
+  // 2026-05-17: inline status toggle (matches AuthCoord pattern — no modal for status changes)
+  var [savingStatusId, setSavingStatusId] = useState(null);
  
   var regionScope = useAssignedRegions();
 
@@ -582,6 +584,48 @@ export default function AuthTrackerPage() {
     if (!window.confirm('Delete this auth record?')) return;
     await supabase.from('auth_tracker').delete().eq('id', id);
     fetchRecords();
+  }
+
+  // 2026-05-17: inline status toggle — no modal for the most common change
+  async function quickToggleStatus(authId, currentStatus, newStatus) {
+    if (currentStatus === newStatus) return;
+    setSavingStatusId(authId);
+    try {
+      await safeUpdate('auth_tracker', authId, {
+        auth_status: newStatus,
+        updated_at: new Date().toISOString(),
+        updated_by: profile?.full_name || profile?.email,
+      });
+      setRecords(function(prev) { return prev.map(function(r) { return r.id === authId ? Object.assign({}, r, { auth_status: newStatus }) : r; }); });
+      try {
+        await logActivity({
+          action_type: 'auth_status_change',
+          resource_type: 'auth_tracker',
+          resource_id: authId,
+          detail: 'Status: ' + currentStatus + ' → ' + newStatus,
+        });
+      } catch (e) { /* non-blocking */ }
+    } catch (err) {
+      console.error('quickToggleStatus failed:', err);
+      alert('Status update failed: ' + (err.message || err));
+    }
+    setSavingStatusId(null);
+  }
+
+  // Count active filters (for the Clear All button visibility)
+  var activeFilterCount =
+    (search ? 1 : 0) +
+    (regionFilter !== 'ALL' ? 1 : 0) +
+    (insuranceFilter !== 'ALL' ? 1 : 0) +
+    (statusFilter !== 'ALL' ? 1 : 0) +
+    (activeTab !== 'all' ? 1 : 0);
+
+  function clearAllFilters() {
+    setSearch('');
+    setRegionFilter('ALL');
+    setInsuranceFilter('ALL');
+    setStatusFilter('ALL');
+    setActiveTab('all');
   }
  
   var filtered = useMemo(function() {
@@ -668,69 +712,105 @@ export default function AuthTrackerPage() {
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
  
-        {/* Summary */}
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
+        {/* \u2500\u2500\u2500 COMPACT SUMMARY STRIP (rebuilt 2026-05-17) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+            Halved vertical space, dropped redundant tabs row. The 6 tiles
+            ARE the primary filter \u2014 they toggle activeTab on click. Unique
+            tabs (No Auth / Queued / PPO) moved to the slim chip row below. */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
-            { label: 'Census Patients',  val: censusPatients.length, color: 'var(--black)', sub: records.length + ' have auth records', tab: 'no_auth' },
-            { label: 'Active Auths',       val: active,         color: 'var(--green)', sub: 'currently authorized', tab: 'all' },
-            { label: 'Critical',           val: critical,       color: '#DC2626',      sub: '\u22647 visits or denied',   alert: critical > 0, tab: 'critical' },
-            { label: 'Auth Pending',       val: pending,        color: '#92400E',      sub: 'awaiting approval',          alert: pending > 0, tab: 'pending' },
-            { label: 'Expiring \u226430d', val: expiring30,     color: '#F59E0B',      sub: 'need renewal soon',          alert: expiring30 > 0, tab: 'expiring' },
-            { label: 'Denied / Appeal',    val: denied,         color: '#6D28D9',      sub: 'needs action',               alert: denied > 0, tab: 'denied' },
+            { label: 'Total Patients', val: censusPatients.length, color: 'var(--black)', tab: 'all', icon: '\ud83d\udc65' },
+            { label: 'Active',         val: active,     color: '#059669', tab: 'all',      icon: '\u2713' },
+            { label: 'Critical',       val: critical,   color: '#DC2626', tab: 'critical', alert: critical > 0, icon: '\ud83d\udea8' },
+            { label: 'Pending',        val: pending,    color: '#D97706', tab: 'pending',  alert: pending > 0,  icon: '\u23f3' },
+            { label: 'Expiring 30d',   val: expiring30, color: '#F59E0B', tab: 'expiring', alert: expiring30 > 0, icon: '\u23f0' },
+            { label: 'Denied',         val: denied,     color: '#7C3AED', tab: 'denied',   alert: denied > 0,   icon: '\u2717' },
           ].map(function(tile) {
             var isActive = activeTab === tile.tab;
             return (
-              <div key={tile.label} onClick={function() { setActiveTab(isActive ? 'all' : tile.tab); }}
-                style={{ flex: 1, padding: '10px 16px', borderRight: '1px solid var(--border)', textAlign: 'center', background: tile.alert ? '#FFFBF5' : 'transparent', cursor: 'pointer', borderBottom: isActive ? '2px solid ' + tile.color : '2px solid transparent', transition: 'border-bottom 0.15s ease' }}>
-                <div style={{ fontSize: 10, color: 'var(--gray)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{tile.label}</div>
-                <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: tile.color, marginTop: 2 }}>{tile.val}</div>
-                <div style={{ fontSize: 10, color: tile.alert ? tile.color : 'var(--gray)', marginTop: 2, fontWeight: tile.alert ? 600 : 400 }}>
-                  {isActive ? '\u2713 showing' : tile.sub}
+              <div key={tile.label} onClick={function() { setActiveTab(isActive && tile.tab !== 'all' ? 'all' : tile.tab); }}
+                style={{
+                  padding: '8px 12px', borderRight: '1px solid var(--border)', cursor: 'pointer',
+                  background: isActive ? '#0F1117' : tile.alert ? '#FFFBF5' : 'transparent',
+                  borderBottom: isActive ? '3px solid ' + tile.color : '3px solid transparent',
+                  transition: 'all 0.15s ease',
+                  display: 'flex', alignItems: 'center', gap: 8,
+                }}>
+                <span style={{ fontSize: 16, opacity: isActive ? 1 : 0.7 }}>{tile.icon}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 9, color: isActive ? 'rgba(255,255,255,0.6)' : 'var(--gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {tile.label}
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'DM Mono, monospace', color: isActive ? '#fff' : tile.color, lineHeight: 1.1 }}>
+                    {tile.val}
+                  </div>
                 </div>
               </div>
             );
           })}
         </div>
- 
-        {/* Tabs */}
-        <div style={{ display: 'flex', gap: 4, padding: '10px 20px 0', background: 'var(--bg)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-          {tabs.map(function(tab) {
+
+        {/* \u2500\u2500\u2500 UNIQUE FILTER CHIPS (only tabs not covered by tiles above) \u2500\u2500 */}
+        <div style={{ display: 'flex', gap: 6, padding: '8px 20px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', flexShrink: 0, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, color: 'var(--gray)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Filter:</span>
+          {tabs.filter(function(t) { return ['no_auth', 'queued', 'ppo'].indexOf(t.key) >= 0; }).map(function(tab) {
             var isActive = activeTab === tab.key;
             return (
-              <button key={tab.key} onClick={function() { setActiveTab(tab.key); }}
-                style={{ padding: '7px 14px', border: 'none', borderRadius: '6px 6px 0 0', fontSize: 12, fontWeight: isActive ? 700 : 500, cursor: 'pointer', background: isActive ? 'var(--card-bg)' : 'transparent', color: isActive ? (tab.color || 'var(--black)') : 'var(--gray)', borderBottom: isActive ? '2px solid ' + (tab.color || 'var(--red)') : '2px solid transparent', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button key={tab.key} onClick={function() { setActiveTab(isActive ? 'all' : tab.key); }}
+                style={{
+                  padding: '4px 10px', border: '1px solid ' + (isActive ? (tab.color || '#7C3AED') : 'var(--border)'),
+                  borderRadius: 999, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                  background: isActive ? (tab.color || '#7C3AED') : 'var(--card-bg)',
+                  color: isActive ? '#fff' : (tab.color || 'var(--gray)'),
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                }}>
                 {tab.label}
-                {tab.count > 0 && <span style={{ fontSize: 10, fontWeight: 700, background: isActive ? (tab.color || 'var(--red)') : 'var(--border)', color: isActive ? '#fff' : 'var(--gray)', padding: '1px 6px', borderRadius: 999 }}>{tab.count}</span>}
+                {tab.count > 0 && (
+                  <span style={{ fontSize: 9, fontWeight: 700, background: isActive ? 'rgba(255,255,255,0.25)' : 'var(--bg)', padding: '1px 5px', borderRadius: 999, minWidth: 18, textAlign: 'center' }}>
+                    {tab.count}
+                  </span>
+                )}
               </button>
             );
           })}
+          {activeFilterCount > 0 && (
+            <button onClick={clearAllFilters}
+              style={{ marginLeft: 'auto', padding: '4px 10px', background: '#FEF2F2', color: '#991B1B', border: '1px solid #FECACA', borderRadius: 999, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+              \u2715 Clear {activeFilterCount} active filter{activeFilterCount === 1 ? '' : 's'}
+            </button>
+          )}
         </div>
- 
-        {/* Filters */}
-        <div style={{ display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg)', flexShrink: 0, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input placeholder="Search patient, member ID, auth #..." value={search} onChange={function(e) { setSearch(e.target.value); }}
-            style={{ padding: '6px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, outline: 'none', background: 'var(--card-bg)', minWidth: 240 }} />
-          <select value={regionFilter} onChange={function(e) { setRegionFilter(e.target.value); }} style={SEL}>
+
+        {/* \u2500\u2500\u2500 STICKY FILTER BAR \u2014 stays visible while scrolling \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */}
+        <div style={{
+          display: 'flex', gap: 8, padding: '8px 20px', borderBottom: '1px solid var(--border)',
+          background: 'var(--bg)', flexShrink: 0, flexWrap: 'wrap', alignItems: 'center',
+          position: 'sticky', top: 0, zIndex: 5,
+        }}>
+          <input placeholder="\ud83d\udd0d Patient, member ID, auth #..." value={search} onChange={function(e) { setSearch(e.target.value); }}
+            style={{ padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, outline: 'none', background: 'var(--card-bg)', minWidth: 220 }} />
+          <select value={regionFilter} onChange={function(e) { setRegionFilter(e.target.value); }} style={Object.assign({}, SEL, { fontSize: 11, padding: '5px 8px' })}>
             <option value="ALL">All Regions</option>
-            {REGIONS.map(function(r) { return <option key={r} value={r}>Region {r} &mdash; {COORD_MAP[r]||''}</option>; })}
+            {REGIONS.map(function(r) { return <option key={r} value={r}>Region {r} \u2014 {COORD_MAP[r]||''}</option>; })}
           </select>
-          <select value={insuranceFilter} onChange={function(e) { setInsuranceFilter(e.target.value); }} style={SEL}>
+          <select value={insuranceFilter} onChange={function(e) { setInsuranceFilter(e.target.value); }} style={Object.assign({}, SEL, { fontSize: 11, padding: '5px 8px', maxWidth: 180 })}>
             <option value="ALL">All Insurances</option>
             {INSURANCES.map(function(ins) { return <option key={ins} value={ins}>{ins}</option>; })}
           </select>
-          <select value={statusFilter} onChange={function(e) { setStatusFilter(e.target.value); }} style={SEL}>
+          <select value={statusFilter} onChange={function(e) { setStatusFilter(e.target.value); }} style={Object.assign({}, SEL, { fontSize: 11, padding: '5px 8px' })}>
             <option value="ALL">All Statuses</option>
             {STATUSES.map(function(s) { return <option key={s.value} value={s.value}>{s.label}</option>; })}
           </select>
-          <select value={sortBy} onChange={function(e) { setSortBy(e.target.value); }} style={SEL}>
-            <option value="urgency">Sort: Most Urgent First</option>
-            <option value="visits">Sort: Fewest Visits Remaining</option>
-            <option value="expiry">Sort: Expiring Soonest</option>
-            <option value="soc">Sort: SOC Date</option>
-            <option value="name">Sort: Patient Name</option>
-            <option value="region">Sort: Region</option>
+          <select value={sortBy} onChange={function(e) { setSortBy(e.target.value); }} style={Object.assign({}, SEL, { fontSize: 11, padding: '5px 8px' })}>
+            <option value="urgency">\u26a1 Most Urgent</option>
+            <option value="visits">\ud83d\udcca Fewest Visits Left</option>
+            <option value="expiry">\u23f0 Expiring Soonest</option>
+            <option value="soc">\ud83d\udcc5 SOC Date</option>
+            <option value="name">\ud83d\udd24 Patient Name</option>
+            <option value="region">\ud83d\uddfa Region</option>
           </select>
-          <span style={{ fontSize: 12, color: 'var(--gray)', marginLeft: 'auto' }}>{filtered.length} records</span>
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--gray)', fontWeight: 600 }}>
+            {filtered.length} of {records.length} records
+          </span>
         </div>
  
         {/* Table */}
@@ -819,13 +899,40 @@ export default function AuthTrackerPage() {
  
                       <ExpiryCell date={r.auth_expiry_date} />
                       <VisitsBar rec={r} />
-                      <StatusBadge status={r.auth_status} />
- 
+                      {/* INLINE STATUS TOGGLE (2026-05-17) — eliminates the need to
+                          open the edit modal for the most common change. Saves
+                          immediately, logs to activity log. */}
+                      <div onClick={function(e) { e.stopPropagation(); }} style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                        {['pending','submitted','active','denied'].map(function(st) {
+                          var current = (r.auth_status || '').toLowerCase();
+                          var isCurrent = current === st || (st === 'active' && current === 'approved');
+                          var stColors = { pending:'#D97706', submitted:'#1565C0', active:'#059669', denied:'#7C3AED' };
+                          var stLabels = { pending:'Pend', submitted:'Sub', active:'Active', denied:'Den' };
+                          var isSaving = savingStatusId === r.id;
+                          return (
+                            <button key={st}
+                              disabled={isSaving}
+                              onClick={function() { quickToggleStatus(r.id, r.auth_status, st); }}
+                              title={'Set to ' + st}
+                              style={{
+                                padding: '3px 6px', fontSize: 9, fontWeight: 700,
+                                border: '1px solid ' + (isCurrent ? stColors[st] : 'var(--border)'),
+                                background: isCurrent ? stColors[st] : 'var(--card-bg)',
+                                color: isCurrent ? '#fff' : stColors[st],
+                                borderRadius: 4, cursor: isSaving ? 'wait' : 'pointer', opacity: isSaving ? 0.5 : 1,
+                              }}>
+                              {stLabels[st]}
+                            </button>
+                          );
+                        })}
+                      </div>
+
                       <div style={{ display: 'flex', gap: 6 }} onClick={function(e) { e.stopPropagation(); }}>
                         <button onClick={function() { setEditRecord(r); setShowModal(true); }}
-                          style={{ padding: '4px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--black)', cursor: 'pointer' }}>Edit</button>
+                          style={{ padding: '4px 10px', background: '#0F1117', color: '#fff', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                         <button onClick={function() { deleteRecord(r.id); }}
-                          style={{ padding: '4px 8px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--danger)', cursor: 'pointer' }}>Del</button>
+                          title="Delete record"
+                          style={{ padding: '4px 8px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--danger)', cursor: 'pointer' }}>✕</button>
                       </div>
                     </div>
  
