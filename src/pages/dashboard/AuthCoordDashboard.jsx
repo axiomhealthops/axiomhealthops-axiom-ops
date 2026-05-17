@@ -263,17 +263,68 @@ function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
   );
 }
  
+// =====================================================================
+// AuthCoordDashboard — REBUILT 2026-05-17
+//
+// Mirrors the CoordinatorPage 2-column workflow pattern Mary uses, but
+// adapted for the auth team's actual job (manage authorizations, not
+// patient care). Per Liam:
+//   - Auth coords are assigned by REGION
+//   - Renewal pipeline is their most painful daily task
+//   - They want INLINE EDITING to replace modal-heavy workflow
+//   - This is their LANDING PAGE
+//
+// Layout:
+//   LEFT col (2/3, scrolls):
+//     - "My Queue" — auths assigned to me, sorted by urgency
+//     - Insurance carrier tabs (Medicare / Aetna / Humana / CarePlus / Other)
+//     - Inline status toggle on each row (no modal for status changes)
+//     - Click row for full edit modal (for non-status fields)
+//   RIGHT col (340px, sticky):
+//     - Today's Actions checklist (renewals 7d / stalled / denials / unassigned)
+//     - Personal KPIs (my queue size, approval rate, median days)
+//     - Recent activity feed (last 10 actions I took today)
+// =====================================================================
+
+// Insurance carrier groupings — used for the carrier-tab filter.
+// Lowercased substring matching: "Medicare" matches "M - Medicare", etc.
+const INSURANCE_BUCKETS = [
+  { key: 'ALL',       label: 'All' },
+  { key: 'MEDICARE',  label: 'Medicare',  patterns: ['medicare'] },
+  { key: 'AETNA',     label: 'Aetna',     patterns: ['aetna'] },
+  { key: 'HUMANA',    label: 'Humana',    patterns: ['humana', 'careplus'] }, // CarePlus is Humana-owned
+  { key: 'CIGNA',     label: 'Cigna',     patterns: ['cigna'] },
+  { key: 'DEVOTED',   label: 'Devoted',   patterns: ['devoted'] },
+  { key: 'BCBS',      label: 'BCBS',      patterns: ['bcbs', 'blue cross', 'blue shield'] },
+  { key: 'OTHER',     label: 'Other',     patterns: null }, // catch-all
+];
+function bucketFor(insurance) {
+  if (!insurance) return 'OTHER';
+  var lo = String(insurance).toLowerCase();
+  for (var i = 1; i < INSURANCE_BUCKETS.length - 1; i++) { // skip ALL + OTHER
+    if (INSURANCE_BUCKETS[i].patterns.some(function(p) { return lo.indexOf(p) >= 0; })) {
+      return INSURANCE_BUCKETS[i].key;
+    }
+  }
+  return 'OTHER';
+}
+
 export default function AuthCoordDashboard() {
   const { profile } = useAuth();
   const [auths, setAuths] = useState([]);
   const [renewalTasks, setRenewalTasks] = useState([]);
+  const [activityLog, setActivityLog] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('today');
-  const [filterRegion, setFilterRegion] = useState('ALL');
-  const [filterInsurance, setFilterInsurance] = useState('ALL');
+  // Filter state — "My Queue" toggle, insurance carrier, action filter
+  const [myQueueOnly, setMyQueueOnly] = useState(true);
+  const [carrierTab, setCarrierTab] = useState('ALL');
+  const [actionFilter, setActionFilter] = useState(null); // null | 'renewals_7d' | 'stalled' | 'unassigned' | 'denied'
   const [search, setSearch] = useState('');
   const [editAuth, setEditAuth] = useState(null);
+  const [savingStatusId, setSavingStatusId] = useState(null);
 
+  const profileName = profile?.full_name || profile?.email || '';
+  const isAdminView = ['super_admin','admin','ceo','director'].indexOf(profile?.role) >= 0;
   const regionScope = useAssignedRegions();
 
   const load = useCallback(async () => {
@@ -281,57 +332,145 @@ export default function AuthCoordDashboard() {
     if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setAuths([]); setRenewalTasks([]); setLoading(false); return;
     }
-    // 2026-05-17: paginate so auth team sees all rows even as auth_tracker grows
-    const [a, r] = await Promise.all([
+    // Pull auths, renewal tasks, AND today's activity (for self-accountability widget)
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+    const [a, r, al] = await Promise.all([
       fetchAllPages(regionScope.applyToQuery(supabase.from('auth_tracker').select('*').order('auth_expiry_date', { ascending: true }))),
       fetchAllPages(regionScope.applyToQuery(supabase.from('auth_renewal_tasks').select('*').not('task_status', 'in', '("approved","denied","closed")').order('days_until_expiry', { ascending: true }))),
+      fetchAllPages(supabase.from('coordinator_activity_log')
+        .select('coordinator_name,action_type,resource_type,resource_id,detail,created_at')
+        .eq('coordinator_name', profileName)
+        .gte('created_at', todayStart.toISOString())
+        .order('created_at', { ascending: false })),
     ]);
     setAuths(a || []);
     setRenewalTasks(r || []);
+    setActivityLog(al || []);
     setLoading(false);
-  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+  }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions), profileName]);
 
   useEffect(() => { load(); }, [load]);
-  useRealtimeTable(['auth_tracker', 'auth_renewal_tasks'], load);
- 
+  useRealtimeTable(['auth_tracker', 'auth_renewal_tasks', 'coordinator_activity_log'], load);
+
+  // ── Inline status toggle — no modal needed for the common case ─────────
+  // Used by the row-level status pill buttons. Updates auth_status and
+  // logs the change so it shows in the Recent Activity widget immediately.
+  async function quickToggleStatus(authId, currentStatus, newStatus) {
+    if (currentStatus === newStatus) return;
+    setSavingStatusId(authId);
+    try {
+      await safeUpdate('auth_tracker', authId, {
+        auth_status: newStatus,
+        updated_at: new Date().toISOString(),
+        updated_by: profileName,
+      });
+      // Optimistic UI update so the change is instant
+      setAuths(function(prev) { return prev.map(function(a) { return a.id === authId ? Object.assign({}, a, { auth_status: newStatus }) : a; }); });
+      // Log so it shows in Recent Activity sidebar
+      try {
+        await logActivity({
+          action_type: 'auth_status_change',
+          resource_type: 'auth_tracker',
+          resource_id: authId,
+          detail: 'Status: ' + currentStatus + ' → ' + newStatus,
+        });
+      } catch (e) { /* non-blocking */ }
+    } catch (err) {
+      console.error('quickToggleStatus failed:', err);
+      alert('Status update failed: ' + (err.message || err));
+    }
+    setSavingStatusId(null);
+  }
+
   const enriched = useMemo(() => auths.map(a => ({
     ...a,
     daysUntilExpiry: daysUntil(a.auth_expiry_date),
+    daysSinceSubmitted: a.auth_submitted_date ? Math.floor((Date.now() - new Date(a.auth_submitted_date + 'T00:00:00').getTime()) / 86400000) : null,
     visitsRemaining: Math.max(0, (a.visits_authorized || 0) - (a.visits_used || 0)),
     utilizationPct: a.visits_authorized > 0 ? Math.round((a.visits_used / a.visits_authorized) * 100) : 0,
-  })), [auths]);
- 
+    carrier: bucketFor(a.insurance),
+    isMine: !!(a.assigned_to && profileName && a.assigned_to.toLowerCase().trim() === profileName.toLowerCase().trim()),
+  })), [auths, profileName]);
+
+  // Personal stats for the right-sidebar KPI block
+  const myStats = useMemo(() => {
+    const mine = enriched.filter(a => a.isMine);
+    const approved = mine.filter(a => /^(active|approved)$/i.test(a.auth_status || '')).length;
+    const totalDecided = mine.filter(a => /^(active|approved|denied)$/i.test(a.auth_status || '')).length;
+    const lags = mine
+      .filter(a => a.auth_submitted_date && a.auth_approved_date)
+      .map(a => {
+        const s = new Date(a.auth_submitted_date + 'T00:00:00');
+        const e = new Date(a.auth_approved_date + 'T00:00:00');
+        return Math.round((e - s) / 86400000);
+      })
+      .filter(d => d >= 0);
+    const medianLag = lags.length > 0 ? lags.sort((x,y) => x-y)[Math.floor(lags.length/2)] : null;
+    return {
+      myQueueSize: mine.length,
+      myApprovalRate: totalDecided > 0 ? Math.round((approved / totalDecided) * 100) : null,
+      myMedianDays: medianLag,
+      myActionsToday: activityLog.length,
+    };
+  }, [enriched, activityLog]);
+
+  // Counts for "Today's Actions" checklist (right sidebar)
+  const actionCounts = useMemo(() => {
+    const scope = myQueueOnly ? enriched.filter(a => a.isMine) : enriched;
+    return {
+      renewals_7d:  scope.filter(a => /^(active|approved)$/i.test(a.auth_status || '') && a.daysUntilExpiry !== null && a.daysUntilExpiry <= 7).length,
+      stalled:      scope.filter(a => /^(submitted|pending)$/i.test(a.auth_status || '') && a.daysSinceSubmitted !== null && a.daysSinceSubmitted > 5).length,
+      unassigned:   enriched.filter(a => !a.assigned_to && /^(submitted|pending)$/i.test(a.auth_status || '')).length, // always all, since these need triage
+      denied:       scope.filter(a => /^(denied|denial)$/i.test(a.auth_status || '')).length,
+    };
+  }, [enriched, myQueueOnly]);
+
+  // Top stats for the urgent banner / header
   const stats = useMemo(() => {
-    const active = enriched.filter(a => a.auth_status === 'active');
+    const active = enriched.filter(a => /^(active|approved)$/i.test(a.auth_status || ''));
     return {
       totalActive: active.length,
       expiringToday: active.filter(a => a.daysUntilExpiry !== null && a.daysUntilExpiry <= 0).length,
       expiring7: active.filter(a => a.daysUntilExpiry !== null && a.daysUntilExpiry > 0 && a.daysUntilExpiry <= 7).length,
-      expiring14: active.filter(a => a.daysUntilExpiry !== null && a.daysUntilExpiry > 7 && a.daysUntilExpiry <= 14).length,
-      lowVisits: active.filter(a => a.visitsRemaining <= 4).length,
-      pending: enriched.filter(a => a.auth_status === 'pending').length,
       urgentRenewals: renewalTasks.filter(r => r.priority === 'urgent').length,
     };
   }, [enriched, renewalTasks]);
- 
+
+  // Main filtered list — what shows in the LEFT column
   const filtered = useMemo(() => {
     let list = enriched;
-    if (activeTab === 'today')    list = list.filter(a => a.auth_status === 'active' && a.daysUntilExpiry !== null && a.daysUntilExpiry <= 7);
-    if (activeTab === 'expiring') list = list.filter(a => a.auth_status === 'active' && a.daysUntilExpiry !== null && a.daysUntilExpiry <= 14);
-    if (activeTab === 'pending')  list = list.filter(a => a.auth_status === 'pending');
-    if (activeTab === 'low')      list = list.filter(a => a.auth_status === 'active' && a.visitsRemaining <= 4);
-    if (activeTab === 'all')      list = list.filter(a => a.auth_status === 'active');
-    if (filterRegion !== 'ALL')   list = list.filter(a => a.region === filterRegion);
-    if (filterInsurance !== 'ALL') list = list.filter(a => a.insurance === filterInsurance);
+    if (myQueueOnly && !isAdminView) list = list.filter(a => a.isMine);
+    if (myQueueOnly && isAdminView)  list = list.filter(a => a.isMine);
+    if (carrierTab !== 'ALL')        list = list.filter(a => a.carrier === carrierTab);
+    if (actionFilter === 'renewals_7d') list = list.filter(a => /^(active|approved)$/i.test(a.auth_status || '') && a.daysUntilExpiry !== null && a.daysUntilExpiry <= 7);
+    if (actionFilter === 'stalled')     list = list.filter(a => /^(submitted|pending)$/i.test(a.auth_status || '') && a.daysSinceSubmitted !== null && a.daysSinceSubmitted > 5);
+    if (actionFilter === 'unassigned')  list = list.filter(a => !a.assigned_to && /^(submitted|pending)$/i.test(a.auth_status || ''));
+    if (actionFilter === 'denied')      list = list.filter(a => /^(denied|denial)$/i.test(a.auth_status || ''));
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(a => `${a.patient_name} ${a.insurance} ${a.auth_number||''} ${a.assigned_to||''}`.toLowerCase().includes(q));
+      list = list.filter(a => `${a.patient_name} ${a.insurance} ${a.auth_number||''} ${a.region||''}`.toLowerCase().includes(q));
     }
     return list.sort((a, b) => (a.daysUntilExpiry ?? 999) - (b.daysUntilExpiry ?? 999));
-  }, [enriched, activeTab, filterRegion, filterInsurance, search]);
- 
-  const uniqueInsurances = [...new Set(auths.map(a => a.insurance).filter(Boolean))].sort();
-  const uniqueRegions = [...new Set(auths.map(a => a.region).filter(Boolean))].sort();
+  }, [enriched, myQueueOnly, isAdminView, carrierTab, actionFilter, search]);
+
+  // Carrier tab counts for the carrier strip
+  const carrierCounts = useMemo(() => {
+    var pre = enriched;
+    if (myQueueOnly && !isAdminView) pre = pre.filter(a => a.isMine);
+    if (myQueueOnly && isAdminView)  pre = pre.filter(a => a.isMine);
+    var out = { ALL: pre.length };
+    INSURANCE_BUCKETS.forEach(b => { if (b.key !== 'ALL') out[b.key] = pre.filter(a => a.carrier === b.key).length; });
+    return out;
+  }, [enriched, myQueueOnly, isAdminView]);
+
+  // Pending Follow-Up list — auths submitted but not approved, with last-touch info
+  const followUpList = useMemo(() => {
+    var scope = myQueueOnly ? enriched.filter(a => a.isMine) : enriched;
+    return scope
+      .filter(a => /^(submitted|pending)$/i.test(a.auth_status || '') && a.daysSinceSubmitted !== null && a.daysSinceSubmitted >= 3)
+      .sort((a, b) => (b.daysSinceSubmitted || 0) - (a.daysSinceSubmitted || 0))
+      .slice(0, 12);
+  }, [enriched, myQueueOnly]);
  
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
@@ -339,9 +478,10 @@ export default function AuthCoordDashboard() {
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading authorization data...</div>
     </div>
   );
- 
+
   const today = new Date().toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
- 
+
+  // Render the new 2-column workflow layout
   return (
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
@@ -363,134 +503,288 @@ export default function AuthCoordDashboard() {
         </div>
       )}
  
-      <div style={{ flex:1, overflowY:'auto' }}>
-        <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
- 
-          {/* KPI Strip */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
-            {[
-              { label:'Active Auths',   val:stats.totalActive,    color:'#059669', bg:'#ECFDF5', tab:'all' },
-              { label:'🔴 Expired/Today', val:stats.expiringToday, color:'#DC2626', bg:'#FEF2F2', tab:'today' },
-              { label:'🟠 This Week',   val:stats.expiring7,      color:'#D97706', bg:'#FEF3C7', tab:'today' },
-              { label:'⚠ Next 14 Days', val:stats.expiring14,     color:'#7C3AED', bg:'#F5F3FF', tab:'expiring' },
-              { label:'⬇ Low Visits',  val:stats.lowVisits,      color:'#DC2626', bg:'#FEF2F2', tab:'low' },
-              { label:'📋 Pending Auth', val:stats.pending,        color:'#1565C0', bg:'#EFF6FF', tab:'pending' },
-            ].map(c => (
-              <div key={c.label} onClick={() => setActiveTab(c.tab)}
-                style={{ background:c.bg, border:`2px solid ${activeTab===c.tab?c.color:'var(--border)'}`, borderRadius:10, padding:'10px 12px', textAlign:'center', cursor:'pointer' }}>
-                <div style={{ fontSize:8, fontWeight:700, color:c.color, textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
-                <div style={{ fontSize:24, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:2 }}>{c.val}</div>
-              </div>
-            ))}
-          </div>
- 
-          {/* Tabs + filters */}
-          <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:8, overflow:'hidden', alignSelf:'flex-start' }}>
-            {[
-              { k:'today',    l:'🚨 Action Today' },
-              { k:'expiring', l:'⚠ Next 14 Days' },
-              { k:'low',      l:'⬇ Low Visits' },
-              { k:'pending',  l:'📋 Pending' },
-              { k:'all',      l:'All Active' },
-            ].map(t => (
-              <button key={t.k} onClick={() => setActiveTab(t.k)}
-                style={{ padding:'7px 14px', border:'none', fontSize:11, fontWeight:activeTab===t.k?700:400, cursor:'pointer', background:activeTab===t.k?'#0F1117':'var(--card-bg)', color:activeTab===t.k?'#fff':'var(--gray)', borderRight:'1px solid var(--border)' }}>
-                {t.l}
+      {/* ─── 2-COLUMN WORKFLOW LAYOUT ────────────────────────────── */}
+      <div style={{ flex:1, overflowY:'auto', background:'var(--bg)' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'minmax(0, 1fr) 340px', gap:16, padding:16, alignItems:'start' }}>
+
+          {/* ═══ LEFT COLUMN — My Queue + Pending Follow-Up ═══ */}
+          <div style={{ display:'flex', flexDirection:'column', gap:12, minWidth:0 }}>
+
+            {/* My Queue / All Queue toggle + search */}
+            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, padding:'10px 14px', display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+              <button onClick={() => setMyQueueOnly(true)}
+                style={{ padding:'5px 12px', border:'1px solid '+(myQueueOnly?'#1565C0':'var(--border)'), background:myQueueOnly?'#1565C0':'var(--card-bg)', color:myQueueOnly?'#fff':'var(--gray)', borderRadius:6, fontSize:11, fontWeight:700, cursor:'pointer' }}>
+                👤 My Queue ({enriched.filter(a => a.isMine).length})
               </button>
-            ))}
-          </div>
- 
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patient, insurance, auth #..."
-              style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)', width:220 }} />
-            <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
-              style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)' }}>
-              <option value="ALL">All Regions</option>
-              {uniqueRegions.map(r => <option key={r} value={r}>Region {r}</option>)}
-            </select>
-            <select value={filterInsurance} onChange={e => setFilterInsurance(e.target.value)}
-              style={{ padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--card-bg)', maxWidth:180 }}>
-              <option value="ALL">All Insurance</option>
-              {uniqueInsurances.map(i => <option key={i} value={i}>{i}</option>)}
-            </select>
-            <div style={{ marginLeft:'auto', fontSize:11, color:'var(--gray)' }}>{filtered.length} records</div>
-          </div>
- 
-          {/* Auth Table */}
-          <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-            <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.4fr 0.5fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.7fr 1fr', padding:'8px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
-              <span>Patient</span><span>Rgn</span><span>Disc.</span><span>Insurance</span><span>Auth #</span><span>Expires</span><span>Days Left</span><span>Visits Auth</span><span>Visits Left</span><span>Assigned To</span>
+              <button onClick={() => setMyQueueOnly(false)}
+                style={{ padding:'5px 12px', border:'1px solid '+(!myQueueOnly?'#1565C0':'var(--border)'), background:!myQueueOnly?'#1565C0':'var(--card-bg)', color:!myQueueOnly?'#fff':'var(--gray)', borderRadius:6, fontSize:11, fontWeight:700, cursor:'pointer' }}>
+                🌐 All Auths ({enriched.length})
+              </button>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patient, insurance, auth #..."
+                style={{ padding:'5px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:11, outline:'none', background:'var(--bg)', flex:1, minWidth:180 }} />
+              {actionFilter && (
+                <button onClick={() => setActionFilter(null)} style={{ padding:'4px 10px', background:'#FEF3C7', color:'#92400E', border:'1px solid #FCD34D', borderRadius:5, fontSize:10, fontWeight:700, cursor:'pointer' }}>
+                  ✕ Clear action filter
+                </button>
+              )}
+              <div style={{ marginLeft:'auto', fontSize:10, color:'var(--gray)' }}>{filtered.length} records</div>
             </div>
-            {filtered.length === 0 ? (
-              <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
-                {activeTab === 'today' ? '✅ No auths expiring this week — clear!' : 'No records match filters.'}
-              </div>
-            ) : filtered.map((a, i) => {
-              const dc = urgencyColor(a.daysUntilExpiry);
-              const rowBg = a.daysUntilExpiry !== null && a.daysUntilExpiry <= 7 ? '#FFF5F5' : a.daysUntilExpiry !== null && a.daysUntilExpiry <= 14 ? '#FFFBEB' : i%2===0?'var(--card-bg)':'var(--bg)';
-              return (
-                <div key={a.id} onClick={() => setEditAuth(a)}
-                  style={{ display:'grid', gridTemplateColumns:'1.8fr 0.4fr 0.5fr 1fr 0.9fr 0.7fr 0.7fr 0.8fr 0.7fr 1fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8, cursor:'pointer' }}
-                  onMouseEnter={e => e.currentTarget.style.background='#EFF6FF'}
-                  onMouseLeave={e => e.currentTarget.style.background=rowBg}>
-                  <div>
-                    <div style={{ fontSize:12, fontWeight:600 }}>{a.patient_name}</div>
-                    <div style={{ fontSize:9, color:'var(--gray)' }}>{a.pcp_name || '—'}</div>
-                  </div>
-                  <span style={{ fontSize:11, fontWeight:700, color:'var(--gray)' }}>{a.region}</span>
-                  {(() => { const _dc = {PT:'#1565C0',OT:'#7C3AED','PT/OT':'#059669',PTA:'#0891B2',COTA:'#DB2777'}; const _bg = {PT:'#EFF6FF',OT:'#EDE9FE','PT/OT':'#ECFDF5',PTA:'#ECFEFF',COTA:'#FDF2F8'}; return (
-                    <span style={{ fontSize:9, fontWeight:800, color:_dc[a.auth_discipline]||'#9CA3AF', background:a.auth_discipline?_bg[a.auth_discipline]||'#F3F4F6':'#F3F4F6', padding:'2px 6px', borderRadius:4, textAlign:'center' }}>
-                      {a.auth_discipline || '—'}
-                    </span>
-                  ); })()}
-                  <span style={{ fontSize:11 }}>{a.insurance}</span>
-                  <span style={{ fontSize:11, fontFamily:'DM Mono, monospace', color:a.auth_number?'var(--black)':'#9CA3AF', fontStyle:a.auth_number?'normal':'italic' }}>
-                    {a.auth_number || 'Not entered'}
-                  </span>
-                  <span style={{ fontSize:11, color:dc, fontWeight:a.daysUntilExpiry!==null&&a.daysUntilExpiry<=14?700:400 }}>{fmtDate(a.auth_expiry_date)}</span>
-                  <div style={{ fontSize:16, fontWeight:900, fontFamily:'DM Mono, monospace', color:dc }}>
-                    {a.daysUntilExpiry !== null ? (a.daysUntilExpiry <= 0 ? 'EXP' : a.daysUntilExpiry) : '—'}
-                  </div>
-                  <div>
-                    <div style={{ fontSize:12, fontWeight:600 }}>{a.visits_authorized || '—'}</div>
-                    <div style={{ fontSize:9, color:'var(--gray)' }}>{a.visits_used || 0} used</div>
-                  </div>
-                  <span style={{ fontSize:14, fontWeight:700, fontFamily:'DM Mono, monospace', color:a.visitsRemaining<=4?'#DC2626':a.visitsRemaining<=8?'#D97706':'#059669' }}>
-                    {a.visitsRemaining}
-                  </span>
-                  <span style={{ fontSize:11, color:a.assigned_to?'#1565C0':'#9CA3AF', fontStyle:a.assigned_to?'normal':'italic' }}>
-                    {a.assigned_to || 'Unassigned'}
-                  </span>
+
+            {/* Insurance carrier tabs — auth rules vary by carrier */}
+            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, padding:'8px 10px', display:'flex', gap:4, flexWrap:'wrap' }}>
+              {INSURANCE_BUCKETS.map(b => (
+                <button key={b.key} onClick={() => setCarrierTab(b.key)}
+                  style={{
+                    padding:'5px 10px', border:'1px solid '+(carrierTab===b.key?'#7C3AED':'transparent'),
+                    background:carrierTab===b.key?'#F5F3FF':'transparent',
+                    color:carrierTab===b.key?'#7C3AED':'var(--gray)',
+                    borderRadius:5, fontSize:10, fontWeight:700, cursor:'pointer',
+                  }}>
+                  {b.label} <span style={{ opacity:0.6, fontWeight:400 }}>{carrierCounts[b.key] || 0}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* My Queue (or All Queue) table with INLINE STATUS TOGGLES */}
+            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+              <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'baseline' }}>
+                <div style={{ fontSize:12, fontWeight:800, color:'var(--black)' }}>
+                  {actionFilter === 'renewals_7d' ? '⏰ Renewals expiring in 7 days'
+                   : actionFilter === 'stalled' ? '🪦 Stalled auths (submitted >5d)'
+                   : actionFilter === 'unassigned' ? '⚠ Unassigned (needs triage)'
+                   : actionFilter === 'denied' ? '✗ Denied auths'
+                   : myQueueOnly ? '👤 My Auth Queue' : '🌐 All Authorizations'}
                 </div>
-              );
-            })}
-          </div>
- 
-          {/* Renewal Tasks panel */}
-          {renewalTasks.length > 0 && (
-            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-              <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between' }}>
-                <div style={{ fontSize:13, fontWeight:800 }}>🔄 Open Renewal Tasks</div>
-                <span style={{ fontSize:11, color:'#DC2626', fontWeight:700 }}>{renewalTasks.filter(r=>r.priority==='urgent').length} urgent</span>
+                <span style={{ fontSize:10, color:'var(--gray)' }}>sorted by days-to-expiry</span>
               </div>
-              {renewalTasks.slice(0,10).map((r,i) => {
-                const pc = r.priority==='urgent' ? { color:'#DC2626', bg:'#FEF2F2' } : { color:'#D97706', bg:'#FEF3C7' };
+              {filtered.length === 0 ? (
+                <div style={{ padding:30, textAlign:'center', color:'#10B981', fontSize:12 }}>
+                  ✅ Nothing to action here right now.
+                </div>
+              ) : (
+                <div style={{ maxHeight:540, overflowY:'auto' }}>
+                  {filtered.slice(0, 60).map((a, i) => {
+                    const dc = urgencyColor(a.daysUntilExpiry);
+                    const rowBg = a.daysUntilExpiry !== null && a.daysUntilExpiry <= 7 ? '#FFF5F5'
+                                : a.daysUntilExpiry !== null && a.daysUntilExpiry <= 14 ? '#FFFBEB'
+                                : i%2===0?'var(--card-bg)':'var(--bg)';
+                    const isSaving = savingStatusId === a.id;
+                    return (
+                      <div key={a.id} style={{ borderBottom:'1px solid var(--border)', background:rowBg, padding:'10px 14px' }}>
+                        <div style={{ display:'grid', gridTemplateColumns:'1.5fr 80px 90px 1fr auto', gap:8, alignItems:'center' }}>
+                          {/* Patient + region */}
+                          <div onClick={() => setEditAuth(a)} style={{ cursor:'pointer', minWidth:0 }}>
+                            <div style={{ fontSize:12, fontWeight:700, color:'var(--black)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                              {a.patient_name}
+                            </div>
+                            <div style={{ fontSize:10, color:'var(--gray)' }}>
+                              Region {a.region} · {a.insurance || '—'}
+                            </div>
+                          </div>
+                          {/* Days to expiry */}
+                          <div style={{ textAlign:'center' }}>
+                            <div style={{ fontSize:16, fontWeight:900, fontFamily:'DM Mono, monospace', color:dc }}>
+                              {a.daysUntilExpiry !== null ? (a.daysUntilExpiry <= 0 ? 'EXP' : a.daysUntilExpiry + 'd') : '—'}
+                            </div>
+                            <div style={{ fontSize:8, color:'var(--gray)', textTransform:'uppercase' }}>to expiry</div>
+                          </div>
+                          {/* Visits remaining */}
+                          <div style={{ textAlign:'center' }}>
+                            <div style={{ fontSize:14, fontWeight:800, fontFamily:'DM Mono, monospace', color:a.visitsRemaining<=4?'#DC2626':a.visitsRemaining<=8?'#D97706':'#059669' }}>
+                              {a.visitsRemaining}/{a.visits_authorized || 0}
+                            </div>
+                            <div style={{ fontSize:8, color:'var(--gray)', textTransform:'uppercase' }}>visits left</div>
+                          </div>
+                          {/* INLINE STATUS TOGGLE — no modal */}
+                          <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
+                            {['pending','submitted','active','denied'].map(st => {
+                              const isCurrent = (a.auth_status || '').toLowerCase() === st;
+                              const stColors = { pending:'#1565C0', submitted:'#D97706', active:'#059669', denied:'#DC2626' };
+                              return (
+                                <button key={st}
+                                  disabled={isSaving}
+                                  onClick={() => quickToggleStatus(a.id, a.auth_status, st)}
+                                  title={'Set status to ' + st}
+                                  style={{
+                                    padding:'3px 7px', fontSize:9, fontWeight:700, textTransform:'uppercase',
+                                    border:'1px solid '+(isCurrent?stColors[st]:'var(--border)'),
+                                    background:isCurrent?stColors[st]:'var(--card-bg)',
+                                    color:isCurrent?'#fff':stColors[st],
+                                    borderRadius:4, cursor:isSaving?'wait':'pointer', opacity:isSaving?0.5:1,
+                                  }}>
+                                  {st}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {/* Edit button (modal for everything else) */}
+                          <button onClick={() => setEditAuth(a)}
+                            style={{ padding:'4px 10px', background:'#0F1117', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:700, cursor:'pointer' }}>
+                            Edit →
+                          </button>
+                        </div>
+                        {/* Sub-row: assigned + auth # + submitted-days */}
+                        <div style={{ marginTop:5, display:'flex', gap:14, fontSize:9, color:'var(--gray)' }}>
+                          {a.assigned_to && <span>👤 {a.assigned_to}</span>}
+                          {!a.assigned_to && <span style={{ color:'#DC2626', fontWeight:700 }}>⚠ Unassigned</span>}
+                          {a.auth_number && <span style={{ fontFamily:'DM Mono, monospace' }}>#{a.auth_number}</span>}
+                          {a.daysSinceSubmitted !== null && <span>Submitted {a.daysSinceSubmitted}d ago</span>}
+                          {a.auth_expiry_date && <span>Expires {fmtDate(a.auth_expiry_date)}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {filtered.length > 60 && (
+                    <div style={{ padding:10, textAlign:'center', fontSize:10, color:'var(--gray)' }}>
+                      Showing 60 of {filtered.length} · refine filters or search
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Pending Follow-Up panel — chase list */}
+            {followUpList.length > 0 && (
+              <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+                <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between' }}>
+                  <div style={{ fontSize:12, fontWeight:800, color:'var(--black)' }}>📞 Pending Follow-Up</div>
+                  <span style={{ fontSize:10, color:'var(--gray)' }}>Submitted ≥3d ago, no approval · chase list</span>
+                </div>
+                {followUpList.map(a => (
+                  <div key={a.id} onClick={() => setEditAuth(a)}
+                    style={{ display:'grid', gridTemplateColumns:'1.5fr 80px 90px 90px auto', padding:'8px 14px', borderBottom:'1px solid var(--border)', cursor:'pointer', alignItems:'center', gap:8 }}>
+                    <div>
+                      <div style={{ fontSize:11, fontWeight:700 }}>{a.patient_name}</div>
+                      <div style={{ fontSize:9, color:'var(--gray)' }}>{a.insurance} · Rgn {a.region}</div>
+                    </div>
+                    <span style={{ fontSize:10, color:'var(--gray)' }}>{fmtDate(a.auth_submitted_date)}</span>
+                    <span style={{ fontSize:13, fontFamily:'DM Mono, monospace', fontWeight:800, color: a.daysSinceSubmitted > 10 ? '#DC2626' : '#D97706' }}>
+                      {a.daysSinceSubmitted}d
+                    </span>
+                    <span style={{ fontSize:10, color: a.assigned_to ? '#1565C0' : '#DC2626', fontWeight: a.assigned_to ? 400 : 700 }}>
+                      {a.assigned_to || '⚠ Unassigned'}
+                    </span>
+                    <button onClick={(e) => { e.stopPropagation(); quickToggleStatus(a.id, a.auth_status, 'active'); }}
+                      title="Mark approved (auth received)"
+                      style={{ padding:'3px 8px', background:'#059669', color:'#fff', border:'none', borderRadius:4, fontSize:9, fontWeight:700, cursor:'pointer' }}>
+                      ✓ Approved
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ═══ RIGHT COLUMN — Sticky Actions + Stats + Activity ═══ */}
+          <div style={{ position:'sticky', top:16, display:'flex', flexDirection:'column', gap:12 }}>
+
+            {/* Today's Actions checklist */}
+            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+              <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border)', background:'#0F1117', color:'#fff' }}>
+                <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', letterSpacing:'0.06em' }}>Today's Actions</div>
+                <div style={{ fontSize:9, color:'rgba(255,255,255,0.6)', marginTop:2 }}>Click any item to filter the queue</div>
+              </div>
+              {[
+                { key:'renewals_7d', icon:'⏰', label:'Renewals expiring ≤7d', count:actionCounts.renewals_7d, color:'#DC2626' },
+                { key:'stalled',     icon:'🪦', label:'Stalled (>5d no approval)', count:actionCounts.stalled, color:'#D97706' },
+                { key:'unassigned',  icon:'⚠',  label:'Unassigned (needs triage)', count:actionCounts.unassigned, color:'#991B1B' },
+                { key:'denied',      icon:'✗',  label:'Denied — appeal/replace', count:actionCounts.denied, color:'#7C3AED' },
+              ].map(item => {
+                const isActive = actionFilter === item.key;
                 return (
-                  <div key={r.id} style={{ display:'grid', gridTemplateColumns:'1.8fr 0.4fr 0.9fr 0.6fr 0.6fr 1fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:i%2===0?'var(--card-bg)':'var(--bg)', alignItems:'center', gap:8 }}>
-                    <div style={{ fontSize:12, fontWeight:600 }}>{r.patient_name}</div>
-                    <span style={{ fontSize:11, color:'var(--gray)' }}>{r.region}</span>
-                    <span style={{ fontSize:11 }}>{r.insurance}</span>
-                    <span style={{ fontSize:10, fontWeight:700, color:pc.color, background:pc.bg, padding:'2px 6px', borderRadius:999 }}>{r.priority}</span>
-                    <span style={{ fontSize:12, fontWeight:700, color:urgencyColor(r.days_until_expiry) }}>{r.days_until_expiry}d</span>
-                    <span style={{ fontSize:11, color:r.assigned_to?'#1565C0':'#9CA3AF', fontStyle:r.assigned_to?'normal':'italic' }}>{r.assigned_to||'Unassigned'}</span>
+                  <div key={item.key} onClick={() => setActionFilter(isActive ? null : item.key)}
+                    style={{ padding:'10px 14px', borderBottom:'1px solid var(--border)', cursor:'pointer', background:isActive?'#FEF3C7':'transparent', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <span style={{ fontSize:14 }}>{item.icon}</span>
+                      <span style={{ fontSize:11, fontWeight:600, color:'var(--black)' }}>{item.label}</span>
+                    </div>
+                    <span style={{ fontSize:14, fontWeight:900, fontFamily:'DM Mono, monospace', color:item.count>0?item.color:'#9CA3AF' }}>
+                      {item.count}
+                    </span>
                   </div>
                 );
               })}
             </div>
-          )}
+
+            {/* My Personal Stats */}
+            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+              <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border)' }}>
+                <div style={{ fontSize:11, fontWeight:800, color:'var(--black)', textTransform:'uppercase', letterSpacing:'0.06em' }}>My Performance</div>
+                <div style={{ fontSize:9, color:'var(--gray)', marginTop:2 }}>{profileName || 'unknown'}</div>
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:1, background:'var(--border)' }}>
+                <div style={{ padding:'10px 12px', background:'var(--card-bg)', textAlign:'center' }}>
+                  <div style={{ fontSize:8, color:'var(--gray)', fontWeight:700, textTransform:'uppercase' }}>Queue Size</div>
+                  <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', marginTop:2 }}>{myStats.myQueueSize}</div>
+                </div>
+                <div style={{ padding:'10px 12px', background:'var(--card-bg)', textAlign:'center' }}>
+                  <div style={{ fontSize:8, color:'var(--gray)', fontWeight:700, textTransform:'uppercase' }}>Approval Rate</div>
+                  <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', marginTop:2, color: myStats.myApprovalRate >= 80 ? '#059669' : myStats.myApprovalRate >= 60 ? '#D97706' : '#DC2626' }}>
+                    {myStats.myApprovalRate !== null ? myStats.myApprovalRate + '%' : '—'}
+                  </div>
+                </div>
+                <div style={{ padding:'10px 12px', background:'var(--card-bg)', textAlign:'center' }}>
+                  <div style={{ fontSize:8, color:'var(--gray)', fontWeight:700, textTransform:'uppercase' }}>Median Days</div>
+                  <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', marginTop:2 }}>
+                    {myStats.myMedianDays !== null ? myStats.myMedianDays + 'd' : '—'}
+                  </div>
+                  <div style={{ fontSize:8, color:'var(--gray)' }}>submit → approve</div>
+                </div>
+                <div style={{ padding:'10px 12px', background:'var(--card-bg)', textAlign:'center' }}>
+                  <div style={{ fontSize:8, color:'var(--gray)', fontWeight:700, textTransform:'uppercase' }}>Actions Today</div>
+                  <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', marginTop:2, color:'#1565C0' }}>{myStats.myActionsToday}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Recent Activity feed */}
+            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+              <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border)' }}>
+                <div style={{ fontSize:11, fontWeight:800, color:'var(--black)', textTransform:'uppercase', letterSpacing:'0.06em' }}>My Recent Activity</div>
+                <div style={{ fontSize:9, color:'var(--gray)' }}>Last actions you took today</div>
+              </div>
+              {activityLog.length === 0 ? (
+                <div style={{ padding:20, textAlign:'center', fontSize:11, color:'var(--gray)' }}>
+                  No activity logged yet today.
+                </div>
+              ) : (
+                <div style={{ maxHeight:240, overflowY:'auto' }}>
+                  {activityLog.slice(0, 10).map((act, i) => {
+                    const time = new Date(act.created_at).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+                    return (
+                      <div key={i} style={{ padding:'7px 14px', borderBottom:'1px solid var(--border)', fontSize:10 }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', gap:8 }}>
+                          <span style={{ fontWeight:600, color:'var(--black)' }}>{(act.action_type || '').replace(/_/g, ' ')}</span>
+                          <span style={{ color:'var(--gray)', fontFamily:'DM Mono, monospace', fontSize:9 }}>{time}</span>
+                        </div>
+                        {act.detail && <div style={{ color:'var(--gray)', marginTop:2 }}>{act.detail}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Renewal Tasks quick-jump */}
+            {renewalTasks.length > 0 && (
+              <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div>
+                  <div style={{ fontSize:11, fontWeight:800, color:'var(--black)' }}>🔄 Renewal Tasks</div>
+                  <div style={{ fontSize:9, color:'var(--gray)' }}>
+                    {renewalTasks.length} open · {renewalTasks.filter(r=>r.priority==='urgent').length} urgent
+                  </div>
+                </div>
+                <button onClick={() => window.dispatchEvent(new CustomEvent('axiom-navigate', { detail:{ page:'auth-renewals' } }))}
+                  style={{ padding:'5px 10px', background:'#7C3AED', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:700, cursor:'pointer' }}>
+                  Open →
+                </button>
+              </div>
+            )}
+          </div>
+
         </div>
       </div>
- 
+
       {editAuth && (
         <AuthEditModal
           auth={editAuth}

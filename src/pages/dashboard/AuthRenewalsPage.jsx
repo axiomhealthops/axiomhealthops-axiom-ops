@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages, safeUpdate, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
@@ -125,20 +125,51 @@ export default function AuthRenewalsPage() {
 
   const regionScope = useAssignedRegions();
 
+  const [savingId, setSavingId] = useState(null);
+
   const load = useCallback(async () => {
     if (regionScope.loading) return;
     if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setTasks([]); setLoading(false); return;
     }
-    const { data } = await regionScope.applyToQuery(
+    // 2026-05-17: paginated
+    const data = await fetchAllPages(regionScope.applyToQuery(
       supabase.from('auth_renewal_tasks').select('*').order('days_until_expiry', { ascending: true })
-    );
+    ));
     setTasks(data || []);
     setLoading(false);
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { load(); }, [load]);
   useRealtimeTable('auth_renewal_tasks', load);
+
+  // Inline status toggle — no modal needed for the common status changes
+  async function quickToggleStatus(taskId, currentStatus, newStatus) {
+    if (currentStatus === newStatus) return;
+    setSavingId(taskId);
+    try {
+      const completes = ['approved','denied','closed'].indexOf(newStatus) >= 0;
+      await safeUpdate('auth_renewal_tasks', taskId, {
+        task_status: newStatus,
+        updated_at: new Date().toISOString(),
+        completed_at: completes ? new Date().toISOString() : null,
+        completed_by: completes ? (profile?.full_name || profile?.email || null) : null,
+      });
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, task_status: newStatus } : t));
+      try {
+        await logActivity({
+          action_type: 'renewal_status_change',
+          resource_type: 'auth_renewal_tasks',
+          resource_id: taskId,
+          detail: 'Status: ' + currentStatus + ' → ' + newStatus,
+        });
+      } catch (e) { /* non-blocking */ }
+    } catch (err) {
+      console.error('quickToggleStatus failed:', err);
+      alert('Status update failed: ' + (err.message || err));
+    }
+    setSavingId(null);
+  }
 
   const filtered = useMemo(() => tasks.filter(t => {
     if (filterStatus !== 'ALL' && t.task_status !== filterStatus) return false;
@@ -204,15 +235,23 @@ export default function AuthRenewalsPage() {
         <div style={{padding:20,display:'flex',flexDirection:'column',gap:16}}>
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12}}>
             {[
-              {label:'🔴 Urgent',val:stats.urgent,color:'#DC2626',bg:'#FEF2F2',sub:'≤7d or ≤4 visits'},
-              {label:'📋 Open Tasks',val:stats.open,color:'#D97706',bg:'#FEF3C7',sub:'Awaiting action'},
-              {label:'⏳ In Progress',val:stats.inProgress,color:'#1565C0',bg:'#EFF6FF',sub:'Being worked'},
-              {label:'⚠ Expiring Soon',val:stats.expiring7,color:'#DC2626',bg:stats.expiring7>0?'#FEF2F2':'var(--card-bg)',sub:'Within 7 days'},
+              // 2026-05-17: KPI tiles are now CLICKABLE filters (gap caught in reports audit)
+              {label:'🔴 Urgent',val:stats.urgent,color:'#DC2626',bg:'#FEF2F2',sub:'≤7d or ≤4 visits',
+                onClick: () => { setFilterPrio('urgent'); setFilterStatus('open'); }},
+              {label:'📋 Open Tasks',val:stats.open,color:'#D97706',bg:'#FEF3C7',sub:'Awaiting action',
+                onClick: () => { setFilterStatus('open'); setFilterPrio('ALL'); }},
+              {label:'⏳ In Progress',val:stats.inProgress,color:'#1565C0',bg:'#EFF6FF',sub:'Being worked',
+                onClick: () => { setFilterStatus('in_progress'); setFilterPrio('ALL'); }},
+              {label:'⚠ Expiring Soon',val:stats.expiring7,color:'#DC2626',bg:stats.expiring7>0?'#FEF2F2':'var(--card-bg)',sub:'Within 7 days',
+                onClick: () => { setFilterStatus('open'); setFilterPrio('urgent'); /* approximation — also need a days filter; for now urgent ≈ ≤7d */ }},
             ].map(c=>(
-              <div key={c.label} style={{background:c.bg,border:'1px solid var(--border)',borderRadius:10,padding:'12px 14px'}}>
+              <div key={c.label} onClick={c.onClick}
+                style={{background:c.bg,border:'1px solid var(--border)',borderRadius:10,padding:'12px 14px',cursor:'pointer',transition:'transform 0.1s, box-shadow 0.15s'}}
+                onMouseEnter={e => { e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'; }}
+                onMouseLeave={e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; }}>
                 <div style={{fontSize:10,fontWeight:700,color:c.color,textTransform:'uppercase',letterSpacing:'0.05em'}}>{c.label}</div>
                 <div style={{fontSize:26,fontWeight:900,fontFamily:'DM Mono, monospace',color:c.color,marginTop:4}}>{c.val}</div>
-                <div style={{fontSize:10,color:'var(--gray)',marginTop:2}}>{c.sub}</div>
+                <div style={{fontSize:10,color:'var(--gray)',marginTop:2}}>{c.sub} · <span style={{color:c.color,fontWeight:700}}>click to filter</span></div>
               </div>
             ))}
           </div>
@@ -222,8 +261,8 @@ export default function AuthRenewalsPage() {
               <div style={{fontSize:14,fontWeight:700}}>Auth Renewal Tasks</div>
               <div style={{fontSize:11,color:'var(--gray)'}}>{filtered.length} tasks · click to manage</div>
             </div>
-            <div style={{display:'grid',gridTemplateColumns:'1.6fr 0.4fr 0.8fr 0.7fr 0.6fr 0.6fr 0.9fr 1fr',padding:'8px 20px',background:'var(--bg)',borderBottom:'1px solid var(--border)',fontSize:10,fontWeight:700,color:'var(--gray)',textTransform:'uppercase',letterSpacing:'0.04em',gap:8}}>
-              <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Expires</span><span>Days Left</span><span>Visits Left</span><span>Status</span><span>Assigned To</span>
+            <div style={{display:'grid',gridTemplateColumns:'1.4fr 50px 0.9fr 80px 70px 70px 1.6fr 110px',padding:'8px 20px',background:'var(--bg)',borderBottom:'1px solid var(--border)',fontSize:10,fontWeight:700,color:'var(--gray)',textTransform:'uppercase',letterSpacing:'0.04em',gap:8}}>
+              <span>Patient</span><span>Rgn</span><span>Insurance</span><span>Expires</span><span>Days</span><span>Visits</span><span>Quick Status (click to change)</span><span>Assigned</span>
             </div>
             {filtered.length===0 ? (
               <div style={{padding:40,textAlign:'center',color:'var(--gray)'}}>No renewal tasks match current filters.</div>
@@ -231,20 +270,41 @@ export default function AuthRenewalsPage() {
               const sc = STATUS_CFG[t.task_status]||STATUS_CFG.open;
               const pc = PRIO_CFG[t.priority]||PRIO_CFG.normal;
               const rowBg = t.priority==='urgent'?'#FFF5F5':t.priority==='high'?'#FFFBEB':i%2===0?'var(--card-bg)':'var(--bg)';
+              const isSaving = savingId === t.id;
               return (
-                <div key={t.id} onClick={()=>setSelected(t)} style={{display:'grid',gridTemplateColumns:'1.6fr 0.4fr 0.8fr 0.7fr 0.6fr 0.6fr 0.9fr 1fr',padding:'10px 20px',borderBottom:'1px solid var(--border)',background:rowBg,alignItems:'center',gap:8,cursor:'pointer'}}
-                  onMouseEnter={e=>e.currentTarget.style.background='#EFF6FF'}
-                  onMouseLeave={e=>e.currentTarget.style.background=rowBg}>
-                  <div>
+                <div key={t.id} style={{display:'grid',gridTemplateColumns:'1.4fr 50px 0.9fr 80px 70px 70px 1.6fr 110px',padding:'10px 20px',borderBottom:'1px solid var(--border)',background:rowBg,alignItems:'center',gap:8}}>
+                  <div onClick={()=>setSelected(t)} style={{cursor:'pointer'}}>
                     <div style={{fontSize:12,fontWeight:600}}>{t.patient_name}</div>
                     <span style={{fontSize:9,fontWeight:700,color:pc.color,background:pc.bg,padding:'1px 6px',borderRadius:999}}>{pc.label}</span>
                   </div>
                   <span style={{fontSize:12,fontWeight:700,color:'var(--gray)'}}>{t.region}</span>
                   <span style={{fontSize:11}}>{t.insurance}</span>
-                  <span style={{fontSize:11,color:t.days_until_expiry<=7?'#DC2626':t.days_until_expiry<=14?'#D97706':'var(--black)',fontWeight:t.days_until_expiry<=14?700:400}}>{fmtDate(t.expiry_date)}</span>
-                  <span style={{fontSize:14,fontWeight:900,fontFamily:'DM Mono, monospace',color:t.days_until_expiry<=7?'#DC2626':t.days_until_expiry<=14?'#D97706':'var(--black)'}}>{t.days_until_expiry}</span>
+                  <span style={{fontSize:10,color:t.days_until_expiry<=7?'#DC2626':t.days_until_expiry<=14?'#D97706':'var(--black)'}}>{fmtDate(t.expiry_date)}</span>
+                  <span style={{fontSize:14,fontWeight:900,fontFamily:'DM Mono, monospace',color:t.days_until_expiry<=7?'#DC2626':t.days_until_expiry<=14?'#D97706':'var(--black)'}}>{t.days_until_expiry}d</span>
                   <span style={{fontSize:14,fontWeight:900,fontFamily:'DM Mono, monospace',color:t.visits_remaining<=4?'#DC2626':t.visits_remaining<=8?'#D97706':'var(--black)'}}>{t.visits_remaining}</span>
-                  <span style={{fontSize:10,fontWeight:700,color:sc.color,background:sc.bg,padding:'2px 8px',borderRadius:999}}>{sc.label}</span>
+                  {/* INLINE STATUS TOGGLE — replaces modal-only workflow */}
+                  <div style={{display:'flex',gap:3,flexWrap:'wrap'}}>
+                    {['open','in_progress','submitted','approved','denied'].map(st => {
+                      const isCurrent = t.task_status === st;
+                      const stColors = { open:'#DC2626', in_progress:'#D97706', submitted:'#1565C0', approved:'#059669', denied:'#6B7280' };
+                      const stLabels = { open:'Open', in_progress:'Working', submitted:'Sub', approved:'✓ Apr', denied:'✗ Den' };
+                      return (
+                        <button key={st}
+                          disabled={isSaving}
+                          onClick={(e) => { e.stopPropagation(); quickToggleStatus(t.id, t.task_status, st); }}
+                          title={'Set status to ' + st}
+                          style={{
+                            padding:'3px 6px', fontSize:9, fontWeight:700,
+                            border:'1px solid '+(isCurrent?stColors[st]:'var(--border)'),
+                            background:isCurrent?stColors[st]:'var(--card-bg)',
+                            color:isCurrent?'#fff':stColors[st],
+                            borderRadius:4, cursor:isSaving?'wait':'pointer', opacity:isSaving?0.5:1,
+                          }}>
+                          {stLabels[st]}
+                        </button>
+                      );
+                    })}
+                  </div>
                   <span style={{fontSize:11,color:t.assigned_to?'var(--black)':'#9CA3AF',fontStyle:t.assigned_to?'normal':'italic'}}>{t.assigned_to||'Unassigned'}</span>
                 </div>
               );
