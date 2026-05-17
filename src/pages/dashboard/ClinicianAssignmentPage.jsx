@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const BLENDED_RATE = 185;
@@ -112,15 +112,15 @@ export default function ClinicianAssignmentPage() {
 
   const load = useCallback(async () => {
     const [v, cl, c] = await Promise.all([
-      supabase.from('visit_schedule_data')
+      fetchAllPages(supabase.from('visit_schedule_data')
         .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region,discipline')
-        .gte('visit_date', weekStart).lte('visit_date', weekEnd),
+        .gte('visit_date', weekStart).lte('visit_date', weekEnd)),
       supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target').eq('is_active', true).order('full_name'),
-      supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,last_visit_clinician,pipeline_assigned_to,pipeline_notes').eq('status','Active'),
+      fetchAllPages(supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,last_visit_clinician,pipeline_assigned_to,pipeline_notes').eq('status','Active')),
     ]);
-    setVisits(v.data || []);
+    setVisits(v || []);
     setClinicians(cl.data || []);
-    setCensus(c.data || []);
+    setCensus(c || []);
     setLoading(false);
   }, [weekStart, weekEnd]);
 

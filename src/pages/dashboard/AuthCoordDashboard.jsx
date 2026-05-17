@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
-import { supabase, safeUpdate, logActivity } from '../../lib/supabase';
+import { supabase, safeUpdate, logActivity, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -281,12 +281,13 @@ export default function AuthCoordDashboard() {
     if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setAuths([]); setRenewalTasks([]); setLoading(false); return;
     }
+    // 2026-05-17: paginate so auth team sees all rows even as auth_tracker grows
     const [a, r] = await Promise.all([
-      regionScope.applyToQuery(supabase.from('auth_tracker').select('*').order('auth_expiry_date', { ascending: true })),
-      regionScope.applyToQuery(supabase.from('auth_renewal_tasks').select('*').not('task_status', 'in', '("approved","denied","closed")').order('days_until_expiry', { ascending: true })),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('auth_tracker').select('*').order('auth_expiry_date', { ascending: true }))),
+      fetchAllPages(regionScope.applyToQuery(supabase.from('auth_renewal_tasks').select('*').not('task_status', 'in', '("approved","denied","closed")').order('days_until_expiry', { ascending: true }))),
     ]);
-    setAuths(a.data || []);
-    setRenewalTasks(r.data || []);
+    setAuths(a || []);
+    setRenewalTasks(r || []);
     setLoading(false);
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 

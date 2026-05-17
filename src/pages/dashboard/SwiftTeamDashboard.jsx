@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
@@ -73,12 +73,13 @@ function FlagPatientModal({ onClose, onSaved, profileName }) {
     if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setCensus([]); return;
     }
-    regionScope.applyToQuery(
+    // 2026-05-17: paginated — 861+ census rows
+    fetchAllPages(regionScope.applyToQuery(
       supabase.from('census_data')
         .select('patient_name, region, insurance, status')
         .not('status', 'ilike', '%discharge%')
         .order('patient_name')
-    ).then(({ data }) => setCensus(data || []));
+    )).then(data => setCensus(data || []));
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   const filteredCensus = useMemo(() => {

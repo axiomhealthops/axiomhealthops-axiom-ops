@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-
-const BLENDED_RATE = 185;
+// 2026-05-17: use shared rate (was hardcoded $185 — drifted from $230)
+import { BLENDED_RATE } from '../../lib/visitMath';
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -46,18 +46,20 @@ export default function RMDailyDashboard() {
     weekStart.setDate(weekStart.getDate() - weekStart.getDay() + (weekStart.getDay()===0?-6:1));
     const weekStartStr = weekStart.toISOString().slice(0,10);
 
+    // 2026-05-17: wrapped at-risk queries with fetchAllPages. Multi-region RMs
+    // with a full week of visits across multiple regions can exceed 1000 rows.
     const [c, v, a, cl, oh] = await Promise.all([
-      supabase.from('census_data').select('*').in('region', myRegions),
-      supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,discipline')
-        .in('region', myRegions).gte('visit_date', weekStartStr),
-      supabase.from('auth_tracker').select('patient_name,region,insurance,auth_status,auth_expiry_date,visits_authorized,visits_used,auth_number,assigned_to')
-        .in('region', myRegions).eq('auth_status','active'),
+      fetchAllPages(supabase.from('census_data').select('*').in('region', myRegions)),
+      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,discipline')
+        .in('region', myRegions).gte('visit_date', weekStartStr)),
+      fetchAllPages(supabase.from('auth_tracker').select('patient_name,region,insurance,auth_status,auth_expiry_date,visits_authorized,visits_used,auth_number,assigned_to')
+        .in('region', myRegions).eq('auth_status','active')),
       supabase.from('clinicians').select('*').eq('is_active', true),
       supabase.from('on_hold_recovery').select('*').in('region', myRegions),
     ]);
-    setCensus(c.data||[]);
-    setVisits(v.data||[]);
-    setAuths(a.data||[]);
+    setCensus(c||[]);
+    setVisits(v||[]);
+    setAuths(a||[]);
     // Filter clinicians client-side for multi-region support
     var regionSet = new Set(myRegions);
     setClinicians((cl.data||[]).filter(function(c) {

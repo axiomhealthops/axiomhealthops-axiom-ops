@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 function monthKey(d) { return d ? String(d).slice(0,7) : null; }
@@ -21,14 +21,16 @@ export default function GrowthTrackerPage() {
   const [loading, setLoading] = useState(true);
 
   function load() {
+    // 2026-05-17: wrapped with fetchAllPages — intake_referrals has 3,906 rows
+    // in production and was silently capped at 1000, dropping ~75% of growth data.
     Promise.all([
-      supabase.from('intake_referrals').select('referral_status,date_received,region,insurance').not('date_received','is',null),
-      supabase.from('visit_schedule_data').select('visit_date,status,event_type,region').not('visit_date','is',null),
-      supabase.from('auth_tracker').select('auth_status,created_at'),
+      fetchAllPages(supabase.from('intake_referrals').select('referral_status,date_received,region,insurance').not('date_received','is',null)),
+      fetchAllPages(supabase.from('visit_schedule_data').select('visit_date,status,event_type,region').not('visit_date','is',null)),
+      fetchAllPages(supabase.from('auth_tracker').select('auth_status,created_at')),
     ]).then(([i,v,a]) => {
-      setIntake(i.data||[]);
-      setVisits(v.data||[]);
-      setAuth(a.data||[]);
+      setIntake(i || []);
+      setVisits(v || []);
+      setAuth(a || []);
       setLoading(false);
     });
   }

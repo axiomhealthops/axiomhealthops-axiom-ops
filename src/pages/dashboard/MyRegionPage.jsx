@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
@@ -66,12 +66,13 @@ export default function MyRegionPage() {
 
   function load() {
     if (myRegions.length === 0) { setLoading(false); return; }
+    // 2026-05-17: paginated at-risk tables
     Promise.all([
-      supabase.from('visit_schedule_data').select('*').in('region', myRegions).not('visit_date','is',null),
-      supabase.from('census_data').select('*').in('region', myRegions),
+      fetchAllPages(supabase.from('visit_schedule_data').select('*').in('region', myRegions).not('visit_date','is',null)),
+      fetchAllPages(supabase.from('census_data').select('*').in('region', myRegions)),
       supabase.from('clinicians').select('*').eq('is_active', true),
-      supabase.from('auth_tracker').select('*').in('region', myRegions),
-      supabase.from('intake_referrals').select('*').in('region', myRegions).not('date_received','is',null),
+      fetchAllPages(supabase.from('auth_tracker').select('*').in('region', myRegions)),
+      fetchAllPages(supabase.from('intake_referrals').select('*').in('region', myRegions).not('date_received','is',null)),
       supabase.from('on_hold_recovery').select('*').in('region', myRegions).eq('recovery_status','on_hold'),
     ]).then(([v,c,cl,a,i,oh]) => {
       // Filter clinicians client-side to support multi-region comma-separated values
@@ -83,8 +84,8 @@ export default function MyRegionPage() {
         if (c.region && c.region.includes(',')) return c.region.split(',').some(function(r) { return regionSet.has(r.trim()); });
         return false;
       });
-      setVisits(v.data||[]); setCensus(c.data||[]); setClinicians(filteredCl);
-      setAuthData(a.data||[]); setIntake(i.data||[]); setOnHold(oh.data||[]);
+      setVisits(v||[]); setCensus(c||[]); setClinicians(filteredCl);
+      setAuthData(a||[]); setIntake(i||[]); setOnHold(oh.data||[]);
       setLoading(false);
     });
   }

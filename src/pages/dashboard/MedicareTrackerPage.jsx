@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -27,15 +27,15 @@ export default function MedicareTrackerPage() {
   async function recalculate() {
     setCalculating(true);
     try {
-      // Get all medicare patients from census
-      const { data: mcPts } = await supabase.from('census_data')
+      // 2026-05-17: paginated — visit_schedule_data with status='completed'
+      // can easily exceed 1000 rows when calculating Medicare cap utilization.
+      const mcPts = await fetchAllPages(supabase.from('census_data')
         .select('patient_name, region, insurance')
-        .ilike('insurance', '%medicare%');
+        .ilike('insurance', '%medicare%'));
 
-      // Get completed visit counts per patient
-      const { data: visits } = await supabase.from('visit_schedule_data')
+      const visits = await fetchAllPages(supabase.from('visit_schedule_data')
         .select('patient_name, staff_name, event_type, status, visit_date, region')
-        .ilike('status', '%completed%');
+        .ilike('status', '%completed%'));
 
       for (const pt of (mcPts || [])) {
         const ptVisits = (visits || []).filter(v =>

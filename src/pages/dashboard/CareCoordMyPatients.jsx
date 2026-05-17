@@ -3,7 +3,7 @@ import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import StatusChangeModal from '../../components/StatusChangeModal';
 import ScheduleVisitModal from '../../components/ScheduleVisitModal';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
@@ -150,26 +150,22 @@ export default function CareCoordMyPatients() {
 
   const load = useCallback(async () => {
     const filters = myRegions;
+    // 2026-05-17: wrapped with fetchAllPages — care_coord_notes had 1,337+ rows
+    // capping at 1000 in production, hiding ~25% of historical notes.
     const [c, a, n, r, cs, sv] = await Promise.all([
-      // Census
-      (() => { let q = supabase.from('census_data').select('*'); if (filters) q = q.in('region', filters); return q; })(),
-      // Auth tracker
-      (() => { let q = supabase.from('auth_tracker').select('patient_name,auth_status,auth_expiry_date,region,insurance'); if (filters) q = q.in('region', filters); return q; })(),
-      // Care coord notes (recent 90d)
-      (() => { let q = supabase.from('care_coord_notes').select('*').gte('created_at', new Date(Date.now()-90*86400000).toISOString()).order('created_at',{ascending:false}); return q; })(),
-      // Referrals accepted, needing action
-      (() => { let q = supabase.from('intake_referrals').select('id,patient_name,region,referral_status,welcome_call,first_appt,chart_status,date_received,insurance').eq('referral_status','Accepted'); if (filters) q = q.in('region', filters); return q; })(),
-      // Clinical settings for reassessment alerts
-      (() => { let q = supabase.from('patient_clinical_settings').select('patient_name,region,reassessment_status,next_reassessment_deadline,alert_reassessment_unscheduled,visit_frequency,inferred_frequency'); if (filters) q = q.in('region', filters); return q; })(),
-      // Scheduled visits (upcoming)
-      (() => { let q = supabase.from('scheduled_visits').select('*').gte('visit_date', new Date().toISOString().split('T')[0]).in('status', ['scheduled','confirmed']).order('visit_date'); if (filters) q = q.in('region', filters); return q; })(),
+      fetchAllPages((() => { let q = supabase.from('census_data').select('*'); if (filters) q = q.in('region', filters); return q; })()),
+      fetchAllPages((() => { let q = supabase.from('auth_tracker').select('patient_name,auth_status,auth_expiry_date,region,insurance'); if (filters) q = q.in('region', filters); return q; })()),
+      fetchAllPages(supabase.from('care_coord_notes').select('*').gte('created_at', new Date(Date.now()-90*86400000).toISOString()).order('created_at',{ascending:false})),
+      fetchAllPages((() => { let q = supabase.from('intake_referrals').select('id,patient_name,region,referral_status,welcome_call,first_appt,chart_status,date_received,insurance').eq('referral_status','Accepted'); if (filters) q = q.in('region', filters); return q; })()),
+      fetchAllPages((() => { let q = supabase.from('patient_clinical_settings').select('patient_name,region,reassessment_status,next_reassessment_deadline,alert_reassessment_unscheduled,visit_frequency,inferred_frequency'); if (filters) q = q.in('region', filters); return q; })()),
+      fetchAllPages((() => { let q = supabase.from('scheduled_visits').select('*').gte('visit_date', new Date().toISOString().split('T')[0]).in('status', ['scheduled','confirmed']).order('visit_date'); if (filters) q = q.in('region', filters); return q; })()),
     ]);
-    setCensus(c.data || []);
-    setAuths(a.data || []);
-    setNotes(n.data || []);
-    setReferrals(r.data || []);
-    setClinSettings(cs.data || []);
-    setScheduledVisits(sv.data || []);
+    setCensus(c || []);
+    setAuths(a || []);
+    setNotes(n || []);
+    setReferrals(r || []);
+    setClinSettings(cs || []);
+    setScheduledVisits(sv || []);
     setLoading(false);
   }, [myRegions]);
 

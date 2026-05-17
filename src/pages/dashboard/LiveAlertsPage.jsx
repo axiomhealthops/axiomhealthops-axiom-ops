@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const ALERT_TYPES = {
@@ -29,14 +29,15 @@ export default function LiveAlertsPage() {
   function load() {
     const d7 = new Date(); d7.setDate(d7.getDate() - 7);
     const d7s = d7.toISOString().slice(0, 10);
+    // 2026-05-17: paginated so alerts engine sees full dataset
     Promise.all([
-      supabase.from('auth_tracker').select('*'),
-      supabase.from('visit_schedule_data')
+      fetchAllPages(supabase.from('auth_tracker').select('*')),
+      fetchAllPages(supabase.from('visit_schedule_data')
         .select('patient_name,visit_date,status,event_type,region,staff_name,insurance')
-        .gte('visit_date', d7s),
+        .gte('visit_date', d7s)),
     ]).then(([a, v]) => {
-      setAuth(a.data || []);
-      setVisits(v.data || []);
+      setAuth(a || []);
+      setVisits(v || []);
       setLoading(false);
     });
   }

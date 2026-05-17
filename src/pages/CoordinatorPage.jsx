@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, fetchAllPages } from '../lib/supabase';
 import StatusChangeModal from '../components/StatusChangeModal';
  
 var COORD_MAP = {
@@ -551,18 +551,25 @@ export default function CoordinatorPage(props) {
         .in('status', ['open', 'in_progress'])
         .order('created_at', { ascending: false })
         .limit(200),
-      supabase.from('auth_tracker')
-        .select('id, patient_name, insurance, region, auth_status, visits_authorized, visits_used, auth_expiry_date, soc_date, frequency')
-        .in('region', regions)
-        .in('auth_status', ['active', 'pending', 'renewal_needed']),
+      // fetchAllPages wrapping (2026-05-17) — multi-region coordinators could
+      // exceed PostgREST's 1000-row cap. Same fix that uncovered $34K of
+      // missing revenue in ExecutiveReport.
+      fetchAllPages(
+        supabase.from('auth_tracker')
+          .select('id, patient_name, insurance, region, auth_status, visits_authorized, visits_used, auth_expiry_date, soc_date, frequency')
+          .in('region', regions)
+          .in('auth_status', ['active', 'pending', 'renewal_needed'])
+      ),
       supabase.from('action_responses')
         .select('*')
         .like('action_key', 'auto_%'),
       // Census data for the pipeline overview and priority opportunities.
       // We fetch only the columns we need to keep the payload small.
-      supabase.from('census_data')
-        .select('id, patient_name, region, status, previous_status, insurance, last_visit_date, first_seen_date, last_seen_date, days_overdue, pipeline_assigned_to, pipeline_notes, discipline')
-        .in('region', regions),
+      fetchAllPages(
+        supabase.from('census_data')
+          .select('id, patient_name, region, status, previous_status, insurance, last_visit_date, first_seen_date, last_seen_date, days_overdue, pipeline_assigned_to, pipeline_notes, discipline')
+          .in('region', regions)
+      ),
       // Clinicians assigned to the coordinator's regions — used by the
       // productivity widget. Includes pariox_name + aliases for visit
       // attribution and weekly_visit_target/employment_type for pacing math.
@@ -572,13 +579,18 @@ export default function CoordinatorPage(props) {
         .in('region', regions)
         .order('full_name'),
     ]).then(function(results) {
+      // results[0] = coordinator_tasks (.limit(200), raw — has .data)
+      // results[1] = auth_tracker (fetchAllPages — IS the array)
+      // results[2] = action_responses (raw — has .data)
+      // results[3] = census_data (fetchAllPages — IS the array)
+      // results[4] = clinicians (raw — has .data)
       setTasks(results[0].data || []);
-      setAuthRecords(results[1].data || []);
+      setAuthRecords(results[1] || []);
       // Build map of auto task responses keyed by action_key
       var respMap = {};
       (results[2].data || []).forEach(function(r) { respMap[r.action_key] = r; });
       setAutoResponses(respMap);
-      setCensus(results[3].data || []);
+      setCensus(results[3] || []);
       setClinicians(results[4].data || []);
 
       // Visits for this week — paginated because a busy week can exceed

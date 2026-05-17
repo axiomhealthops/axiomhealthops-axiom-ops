@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -181,18 +181,19 @@ export default function PipelineTrackerPage() {
     if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setPatients([]); setLoading(false); return;
     }
-    const { data: census } = await regionScope.applyToQuery(
+    // 2026-05-17: paginated — intake_referrals has 3,906 rows in production
+    const census = await fetchAllPages(regionScope.applyToQuery(
       supabase.from('census_data')
         .select('patient_name,region,status,insurance,first_seen_date')
         .or('status.ilike.%soc pending%,status.ilike.%eval pending%')
-    );
+    ));
 
-    const { data: intakeAll } = await regionScope.applyToQuery(
+    const intakeAll = await fetchAllPages(regionScope.applyToQuery(
       supabase.from('intake_referrals')
         .select('patient_name,date_received,referral_source,pcp_name,diagnosis,referral_status,region')
         .eq('referral_status', 'Accepted')
         .order('date_received', { ascending: false })
-    );
+    ));
 
     // Build intake lookup (most recent accepted referral per patient)
     const intakeMap = {};

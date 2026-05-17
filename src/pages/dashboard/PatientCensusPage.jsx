@@ -4,7 +4,7 @@ import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import StatusChangeModal from '../../components/StatusChangeModal';
 import ScheduleVisitModal from '../../components/ScheduleVisitModal';
-import { supabase } from '../../lib/supabase';
+import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -1061,14 +1061,17 @@ export default function PatientCensusPage({ intent } = {}) {
       return;
     }
     setLoading(true);
+    // 2026-05-17: paginated — Patient Census viewer was capping at 1000 across
+    // all four tables. census_data (861), visit_schedule_data (5K+),
+    // intake_referrals (3,906) all exceed at scale.
     Promise.all([
-      applyToQuery(supabase.from('census_data').select('*')),
-      applyToQuery(supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region,discipline,insurance')),
-      applyToQuery(supabase.from('auth_tracker').select('*')),
-      applyToQuery(supabase.from('intake_referrals').select('*').not('date_received','is',null).order('date_received',{ascending:false})),
+      fetchAllPages(applyToQuery(supabase.from('census_data').select('*'))),
+      fetchAllPages(applyToQuery(supabase.from('visit_schedule_data').select('patient_name,visit_date,status,event_type,staff_name,region,discipline,insurance'))),
+      fetchAllPages(applyToQuery(supabase.from('auth_tracker').select('*'))),
+      fetchAllPages(applyToQuery(supabase.from('intake_referrals').select('*').not('date_received','is',null).order('date_received',{ascending:false}))),
     ]).then(([c,v,a,i]) => {
-      setCensus(c.data||[]); setVisits(v.data||[]);
-      setAuthData(a.data||[]); setIntakeData(i.data||[]);
+      setCensus(c||[]); setVisits(v||[]);
+      setAuthData(a||[]); setIntakeData(i||[]);
       setLoading(false);
     });
   }
@@ -1278,7 +1281,7 @@ export default function PatientCensusPage({ intent } = {}) {
           onClose={() => setStatusPatient(null)}
           onSaved={async () => {
             setStatusPatient(null);
-            const { data } = await supabase.from('census_data').select('*');
+            const data = await fetchAllPages(supabase.from('census_data').select('*'));
             if (data) setCensus(data);
           }} />
       )}
@@ -1295,21 +1298,21 @@ export default function PatientCensusPage({ intent } = {}) {
             // selected patient reference so the profile modal shows the
             // saved values instead of the stale pre-edit snapshot.
             const [c, i, a] = await Promise.all([
-              applyToQuery(supabase.from('census_data').select('*')),
-              supabase.from('intake_referrals').select('*').not('date_received','is',null).order('date_received',{ascending:false}),
-              applyToQuery(supabase.from('auth_tracker').select('*')),
+              fetchAllPages(applyToQuery(supabase.from('census_data').select('*'))),
+              fetchAllPages(supabase.from('intake_referrals').select('*').not('date_received','is',null).order('date_received',{ascending:false})),
+              fetchAllPages(applyToQuery(supabase.from('auth_tracker').select('*'))),
             ]);
-            if (c.data) {
-              setCensus(c.data);
+            if (c && c.length) {
+              setCensus(c);
               // Re-point `selected` to the fresh row so the profile
               // header and view-mode fields show the just-saved values.
               if (selected) {
-                const fresh = c.data.find(p => p.id === selected.id);
+                const fresh = c.find(p => p.id === selected.id);
                 if (fresh) setSelected(fresh);
               }
             }
-            if (i.data) setIntakeData(i.data);
-            if (a.data) setAuthData(a.data);
+            if (i) setIntakeData(i);
+            if (a) setAuthData(a);
           }}
         />
       )}
