@@ -48,7 +48,32 @@ function toInt(v) {
     var i = Math.floor(v);
     return i >= 0 ? i : null;
   }
-  return null; // strings like 'Medicare', '1 OT & PT' → null
+  // SheetJS with raw:false returns formatted strings — accept "1", "1.0",
+  // " 1 ", but reject "Medicare", "1 OT & PT", etc.
+  if (typeof v === 'string') {
+    var trimmed = v.trim();
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+      var n = Number(trimmed);
+      if (!isNaN(n) && n >= 0) return Math.floor(n);
+    }
+  }
+  return null;
+}
+// audit_complete needs a SEPARATE parser because the original strict
+// equality check missed "1" coming through as a formatted string from
+// SheetJS. Lesson learned: never trust SheetJS string types — coerce.
+function toAuditComplete(v) {
+  if (v === null || v === undefined || v === '') return null;
+  var n = Number(v);
+  if (!isNaN(n)) {
+    if (n === 1) return 1;
+    if (n === 0) return 0;
+  }
+  // Accept "Yes"/"No" in case someone re-types it
+  var s = String(v).trim().toUpperCase();
+  if (s === 'YES' || s === 'TRUE' || s === 'Y') return 1;
+  if (s === 'NO'  || s === 'FALSE' || s === 'N') return 0;
+  return null;
 }
 function toDate(v) {
   if (v === null || v === undefined || v === '' || v === '-') return null;
@@ -133,6 +158,8 @@ export default function AuthAuditImportPage() {
   const [census, setCensus] = useState([]);
   const [auths, setAuths] = useState([]);
   const [selected, setSelected] = useState({}); // {staging_id: true}
+  // auditedOnly default — if no rows are marked audit_complete=1, default to
+  // false so the preview isn't empty. Computed once after staging completes.
   const [filters, setFilters] = useState({ region: 'ALL', auditedOnly: true, statusFilter: 'ALL' });
   const [expandedRow, setExpandedRow] = useState(null);
   const [applyProgress, setApplyProgress] = useState({ done: 0, total: 0, errors: [] });
@@ -159,7 +186,7 @@ export default function AuthAuditImportPage() {
         return null;
       }
       return {
-        audit_complete:    r['Audit Complete'] === 1 || r['Audit Complete'] === '1' ? 1 : (r['Audit Complete'] === 0 || r['Audit Complete'] === '0' ? 0 : null),
+        audit_complete:    toAuditComplete(r['Audit Complete']),
         patient_name:      patient,
         region:            region,
         address:           clean(r['Address']),
@@ -252,6 +279,12 @@ export default function AuthAuditImportPage() {
     setStagingRows(stagingRes);
     setCensus(censusRes);
     setAuths(authsRes);
+    // If no rows are flagged audit_complete=1, auto-disable that filter so the
+    // user isn't staring at an empty preview wondering what's wrong.
+    var anyAudited = stagingRes.some(function(r) { return r.audit_complete === 1; });
+    if (!anyAudited) {
+      setFilters(function(prev) { return Object.assign({}, prev, { auditedOnly: false }); });
+    }
   }
 
   // Build a lookup map: "name|region" → census row, auth row
