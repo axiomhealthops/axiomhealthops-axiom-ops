@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
+import { getWeekRange } from '../../lib/dateUtils';
 import { useAuth } from '../../hooks/useAuth.jsx';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
@@ -32,14 +33,10 @@ function buildAutoActions(data) {
   const active = census.filter(p => /active/i.test(p.status || ''));
   const inactiveActive = active.filter(p => (p.days_overdue || 0) > 0);
 
-  // Week boundaries
-  const now = new Date();
-  const dow = now.getDay();
-  const daysFromMon = dow === 0 ? 6 : dow - 1;
-  const monDate = new Date(now); monDate.setDate(now.getDate() - daysFromMon);
-  const weekStart = `${monDate.getFullYear()}-${String(monDate.getMonth()+1).padStart(2,'0')}-${String(monDate.getDate()).padStart(2,'0')}`;
-  const sunDate = new Date(monDate); sunDate.setDate(monDate.getDate() + 6);
-  const weekEnd = `${sunDate.getFullYear()}-${String(sunDate.getMonth()+1).padStart(2,'0')}-${String(sunDate.getDate()).padStart(2,'0')}`;
+  // 2026-05-17: Sun-Sat work week per Liam (via canonical getWeekRange helper)
+  const _wk = getWeekRange(new Date());
+  const weekStart = _wk.startStr;
+  const weekEnd = _wk.endStr;
 
   const isCancelled = v => /cancel/i.test(v.event_type || '') || /cancel/i.test(v.status || '');
   const isCompleted = v => /completed/i.test(v.status || '') && !isCancelled(v) && !/attempted/i.test(v.event_type || '');
@@ -319,13 +316,11 @@ export default function ActionListPage({ onNavigate }) {
 
   // Fetch live data for auto-generation
   const loadLive = useCallback(async () => {
+    // 2026-05-17: Sun-Sat work week via canonical helper
     const now = new Date();
-    const dow = now.getDay();
-    const daysFromMon = dow === 0 ? 6 : dow - 1;
-    const monDate = new Date(now); monDate.setDate(now.getDate() - daysFromMon);
-    const weekStart = `${monDate.getFullYear()}-${String(monDate.getMonth()+1).padStart(2,'0')}-${String(monDate.getDate()).padStart(2,'0')}`;
-    const sunDate = new Date(monDate); sunDate.setDate(monDate.getDate() + 6);
-    const weekEnd = `${sunDate.getFullYear()}-${String(sunDate.getMonth()+1).padStart(2,'0')}-${String(sunDate.getDate()).padStart(2,'0')}`;
+    const _wkLive = getWeekRange(now);
+    const weekStart = _wkLive.startStr;
+    const weekEnd = _wkLive.endStr;
     const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
 
     const [census, visits, authRenewals, oh, wl, cl, coords, actLog] = await Promise.all([

@@ -93,9 +93,9 @@ export default function MyRegionPage() {
   useEffect(() => { load(); }, [myRegions.join(',')]);
   useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals', 'on_hold_recovery'], load);
 
-  // ── Week boundaries ────────────────────────────────────────────
+  // ── Week boundaries ── 2026-05-17: Sun-Sat work week per Liam ──
   const now = new Date();
-  const weekStart = new Date(now); weekStart.setDate(now.getDate() - (now.getDay()===0?6:now.getDay()-1)); weekStart.setHours(0,0,0,0);
+  const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay()); weekStart.setHours(0,0,0,0);
   const weekStartStr = weekStart.toISOString().slice(0,10);
   const monthStart = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
 

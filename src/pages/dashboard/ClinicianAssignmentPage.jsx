@@ -101,14 +101,13 @@ export default function ClinicianAssignmentPage() {
   const [reassignPatient, setReassignPatient] = useState(null);
   const [viewMode, setViewMode] = useState('clinician'); // clinician | patient
 
-  // Week range
+  // Week range — 2026-05-17: Sun-Sat work week per Liam (was Mon-Sun)
   const today = new Date().toISOString().slice(0,10);
-  const dow = new Date().getDay();
-  const monday = new Date(); monday.setDate(new Date().getDate() - (dow===0?6:dow-1));
-  const sunday = new Date(monday); sunday.setDate(monday.getDate()+6);
-  const weekStart = monday.toISOString().slice(0,10);
-  const weekEnd = sunday.toISOString().slice(0,10);
-  const weekLabel = monday.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' – ' + sunday.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const sunStart = new Date(); sunStart.setDate(sunStart.getDate() - sunStart.getDay()); // back to Sunday
+  const satEnd = new Date(sunStart); satEnd.setDate(sunStart.getDate()+6);
+  const weekStart = sunStart.toISOString().slice(0,10);
+  const weekEnd = satEnd.toISOString().slice(0,10);
+  const weekLabel = sunStart.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' – ' + satEnd.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 
   const load = useCallback(async () => {
     const [v, cl, c] = await Promise.all([

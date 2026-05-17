@@ -15,20 +15,13 @@ function fmtDate(d) {
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// 2026-05-17: Switched to Sunday-Saturday week per Liam. Uses the canonical
+// getWeekRange helper but maps to this page's existing {start, end, label}
+// shape (it doesn't use the Date objects, just the YYYY-MM-DD strings).
+import { getWeekRange as _getWeekRange } from '../../lib/dateUtils';
 function getWeekRange(weeksAgo = 0) {
-  const now = new Date();
-  const dow = now.getDay();
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1) - weeksAgo * 7);
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  // Use local date strings — toISOString() converts to UTC and shifts the day at night
-  const toLocal = d => [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-');
-  return {
-    start: toLocal(monday),
-    end: toLocal(sunday),
-    label: monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' – ' + sunday.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-  };
+  const r = _getWeekRange(new Date(), weeksAgo);
+  return { start: r.startStr, end: r.endStr, label: r.label };
 }
 
 function StatusPill({ val, thresholdGood, thresholdWarn, suffix = '', invert = false }) {

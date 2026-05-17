@@ -5,6 +5,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 // 2026-05-17: use shared rate (was hardcoded $185 — drifted from $230)
 import { BLENDED_RATE } from '../../lib/visitMath';
+import { getWeekStart } from '../../lib/dateUtils';
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -42,8 +43,8 @@ export default function RMDailyDashboard() {
 
   const load = useCallback(async () => {
     if (!myRegions.length) { setLoading(false); return; }
-    const weekStart = new Date();
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay() + (weekStart.getDay()===0?-6:1));
+    // 2026-05-17: Sun-Sat work week via canonical helper
+    const weekStart = getWeekStart(new Date());
     const weekStartStr = weekStart.toISOString().slice(0,10);
 
     // 2026-05-17: wrapped at-risk queries with fetchAllPages. Multi-region RMs

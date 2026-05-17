@@ -30,6 +30,68 @@ export function getWeekDays(anchor) {
     return d;
   });
 }
+
+// =====================================================================
+// Canonical week-range helpers — added 2026-05-17 per Liam.
+// AxiomHealth's work week is SUNDAY → SATURDAY (NOT Mon-Sun).
+// Always use these helpers in dashboards/reports so weeks stay aligned
+// across the whole system. Never hand-roll the day-of-week math again.
+// =====================================================================
+
+/**
+ * Returns the Sunday at the start of the work week containing `date`.
+ * Local timezone (avoids UTC drift at night).
+ *
+ * @param {Date|string} date — anchor date (today by default)
+ * @param {number} [weeksOffset=0] — 0 = current week, 1 = last week, etc.
+ * @returns {Date} Sunday at 00:00:00 local time
+ */
+export function getWeekStart(date, weeksOffset = 0) {
+  const d = date instanceof Date
+    ? new Date(date.getTime())
+    : (date ? new Date(date + 'T00:00:00') : new Date());
+  // getDay() returns 0=Sun, 1=Mon, ... 6=Sat — perfect for Sun-start week
+  d.setDate(d.getDate() - d.getDay() - (weeksOffset || 0) * 7);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Returns the Saturday at the end of the work week containing `date`.
+ *
+ * @param {Date|string} date — anchor date
+ * @param {number} [weeksOffset=0] — 0 = current week, 1 = last week, etc.
+ * @returns {Date} Saturday at 23:59:59 local time
+ */
+export function getWeekEnd(date, weeksOffset = 0) {
+  const start = getWeekStart(date, weeksOffset);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return end;
+}
+
+/**
+ * Convenience wrapper returning both ends of the week + string forms
+ * + a human-readable label like "May 17 – May 23, 2026".
+ *
+ * @param {Date|string} date — anchor date
+ * @param {number} [weeksOffset=0] — 0 = current week, 1 = last week, etc.
+ * @returns {{start: Date, end: Date, startStr: string, endStr: string, label: string}}
+ */
+export function getWeekRange(date, weeksOffset = 0) {
+  const start = getWeekStart(date, weeksOffset);
+  const end = getWeekEnd(date, weeksOffset);
+  return {
+    start: start,
+    end: end,
+    startStr: toDateStr(start),
+    endStr: toDateStr(end),
+    label: start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+         + ' – '
+         + end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+  };
+}
  
 export function getMonthDays(anchor) {
   const start = new Date(anchor.getFullYear(), anchor.getMonth(), 1);

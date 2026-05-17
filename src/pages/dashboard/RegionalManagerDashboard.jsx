@@ -31,11 +31,11 @@ function getWeekStart(date) {
   // 'T00:00:00' produces a garbage string like "Thu May 15 2026 ...T00:00:00"
   // which parses to Invalid Date. Fixed 2026-05-15 when the AD dashboard's
   // drill-down forced rm-dashboard to render for the first time in production.
+  // 2026-05-17: Sun-Sat work week per Liam (was Mon-Sun)
   const d = date instanceof Date
     ? new Date(date.getTime())
     : new Date(date + 'T00:00:00');
-  const day = d.getDay();
-  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+  d.setDate(d.getDate() - d.getDay()); // back to Sunday
   d.setHours(0,0,0,0);
   return d;
 }

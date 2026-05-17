@@ -18,12 +18,13 @@ function isMissed(status) {
   return /missed/i.test(status || '');
 }
 
+// 2026-05-17: Work week is SUN-SAT per Liam — was Mon-Sun here. Returns YYYY-MM-DD
+// of the Sunday at start of week containing `date`.
 function weekStart(date) {
   const d = new Date(date + 'T00:00:00');
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  d.setDate(diff);
-  return d.toISOString().slice(0, 10);
+  d.setDate(d.getDate() - d.getDay());
+  // Local YYYY-MM-DD (avoid UTC drift at night)
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
 function fmtDollar(n) {

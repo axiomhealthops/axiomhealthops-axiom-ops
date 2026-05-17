@@ -9,6 +9,7 @@ import ExceptionFeed from '../../components/director/ExceptionFeed';
 // Visit math from shared module (2026-05-17 refactor)
 import { BLENDED_RATE, WEEKLY_REVENUE_TARGET as REVENUE_TARGET,
          isCancelled, isAttempted, isMissed, isCompleted, dedupEncounters } from '../../lib/visitMath';
+import { getWeekRange } from '../../lib/dateUtils';
 
 const WEEKLY_TARGET = 750;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
@@ -262,24 +263,11 @@ export default function DirectorDashboard({ onNavigate }) {
   const [lastRefresh, setLastRefresh] = useState(null);
 
   const load = useCallback(async () => {
-    // Use local date (not UTC) for week start — avoids timezone shift at night
-    const now = new Date();
-    const localYear = now.getFullYear();
-    const localMonth = String(now.getMonth() + 1).padStart(2, '0');
-    const localDay = String(now.getDate()).padStart(2, '0');
-    const todayLocal = `${localYear}-${localMonth}-${localDay}`;
-
-    // Monday of current week in local time
-    const dow = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-    const daysFromMon = dow === 0 ? 6 : dow - 1;
-    const monDate = new Date(now);
-    monDate.setDate(now.getDate() - daysFromMon);
-    const weekStartStr = `${monDate.getFullYear()}-${String(monDate.getMonth()+1).padStart(2,'0')}-${String(monDate.getDate()).padStart(2,'0')}`;
-
-    // Sunday of current week
-    const sunDate = new Date(monDate);
-    sunDate.setDate(monDate.getDate() + 6);
-    const weekEndStr = `${sunDate.getFullYear()}-${String(sunDate.getMonth()+1).padStart(2,'0')}-${String(sunDate.getDate()).padStart(2,'0')}`;
+    // 2026-05-17: Work week is SUN-SAT per Liam. Uses canonical getWeekRange
+    // helper so this never drifts from other dashboards.
+    const wk = getWeekRange(new Date());
+    const weekStartStr = wk.startStr;
+    const weekEndStr = wk.endStr;
 
     // 30-day window for status_log (powers sparkline trend math without
     // pulling all 4K+ historical transitions).

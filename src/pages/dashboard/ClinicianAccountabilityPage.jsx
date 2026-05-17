@@ -32,10 +32,11 @@ function CliniciansTab({ clinicians, visits, census }) {
   // Scopes: 'under30' / 'under60' / 'hasInactive'
   const [scope, setScope] = useState('ALL');
 
+  // 2026-05-17: Sun-Sat work week per Liam
   const weekStart = useMemo(() => {
     const d = new Date();
-    d.setDate(d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1));
-    return d.toISOString().slice(0, 10);
+    d.setDate(d.getDate() - d.getDay()); // back to Sunday
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
   }, []);
 
   const clinicianStats = useMemo(() => {
