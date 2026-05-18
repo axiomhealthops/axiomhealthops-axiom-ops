@@ -56,16 +56,32 @@ function CliniciansTab({ clinicians, visits, census }) {
     });
 
     // Visit stats keyed by clinician.id so aliases roll up to one row.
+    // 2026-05-17: Now tracks SCHEDULED visits too (upcoming this week, not yet
+    // completed/cancelled/missed). Without this the page showed 0% on Sundays
+    // because the new Sun-Sat week had no completed visits yet.
     const weekVisits = visits.filter(v => v.visit_date >= weekStart);
     const visitMap = {};
     weekVisits.forEach(v => {
       const key = (v.staff_name_normalized || v.staff_name || '').toLowerCase().trim();
       const cid = nameToId[key];
       if (!cid) return; // visit by someone not on the active roster — ignored
-      if (!visitMap[cid]) visitMap[cid] = { completed: 0, cancelled: 0, missed: 0, patients: new Set() };
-      if (/completed/i.test(v.status || '')) { visitMap[cid].completed++; visitMap[cid].patients.add(v.patient_name); }
-      else if (/cancel/i.test(v.status || '') || /cancel/i.test(v.event_type || '')) visitMap[cid].cancelled++;
-      else if (/missed/i.test(v.status || '')) visitMap[cid].missed++;
+      if (!visitMap[cid]) visitMap[cid] = { completed: 0, scheduled: 0, cancelled: 0, missed: 0, patients: new Set(), scheduledPatients: new Set() };
+      const status = v.status || '';
+      const evt = v.event_type || '';
+      if (/cancel/i.test(status) || /cancel/i.test(evt)) {
+        visitMap[cid].cancelled++;
+      } else if (/completed/i.test(status)) {
+        visitMap[cid].completed++;
+        visitMap[cid].patients.add(v.patient_name);
+      } else if (/missed/i.test(status)) {
+        visitMap[cid].missed++;
+      } else if (/scheduled/i.test(status) || /attempted/i.test(evt) === false) {
+        // Anything not yet completed/cancelled/missed and not attempted counts
+        // as upcoming/scheduled. Catches Pariox's "Scheduled" status plus rows
+        // with blank status that are still on the calendar.
+        visitMap[cid].scheduled++;
+        visitMap[cid].scheduledPatients.add(v.patient_name);
+      }
     });
 
     // Inactive-patient map keyed by clinician.id, using the same alias index.
@@ -87,17 +103,25 @@ function CliniciansTab({ clinicians, visits, census }) {
     return clinicians
       .filter(cl => cl.is_active && (cl.weekly_visit_target || 0) >= 5)
       .map(cl => {
-        const stats = visitMap[cl.id] || { completed: 0, cancelled: 0, missed: 0, patients: new Set() };
+        const stats = visitMap[cl.id] || { completed: 0, scheduled: 0, cancelled: 0, missed: 0, patients: new Set(), scheduledPatients: new Set() };
         const target = cl.weekly_visit_target || 0;
-        const utilization = target > 0 ? Math.round((stats.completed / target) * 100) : 0;
+        // 2026-05-17: utilization now reflects PLANNED workload (done + still
+        // scheduled). Old math was just completed/target which read 0% every
+        // Sunday morning. New math gives a meaningful "is the calendar full?"
+        // signal any day of the week.
+        const planned = stats.completed + stats.scheduled;
+        const utilization = target > 0 ? Math.round((planned / target) * 100) : 0;
         const inactive = inactiveMap[cl.id] || [];
         const revenueGap = inactive.length * BLENDED_RATE * 2;
         return {
           ...cl,
           completed: stats.completed,
+          scheduled: stats.scheduled,
+          planned: planned,
           cancelled: stats.cancelled,
           missed: stats.missed,
           patientsSeenCount: stats.patients.size,
+          patientsScheduledCount: stats.scheduledPatients.size,
           utilization,
           inactivePatients: inactive,
           inactiveCount: inactive.length,
@@ -195,10 +219,11 @@ function CliniciansTab({ clinicians, visits, census }) {
 
       {/* Clinician Table */}
       <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.5fr 0.5fr 1.4fr 0.6fr 0.6fr 0.6fr 0.6fr 0.7fr 0.8fr', padding: '8px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 9, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', gap: 8 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.5fr 0.5fr 1.4fr 0.55fr 0.6fr 0.55fr 0.6fr 0.55fr 0.65fr 0.75fr', padding: '8px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)', fontSize: 9, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em', gap: 8 }}>
           <span>Clinician</span><span>Rgn</span><span>Disc</span>
           <span onClick={() => toggleSort('utilization')} style={{ cursor: 'pointer' }}>Utilization {sortField === 'utilization' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
           <span onClick={() => toggleSort('completed')} style={{ cursor: 'pointer' }}>Done {sortField === 'completed' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
+          <span onClick={() => toggleSort('scheduled')} style={{ cursor: 'pointer' }}>Scheduled {sortField === 'scheduled' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
           <span>Target</span>
           <span onClick={() => toggleSort('cancelRate')} style={{ cursor: 'pointer' }}>Cancel% {sortField === 'cancelRate' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
           <span onClick={() => toggleSort('inactiveCount')} style={{ cursor: 'pointer' }}>Inactive {sortField === 'inactiveCount' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
@@ -211,7 +236,7 @@ function CliniciansTab({ clinicians, visits, census }) {
           return (
             <div key={cl.full_name}>
               <div onClick={() => setExpandedClinician(isExpanded ? null : cl.full_name)}
-                style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.5fr 0.5fr 1.4fr 0.6fr 0.6fr 0.6fr 0.6fr 0.7fr 0.8fr', padding: '9px 16px', borderBottom: '1px solid var(--border)', background: rowBg, alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.5fr 0.5fr 1.4fr 0.55fr 0.6fr 0.55fr 0.6fr 0.55fr 0.65fr 0.75fr', padding: '9px 16px', borderBottom: '1px solid var(--border)', background: rowBg, alignItems: 'center', gap: 8, cursor: 'pointer' }}
                 onMouseEnter={e => e.currentTarget.style.background = '#EFF6FF'}
                 onMouseLeave={e => e.currentTarget.style.background = rowBg}>
                 <div>
@@ -224,9 +249,13 @@ function CliniciansTab({ clinicians, visits, census }) {
                   <div style={{ flex: 1, height: 6, background: '#E5E7EB', borderRadius: 999 }}>
                     <div style={{ width: `${Math.min(100, cl.utilization)}%`, height: '100%', background: pctColor(cl.utilization), borderRadius: 999 }} />
                   </div>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: pctColor(cl.utilization), minWidth: 30 }}>{cl.utilization}%</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: pctColor(cl.utilization), minWidth: 30 }} title="Includes scheduled + completed">{cl.utilization}%</span>
                 </div>
                 <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: '#059669' }}>{cl.completed}</span>
+                {/* NEW: Scheduled column — visits on the calendar but not yet completed */}
+                <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DM Mono, monospace', color: cl.scheduled > 0 ? '#1565C0' : 'var(--gray)' }} title={cl.patientsScheduledCount + ' distinct patient(s) on the calendar'}>
+                  {cl.scheduled}
+                </span>
                 <span style={{ fontSize: 12, color: 'var(--gray)' }}>{cl.weekly_visit_target}</span>
                 <span style={{ fontSize: 12, fontWeight: cl.cancelRate > 10 ? 700 : 400, color: cl.cancelRate > 10 ? '#DC2626' : cl.cancelRate > 5 ? '#D97706' : 'var(--gray)' }}>{cl.cancelRate}%</span>
                 <span style={{ fontSize: 14, fontWeight: cl.inactiveCount > 0 ? 700 : 400, fontFamily: 'DM Mono, monospace', color: cl.inactiveCount > 3 ? '#DC2626' : cl.inactiveCount > 0 ? '#D97706' : 'var(--gray)' }}>{cl.inactiveCount}</span>
