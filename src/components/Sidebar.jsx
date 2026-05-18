@@ -48,7 +48,11 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
     // Filter to what this user can access
     const role = profile?.role;
     const accessible = pages.filter(p => {
+      // 2026-05-18: 'director' role added — Director of Operations gets full
+      // visibility (mapped to super_admin permissions). Was previously falling
+      // through to return false because no handler existed for this role.
       if (role === 'super_admin') return p.super_admin;
+      if (role === 'director')    return p.super_admin;
       if (role === 'ceo')        return p.super_admin;
       if (role === 'admin')      return p.admin;
       if (role === 'auth_coordinator')   return p.auth_coordinator;

@@ -65,7 +65,11 @@ export function AuthProvider({ children }) {
         .filter(p => {
           if (overrideMap[p.page_key] === true) return true;
           if (overrideMap[p.page_key] === false) return false;
+          // 2026-05-18: 'director' role added — Director of Operations gets full
+          // visibility (mapped to super_admin perms). Was previously falling through
+          // to return false because no handler existed.
           if (role === 'super_admin') return p.super_admin;
+          if (role === 'director')    return p.super_admin;
           if (role === 'ceo')        return p.super_admin;  // legacy
           if (role === 'admin')      return p.admin;
           if (role === 'auth_coordinator')   return p.auth_coordinator;
