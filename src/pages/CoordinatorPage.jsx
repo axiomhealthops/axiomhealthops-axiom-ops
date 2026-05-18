@@ -1568,15 +1568,23 @@ export default function CoordinatorPage(props) {
 
         {/* ── CLINICIAN PRODUCTIVITY — THIS WEEK ───────────────────────── */}
         <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 10, padding: 12, marginBottom: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8, gap: 8 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
               👥 Clinician Productivity
               <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
                 This week · click a row to assign patients
               </span>
             </div>
-            <div style={{ fontSize: 10, color: '#9CA3AF' }}>
-              {clinicianStats.length} in your regions
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: '#9CA3AF' }}>{clinicianStats.length} in your regions</span>
+              {/* 2026-05-17: Quick-jump to the full Productivity page — surfaces it for
+                  care coords who didn't realize the standalone page exists. */}
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('axiom-navigate', { detail: { page: 'productivity' } }))}
+                title="Open the full company-wide Productivity page"
+                style={{ padding: '3px 9px', background: '#EFF6FF', color: '#1565C0', border: '1px solid #BFDBFE', borderRadius: 5, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+                Full Productivity Page →
+              </button>
             </div>
           </div>
 
