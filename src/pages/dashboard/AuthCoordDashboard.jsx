@@ -144,21 +144,45 @@ function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
   ];
  
   return (
+    // 2026-05-18: Modal rebuilt for responsive fit on all viewports.
+    // Outer overlay = fixed positioning (no page scroll). Inner modal caps at
+    // 92vw / 90vh and scrolls INTERNALLY via the body section. Header + footer
+    // stay pinned so Save button is always reachable.
     <div onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}
-      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24, overflowY:'auto' }}>
+      style={{
+        position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000,
+        display:'flex', alignItems:'center', justifyContent:'center',
+        padding:'clamp(8px, 2vw, 24px)',
+      }}>
       <div onClick={e => e.stopPropagation()}
-        style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:580, boxShadow:'0 24px 60px rgba(0,0,0,0.4)' }}>
-        <div style={{ padding:'16px 22px', background:'#0F1117', borderRadius:'14px 14px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div>
-            <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>{auth.patient_name}</div>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.5)', marginTop:2 }}>
+        style={{
+          background:'var(--card-bg)', borderRadius:14,
+          width:'100%',
+          maxWidth: 820,           // wide enough on desktop for the 2-column grid + notes
+          maxHeight: '92vh',       // cap height; body scrolls if content overflows
+          display:'flex', flexDirection:'column',
+          boxShadow:'0 24px 60px rgba(0,0,0,0.4)',
+          overflow:'hidden',
+        }}>
+        {/* HEADER — pinned */}
+        <div style={{ padding:'14px 20px', background:'#0F1117', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0 }}>
+          <div style={{ minWidth:0, flex:1 }}>
+            <div style={{ fontSize:15, fontWeight:700, color:'#fff', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{auth.patient_name}</div>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.5)', marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
               {auth.insurance} · Region {auth.region} · Member ID: {auth.member_id || '—'}
             </div>
           </div>
-          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'rgba(255,255,255,0.5)' }}>×</button>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'rgba(255,255,255,0.5)', marginLeft:8, flexShrink:0 }}>×</button>
         </div>
- 
-        <div style={{ padding:22, display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+
+        {/* BODY — scrolls internally. 2-col grid drops to 1-col below 640px via the auto-fit minmax. */}
+        <div style={{
+          padding:'16px 20px',
+          display:'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap:12,
+          flex:1, overflowY:'auto', minHeight:0,
+        }}>
           <div style={{ gridColumn:'1/-1' }}>
             <label style={{ fontSize:11, fontWeight:700, display:'block', marginBottom:8 }}>Auth Status</label>
             <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
@@ -215,27 +239,34 @@ function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
             <label style={{ fontSize:11, fontWeight:700, display:'block', marginBottom:4 }}>Notes</label>
             <textarea value={form.notes} onChange={e => setForm(p=>({...p, notes:e.target.value}))}
               placeholder="Payer call notes, auth number, submission portal used, follow-up needed..."
-              style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:80, background:'var(--card-bg)' }} />
+              style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:70, background:'var(--card-bg)' }} />
+          </div>
+
+          {/* Patient chart notes — moved INSIDE scrollable body (was in footer,
+              which pushed Save button off-screen on small viewports). */}
+          <div style={{ gridColumn:'1/-1', marginTop:4 }}>
+            <PatientNotesPanel patientName={auth.patient_name} maxHeight="220px" />
           </div>
         </div>
- 
-        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', flexDirection:'column', gap:8, background:'var(--bg)' }}>
+
+        {/* FOOTER — pinned. Compact. Errors + duplicate warnings + Save/Cancel only. */}
+        <div style={{ padding:'12px 20px', borderTop:'1px solid var(--border)', display:'flex', flexDirection:'column', gap:8, background:'var(--bg)', flexShrink:0 }}>
           {saveError && (
-            <div style={{ background:'#FEF2F2', border:'1px solid #FCA5A5', color:'#991B1B', padding:'8px 12px', borderRadius:6, fontSize:12, fontWeight:600 }}>
+            <div style={{ background:'#FEF2F2', border:'1px solid #FCA5A5', color:'#991B1B', padding:'7px 11px', borderRadius:6, fontSize:12, fontWeight:600 }}>
               ⚠ {saveError}
             </div>
           )}
           {dupWarning && (
             <div style={{ background:'#FEF3C7', border:'1px solid #FCD34D', color:'#92400E', padding:'10px 12px', borderRadius:8, fontSize:12 }}>
               <div style={{ fontWeight:700, marginBottom:6 }}>⚠ Potential Duplicate Detected</div>
-              <div style={{ fontSize:11, marginBottom:8 }}>
+              <div style={{ fontSize:11, marginBottom:8, maxHeight:120, overflowY:'auto' }}>
                 {dupWarning.map((d, i) => (
                   <div key={i} style={{ padding:'4px 0', borderBottom: i < dupWarning.length-1 ? '1px solid #FDE68A' : 'none' }}>
                     <strong>{d.patient_name}</strong> — Auth #{d.auth_number || 'N/A'} · {d.auth_discipline || 'No discipline'} · {d.auth_status} · Expires {d.auth_expiry_date || 'N/A'}
                   </div>
                 ))}
               </div>
-              <div style={{ display:'flex', gap:6 }}>
+              <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
                 <button onClick={() => { setDupWarning(null); setSaving(true); save(); }}
                   style={{ padding:'5px 12px', background:'#92400E', color:'#fff', border:'none', borderRadius:6, fontSize:11, fontWeight:700, cursor:'pointer' }}>
                   Save Anyway — Not a Duplicate
@@ -247,15 +278,12 @@ function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
               </div>
             </div>
           )}
-          <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:8, flexWrap:'wrap' }}>
             <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, cursor:'pointer', background:'var(--card-bg)' }}>Cancel</button>
             <button onClick={save} disabled={saving}
               style={{ padding:'8px 22px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:saving?'wait':'pointer', opacity:saving?0.7:1 }}>
               {saving ? 'Saving…' : 'Save Changes'}
             </button>
-          </div>
-          <div style={{ marginTop:16 }}>
-            <PatientNotesPanel patientName={auth.patient_name} maxHeight="280px" />
           </div>
         </div>
       </div>
