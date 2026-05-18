@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
  
-var REGION_COORD = {
+export var REGION_COORD = {
   A: 'Gypsy Renos',
   B: 'Mary Imperio', C: 'Mary Imperio', G: 'Mary Imperio',
   H: 'Audrey Sarmiento', J: 'Audrey Sarmiento', M: 'Audrey Sarmiento', N: 'Audrey Sarmiento',
