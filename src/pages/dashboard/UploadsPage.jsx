@@ -205,6 +205,11 @@ function UploadCard(props) {
   var [message, setMessage] = useState('');
   var [count, setCount] = useState(0);
   var [lastUpload, setLastUpload] = useState(null);
+  // 2026-05-18: "Replace mode" — when uploading visits, delete existing rows
+  // in the file's date range BEFORE upsert. Solves stale-row accumulation
+  // (Pariox removes a visit from the schedule but the row stays in our DB).
+  // OFF by default — destructive operation, opt-in only.
+  var [replaceMode, setReplaceMode] = useState(false);
   var inputRef = useRef();
  
   useEffect(function() {
@@ -256,6 +261,44 @@ function UploadCard(props) {
 
         // ── VISIT SCHEDULE ─────────────────────────────────────────────
         if (props.batchType === 'visits') {
+
+          // ── 2026-05-18: REPLACE MODE — delete existing rows in the file's
+          // date range before insert. Fixes stale rows that Pariox no longer
+          // schedules but were never removed from our DB. Only runs if the
+          // user explicitly opted in via the checkbox.
+          var replacedCount = 0;
+          if (replaceMode) {
+            var dates = data.map(function(r) { return r.visit_date; }).filter(Boolean).sort();
+            if (dates.length > 0) {
+              var minDate = dates[0].slice(0, 10);
+              var maxDate = dates[dates.length - 1].slice(0, 10);
+              setMessage('Replace mode: counting rows in ' + minDate + ' to ' + maxDate + ' for deletion...');
+              // Sanity check — if range is wildly large (>60 days), refuse.
+              // Protects against a partial-week file accidentally wiping months.
+              var msSpan = new Date(maxDate).getTime() - new Date(minDate).getTime();
+              var daysSpan = Math.round(msSpan / 86400000) + 1;
+              if (daysSpan > 60) {
+                throw new Error('Replace mode refused — file spans ' + daysSpan + ' days. Replace mode is meant for single-week uploads (≤60 days). Re-upload without replace mode, or trim the file.');
+              }
+              var confirmMsg = 'REPLACE MODE: This will DELETE every existing visit row between '
+                + minDate + ' and ' + maxDate + ' (' + daysSpan + ' day' + (daysSpan===1?'':'s')
+                + ') and replace with ' + data.length + ' rows from this upload.\n\n'
+                + 'Proceed?';
+              if (!window.confirm(confirmMsg)) {
+                throw new Error('Replace mode cancelled by user — nothing was changed.');
+              }
+              setMessage('Deleting existing rows in ' + minDate + ' to ' + maxDate + '...');
+              var delRes = await supabase.from('visit_schedule_data')
+                .delete()
+                .gte('visit_date', minDate)
+                .lte('visit_date', maxDate)
+                .select('id'); // .select() so we get a count back
+              if (delRes.error) throw new Error('Replace-mode delete failed: ' + delRes.error.message);
+              replacedCount = (delRes.data || []).length;
+              setMessage('Deleted ' + replacedCount + ' stale rows. Inserting fresh data...');
+            }
+          }
+
           // ── Pre-compare: fetch existing records so we can report new vs updated vs unchanged ──
           setMessage('Comparing with existing visit data...');
           var existingMap = {};
@@ -332,7 +375,8 @@ function UploadCard(props) {
             console.warn('recompute_last_visit_dates failed:', rpcRes.error.message);
           }
 
-          setMessage('✓ Visits saved. ' + newCount + ' new · ' + updatedCount + ' updated · ' + unchangedCount + ' unchanged · ' + (count || '?') + ' total in history' + lastVisitMsg + authSyncMsg + '.');
+          var replaceMsg = replacedCount > 0 ? ' · REPLACED ' + replacedCount + ' stale row(s)' : '';
+          setMessage('✓ Visits saved. ' + newCount + ' new · ' + updatedCount + ' updated · ' + unchangedCount + ' unchanged · ' + (count || '?') + ' total in history' + replaceMsg + lastVisitMsg + authSyncMsg + '.');
           setCount(rows.length);
         }
 
@@ -536,6 +580,33 @@ function UploadCard(props) {
           </div>
         )}
       </div>
+      {/* 2026-05-18: Replace mode toggle — visits-only. Default OFF. */}
+      {props.batchType === 'visits' && (
+        <div onClick={function(e) { e.stopPropagation(); }}
+          style={{
+            background: replaceMode ? '#FEF3C7' : '#F9FAFB',
+            border: '1px solid ' + (replaceMode ? '#FCD34D' : 'var(--border)'),
+            borderRadius: 8, padding: '10px 14px', marginBottom: 12,
+            display: 'flex', gap: 10, alignItems: 'flex-start',
+          }}>
+          <input type="checkbox" id={'replace-mode-' + props.batchType}
+            checked={replaceMode}
+            onChange={function(e) { setReplaceMode(e.target.checked); }}
+            style={{ marginTop: 2, cursor: 'pointer' }} />
+          <label htmlFor={'replace-mode-' + props.batchType} style={{ flex: 1, cursor: 'pointer' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: replaceMode ? '#92400E' : 'var(--black)' }}>
+              {replaceMode ? '⚠ Replace Mode ON — will DELETE then re-insert' : 'Replace Mode (purges stale rows)'}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 3, lineHeight: 1.4 }}>
+              When ON, the system auto-detects the date range in your file and
+              <strong> deletes every existing visit row in that range</strong> before inserting.
+              Use this when Pariox has removed visits but they're still showing in our system.
+              You'll get a confirmation dialog before anything is deleted.
+            </div>
+          </label>
+        </div>
+      )}
+
       <div style={{ border: '2px dashed ' + borderColor, borderRadius: 10, padding: 32, textAlign: 'center', cursor: 'pointer', background: 'var(--bg)' }}
         onDrop={handleDrop} onDragOver={function(e) { e.preventDefault(); }}
         onClick={function() { if (inputRef.current && status !== 'loading') inputRef.current.click(); }}>
