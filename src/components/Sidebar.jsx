@@ -5,16 +5,21 @@ import { supabase } from '../lib/supabase';
 // Sidebar sections — ordered to mirror the referral lifecycle:
 // Overview/quick-access → Main Ops → Intake → Auth → Coordination → Clinical
 // → Marketing (business dev) → Performance (super admin only) → Admin (admin+)
+// 2026-05-18 BUG FIX: section keys MUST match page_permissions.page_section
+// exactly. We renamed DB sections to 'CARE COORDINATION' / 'CLINICAL DEPARTMENT'
+// during the 2026-05 sidebar reorg but left this list with the old short keys.
+// Result: every page in those two sections disappeared from the sidebar.
+// Fixed by matching DB values verbatim.
 const ALL_SECTIONS = [
-  { key: 'OVERVIEW',       label: 'OVERVIEW' },
-  { key: 'OPERATIONS',     label: 'MAIN OPERATIONS' },
-  { key: 'INTAKE',         label: 'INTAKE' },
-  { key: 'AUTHORIZATION',  label: 'AUTHORIZATION' },
-  { key: 'COORDINATION',   label: 'CARE COORDINATION' },
-  { key: 'CLINICAL',       label: 'CLINICAL' },
-  { key: 'MARKETING',      label: 'MARKETING' },
-  { key: 'PERFORMANCE',    label: 'PERFORMANCE' },
-  { key: 'ADMIN',          label: 'ADMIN' },
+  { key: 'OVERVIEW',            label: 'OVERVIEW' },
+  { key: 'OPERATIONS',          label: 'MAIN OPERATIONS' },
+  { key: 'INTAKE',              label: 'INTAKE' },
+  { key: 'AUTHORIZATION',       label: 'AUTHORIZATION' },
+  { key: 'CARE COORDINATION',   label: 'CARE COORDINATION' },
+  { key: 'CLINICAL DEPARTMENT', label: 'CLINICAL DEPARTMENT' },
+  { key: 'MARKETING',           label: 'MARKETING' },
+  { key: 'PERFORMANCE',         label: 'PERFORMANCE' },
+  { key: 'ADMIN',               label: 'ADMIN' },
 ];
 
 const PAGE_ICONS = {
