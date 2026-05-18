@@ -81,10 +81,39 @@ export default function ProductivityPage() {
   // the tiles read as cards but weren't clickable. Now they behave as scopes.
   var [scope, setScope] = useState('ALL');
 
-  // Compute the Sun-Sat bounds once per render. Productivity is intentionally
-  // a weekly metric — every count below is scoped to this calendar week only.
-  var weekRange = useMemo(weekBounds, []);
-  var weekStart = weekRange[0], weekEnd = weekRange[1];
+  // 2026-05-18: user can now pick any Sun-Sat (or arbitrary range) — defaults
+  // to the current work week. Liam's request: "We need a way to set the dates
+  // that we are reviewing the clinicians schedules."
+  var defaultBounds = useMemo(weekBounds, []);
+  var [weekStart, setWeekStart] = useState(defaultBounds[0]);
+  var [weekEnd,   setWeekEnd]   = useState(defaultBounds[1]);
+
+  // Navigate by full weeks (Sun-Sat) from the current weekStart
+  function shiftWeek(weeksDelta) {
+    var d = new Date(weekStart + 'T00:00:00');
+    d.setDate(d.getDate() + weeksDelta * 7);
+    // Snap to Sunday of that week (defensive in case user picked a mid-week date)
+    d.setDate(d.getDate() - d.getDay());
+    var end = new Date(d);
+    end.setDate(d.getDate() + 6);
+    var toLocal = function(x) { return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0'); };
+    setWeekStart(toLocal(d));
+    setWeekEnd(toLocal(end));
+  }
+  function resetToThisWeek() {
+    var b = weekBounds();
+    setWeekStart(b[0]);
+    setWeekEnd(b[1]);
+  }
+  // Human-readable label for the current selection
+  var rangeLabel = useMemo(function() {
+    var s = new Date(weekStart + 'T00:00:00');
+    var e = new Date(weekEnd + 'T00:00:00');
+    return s.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+         + ' – '
+         + e.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }, [weekStart, weekEnd]);
+  var isCurrentWeek = (weekStart === defaultBounds[0] && weekEnd === defaultBounds[1]);
 
   function load() {
     var clinPromise = supabase.from('clinicians')
@@ -125,11 +154,10 @@ export default function ProductivityPage() {
   var nameMap = useMemo(function() { return buildNameMap(clinicians); }, [clinicians]);
  
   var statsByClinicianId = useMemo(function() {
-    // Step 1: group rows by (patient, date, staff). If ANY row in a
-    // group indicates the visit didn't happen (cancelled/attempted/
-    // missed/no-show), treat the entire group as a non-visit. This
-    // collapses Pariox's stale "Level 3" + "Cancelled Treatment" pairs
-    // into 0 visits for that slot, matching Pariox's own total.
+    // 2026-05-18 BUG FIX: each (patient, date, staff) SLOT counts as ONE visit.
+    // Old code iterated EVERY row in the group, so a slot with two non-cancelled
+    // rows (e.g. Pariox uploaded both "Maintenance *e*" and "Level 2 *e*" for
+    // the same visit) got counted TWICE. Joshua Norell showed 40 instead of 27.
     var NON_REAL = /cancel|attempt|missed|no[ -]?show/i;
     var groups = {};
     visits.forEach(function(v) {
@@ -142,27 +170,41 @@ export default function ProductivityPage() {
       else groups[key].rows.push(v);
     });
 
-    // Step 2: iterate valid groups only and accumulate per-clinician stats
+    // For each valid slot, pick ONE representative row and increment ONCE.
+    // Priority: completed > missed(active) > scheduled > missed > cancelled
+    // — pick the row that most represents the slot's actual outcome.
+    function rank(v) {
+      var s = (v.status || '').toLowerCase();
+      if (s.includes('completed'))       return 5;
+      if (s === 'missed (active)')       return 4;
+      if (s.includes('scheduled'))       return 3;
+      if (s.includes('missed'))          return 2;
+      if (s.includes('cancelled'))       return 1;
+      return 0;
+    }
+
     var map = {};
     Object.keys(groups).forEach(function(key) {
       var g = groups[key];
-      if (g.cancelled) return; // whole slot was cancelled — skip all rows
-      g.rows.forEach(function(v) {
-        var rawName = (v.staff_name_normalized || v.staff_name || '').trim();
-        var id = nameMap[rawName.toLowerCase()] ||
-                 nameMap[parioxToFirstLast(rawName).toLowerCase()];
-        if (!id) return;
-        if (!map[id]) map[id] = { completed: 0, scheduled: 0, missed: 0, cancelled: 0, evals: 0, reassessments: 0, missedActive: 0 };
-        var s = (v.status || '').toLowerCase();
-        var e = (v.event_type || '').toLowerCase();
-        if (s === 'missed (active)') { map[id].missedActive++; }
-        else if (s.includes('completed')) { map[id].completed++; }
-        else if (s.includes('scheduled')) { map[id].scheduled++; }
-        else if (s.includes('missed')) { map[id].missed++; }
-        else if (s.includes('cancelled')) { map[id].cancelled++; }
-        if (e.includes('evaluation') && !e.includes('reassess') && !e.includes('re-assess')) map[id].evals++;
-        if (e.includes('reassess') || e.includes('re-assess') || e.includes('recert')) map[id].reassessments++;
-      });
+      if (g.cancelled) return; // whole slot was cancelled — skip
+      if (g.rows.length === 0) return;
+      // Pick the highest-ranked row as the representative for this slot
+      var v = g.rows.slice().sort(function(a, b) { return rank(b) - rank(a); })[0];
+      var rawName = (v.staff_name_normalized || v.staff_name || '').trim();
+      var id = nameMap[rawName.toLowerCase()] ||
+               nameMap[parioxToFirstLast(rawName).toLowerCase()];
+      if (!id) return;
+      if (!map[id]) map[id] = { completed: 0, scheduled: 0, missed: 0, cancelled: 0, evals: 0, reassessments: 0, missedActive: 0 };
+      var s = (v.status || '').toLowerCase();
+      if (s === 'missed (active)')      { map[id].missedActive++; }
+      else if (s.includes('completed')) { map[id].completed++; }
+      else if (s.includes('scheduled')) { map[id].scheduled++; }
+      else if (s.includes('missed'))    { map[id].missed++; }
+      else if (s.includes('cancelled')) { map[id].cancelled++; }
+      // Eval / reassessment classification — once per slot (from the chosen row)
+      var e = (v.event_type || '').toLowerCase();
+      if (e.includes('evaluation') && !e.includes('reassess') && !e.includes('re-assess')) map[id].evals++;
+      if (e.includes('reassess') || e.includes('re-assess') || e.includes('recert')) map[id].reassessments++;
     });
     return map;
   }, [visits, nameMap]);
@@ -245,9 +287,41 @@ export default function ProductivityPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Productivity Tracker"
-        subtitle={filtered.length + ' clinicians \u00b7 Week of ' + weekStart + ' \u2192 ' + weekEnd + ' (Sun\u2013Sat)'} />
+        subtitle={filtered.length + ' clinicians \u00b7 ' + rangeLabel + (isCurrentWeek ? ' (this week, Sun-Sat)' : ' (custom range)')} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
- 
+
+        {/* ─── DATE RANGE PICKER (2026-05-18) ────────────────────────────
+            User can navigate any Sun-Sat week or pick a custom range. */}
+        <div style={{ display: 'flex', gap: 10, padding: '8px 20px', borderBottom: '1px solid var(--border)', background: '#FAFAFA', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Reviewing week:
+          </span>
+          <button onClick={function() { shiftWeek(-1); }}
+            title="Previous week"
+            style={{ padding: '5px 10px', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            {'<- Prev'}
+          </button>
+          <input type="date" value={weekStart} onChange={function(e) { setWeekStart(e.target.value); }}
+            style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, background: 'var(--card-bg)' }} />
+          <span style={{ fontSize: 11, color: 'var(--gray)' }}>to</span>
+          <input type="date" value={weekEnd} onChange={function(e) { setWeekEnd(e.target.value); }}
+            style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, background: 'var(--card-bg)' }} />
+          <button onClick={function() { shiftWeek(1); }}
+            title="Next week"
+            style={{ padding: '5px 10px', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            {'Next ->'}
+          </button>
+          {!isCurrentWeek && (
+            <button onClick={resetToThisWeek}
+              style={{ padding: '5px 10px', background: '#1565C0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+              This Week
+            </button>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--gray)', fontWeight: 600 }}>
+            {rangeLabel}
+          </span>
+        </div>
+
         {/* Summary Strip — each tile is a clickable scope filter */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
