@@ -26,6 +26,17 @@ function daysBetween(fromYmd, toYmd) {
   return Math.floor((b - a) / 86400000);
 }
 
+// True only for traditional ("straight" / Original) Medicare. Medicare Advantage
+// plans are administered by private carriers and carry that carrier's name
+// (e.g. "Aetna Medicare", "Cigna Medicare") — they do NOT follow Medicare's
+// 10-visit / 30-day progress-note or 20-visit cap rules, so they must not be
+// tracked here. census_data.insurance may carry a "X - " region prefix.
+function isStraightMedicare(insurance) {
+  if (!insurance) return false;
+  const v = insurance.replace(/^[A-Za-z]\s*-\s*/, '').trim().toLowerCase();
+  return v === 'medicare';
+}
+
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 const MANAGERS = { A:'Uma Jacobs',B:'Lia Davis',C:'Earl Dimaano',G:'Samantha Faliks',H:'Kaylee Ramsey',J:'Hollie Fincher',M:'Ariel Maboudi',N:'Ariel Maboudi',T:'Samantha Faliks',V:'Samantha Faliks' };
 
@@ -39,15 +50,36 @@ export default function MedicareTrackerPage() {
   const [searchQ, setSearchQ] = useState('');
   const [activeModal, setActiveModal] = useState(null); // { flag, type: 'progress'|'20' }
   const [ackNote, setAckNote] = useState('');
+  const [expandedPTs, setExpandedPTs] = useState(() => new Set());
+
+  function togglePT(pt) {
+    setExpandedPTs(prev => {
+      const next = new Set(prev);
+      if (next.has(pt)) next.delete(pt); else next.add(pt);
+      return next;
+    });
+  }
 
   async function recalculate() {
     setCalculating(true);
     try {
       // 2026-05-17: paginated — visit_schedule_data with status='completed'
       // can easily exceed 1000 rows when calculating Medicare cap utilization.
-      const mcPts = await fetchAllPages(supabase.from('census_data')
+      const mcPtsRaw = await fetchAllPages(supabase.from('census_data')
         .select('patient_name, region, insurance')
         .ilike('insurance', '%medicare%'));
+      // Straight Medicare only — drop Medicare Advantage plans (Aetna Medicare,
+      // Cigna Medicare, etc.) that the broad ILIKE also matches.
+      const mcPts = (mcPtsRaw || []).filter(p => isStraightMedicare(p.insurance));
+
+      // Purge flag rows for patients no longer tracked — Medicare Advantage
+      // patients carried over from before this filter, plus anyone off census.
+      const keepNames = new Set(mcPts.map(p => p.patient_name));
+      const { data: existingFlags } = await supabase.from('medicare_visit_flags').select('patient_name');
+      const staleNames = (existingFlags || []).map(r => r.patient_name).filter(n => !keepNames.has(n));
+      if (staleNames.length) {
+        await supabase.from('medicare_visit_flags').delete().in('patient_name', staleNames);
+      }
 
       const visits = await fetchAllPages(supabase.from('visit_schedule_data')
         .select('patient_name, staff_name, event_type, status, visit_date, region')
@@ -290,6 +322,22 @@ export default function MedicareTrackerPage() {
     });
   }, [flags, filterRegion, filterFlag, searchQ]);
 
+  // Group the visible patients under their Evaluating PT for the accordion view.
+  const ptGroups = useMemo(() => {
+    const map = {};
+    for (const f of filtered) {
+      const pt = f.evaluating_pt || 'Unassigned';
+      (map[pt] || (map[pt] = [])).push(f);
+    }
+    return Object.entries(map)
+      .map(([pt, patients]) => ({
+        pt,
+        patients: [...patients].sort((a, b) => (b.total_completed_visits || 0) - (a.total_completed_visits || 0)),
+        needsAction: patients.filter(p => p.progress_note_due || (p.flag_20th_discharge && !p.flag_20th_acknowledged)).length,
+      }))
+      .sort((a, b) => b.patients.length - a.patients.length);
+  }, [filtered]);
+
   const needsAction = flags.filter(f =>
     f.progress_note_due ||
     (f.flag_20th_discharge && !f.flag_20th_acknowledged)
@@ -398,77 +446,96 @@ export default function MedicareTrackerPage() {
             </div>
           )}
 
-          {/* Main table */}
+          {/* Patients grouped by Evaluating PT */}
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
             <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontSize:14, fontWeight:700 }}>Medicare Patient Visit Log</div>
-              <div style={{ fontSize:11, color:'var(--gray)' }}>{filtered.length} patients</div>
+              <div style={{ fontSize:14, fontWeight:700 }}>Medicare Patients by Evaluating PT</div>
+              <div style={{ fontSize:11, color:'var(--gray)' }}>{ptGroups.length} PTs · {filtered.length} patients</div>
             </div>
 
-            {/* Header */}
-            <div style={{ display:'grid', gridTemplateColumns:'1.6fr 0.5fr 0.8fr 1.2fr 0.6fr 1.2fr 1fr', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
-              <span>Patient</span><span>Rgn</span><span>Visits</span><span>Evaluating PT</span><span>Progress</span><span>Progress Note</span><span>20th Discharge</span>
-            </div>
-
-            {filtered.length === 0 ? (
+            {ptGroups.length === 0 ? (
               <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
                 {flags.length === 0 ? 'No Medicare patients found. Click "Recalculate from Visits" to scan.' : 'No records match current filters.'}
               </div>
-            ) : filtered.map((f, i) => {
-              const pct = Math.min((f.total_completed_visits / 20) * 100, 100);
-              const barColor = f.total_completed_visits >= 20 ? '#DC2626' : f.total_completed_visits >= 15 ? '#D97706' : f.total_completed_visits >= 10 ? '#F59E0B' : '#1565C0';
-              const needsNote = !!f.progress_note_due;
-              const needs20 = f.flag_20th_discharge && !f.flag_20th_acknowledged;
-              const todayStr = new Date().toISOString().split('T')[0];
-              const anchorDate = f.last_progress_note_date || f.care_start_date;
-              const daysSinceAnchor = daysBetween(anchorDate, todayStr);
-              const visitsSinceAnchor = (f.total_completed_visits || 0) - (f.last_progress_note_visit || 0);
+            ) : ptGroups.map(group => {
+              const open = expandedPTs.has(group.pt);
               return (
-                <div key={f.id} style={{ display:'grid', gridTemplateColumns:'1.6fr 0.5fr 0.8fr 1.2fr 0.6fr 1.2fr 1fr', padding:'11px 20px', borderBottom:'1px solid var(--border)', background: needs20 ? '#FFF5F5' : needsNote ? '#FFFBEB' : i%2===0?'var(--card-bg)':'var(--bg)', alignItems:'center', gap:8 }}>
-                  <div>
-                    <div style={{ fontSize:12, fontWeight:600 }}>{f.patient_name}</div>
-                    <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>Medicare · Last calc: {new Date(f.last_calculated_at).toLocaleDateString()}</div>
-                  </div>
-                  <span style={{ fontSize:12, fontWeight:700, color:'var(--gray)' }}>{f.region}</span>
-                  <div>
-                    <span style={{ fontSize:18, fontWeight:900, fontFamily:'DM Mono, monospace', color:barColor }}>{f.total_completed_visits}</span>
-                    <span style={{ fontSize:10, color:'var(--gray)' }}>/20</span>
-                  </div>
-                  <span style={{ fontSize:12 }}>{f.evaluating_pt || '—'}</span>
-                  <div>
-                    <div style={{ height:6, background:'var(--border)', borderRadius:999, overflow:'hidden', marginBottom:2 }}>
-                      <div style={{ height:'100%', width:pct+'%', background:barColor, borderRadius:999 }} />
+                <div key={group.pt}>
+                  {/* PT row — click to expand the patient dropdown */}
+                  <div onClick={() => togglePT(group.pt)}
+                    style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 20px', borderBottom:'1px solid var(--border)', cursor:'pointer', background: open ? 'var(--bg)' : 'var(--card-bg)' }}>
+                    <span style={{ fontSize:10, color:'var(--gray)', width:12, textAlign:'center' }}>{open ? '▾' : '▸'}</span>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:13, fontWeight:700 }}>{group.pt}</div>
+                      <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>
+                        {group.patients.length} Medicare patient{group.patients.length>1?'s':''}
+                      </div>
                     </div>
-                    <div style={{ fontSize:9, color:'var(--gray)' }}>{Math.round(pct)}%</div>
-                  </div>
-                  <div>
-                    {needsNote ? (
-                      <button onClick={() => setActiveModal({ flag: f, type: 'progress' })}
-                        style={{ fontSize:10, fontWeight:700, color:'#92400E', background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:6, padding:'3px 10px', cursor:'pointer', textAlign:'left' }}>
-                        📋 {f.progress_note_due_reason === '10_visits' ? `${visitsSinceAnchor} visits` : `${daysSinceAnchor}d since note`}
-                      </button>
-                    ) : f.last_progress_note_date ? (
-                      <span style={{ fontSize:10, fontWeight:600, color:'#065F46', background:'#ECFDF5', padding:'2px 8px', borderRadius:999 }}>
-                        ✓ {fmtDate(f.last_progress_note_date)} ({visitsSinceAnchor}v / {daysSinceAnchor}d)
-                      </span>
-                    ) : (
-                      <span style={{ fontSize:10, color:'var(--gray)' }}>
-                        {visitsSinceAnchor}v / {daysSinceAnchor ?? 0}d since start
+                    {group.needsAction > 0 && (
+                      <span style={{ fontSize:10, fontWeight:700, color:'#D97706', background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:999, padding:'3px 10px' }}>
+                        {group.needsAction} need{group.needsAction>1?'':'s'} action
                       </span>
                     )}
                   </div>
-                  <div>
-                    {!f.flag_20th_discharge ? (
-                      <span style={{ fontSize:10, color:'var(--gray)' }}>{20 - f.total_completed_visits} visits left</span>
-                    ) : f.flag_20th_acknowledged ? (
-                      <span style={{ fontSize:10, fontWeight:600, color:'#065F46', background:'#ECFDF5', padding:'2px 8px', borderRadius:999 }}>✅ Discharged</span>
-                    ) : (
-                      <button onClick={() => setActiveModal({ flag: f, type: '20' })}
-                        style={{ fontSize:10, fontWeight:700, color:'#DC2626', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:6, padding:'3px 10px', cursor:'pointer' }}>
-                        🚨 Discharge Now
-                      </button>
-                    )}
-                  </div>
+
+                  {/* Patient dropdown */}
+                  {open && (
+                    <div style={{ background:'var(--bg)' }}>
+                      <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 0.9fr 1.5fr 1.5fr', padding:'7px 20px 7px 42px', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
+                        <span>Patient</span><span>Rgn</span><span>Visits</span><span>Progress Note</span><span>Discharge Note</span>
+                      </div>
+                      {group.patients.map(f => {
+                        const barColor = f.total_completed_visits >= 20 ? '#DC2626' : f.total_completed_visits >= 15 ? '#D97706' : f.total_completed_visits >= 10 ? '#F59E0B' : '#1565C0';
+                        const needsNote = !!f.progress_note_due;
+                        const needs20 = f.flag_20th_discharge && !f.flag_20th_acknowledged;
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const anchorDate = f.last_progress_note_date || f.care_start_date;
+                        const daysSinceAnchor = daysBetween(anchorDate, todayStr);
+                        const visitsSinceAnchor = (f.total_completed_visits || 0) - (f.last_progress_note_visit || 0);
+                        return (
+                          <div key={f.id} style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 0.9fr 1.5fr 1.5fr', padding:'10px 20px 10px 42px', borderBottom:'1px solid var(--border)', background: needs20 ? '#FFF5F5' : needsNote ? '#FFFBEB' : 'transparent', alignItems:'center', gap:8 }}>
+                            <div>
+                              <div style={{ fontSize:12, fontWeight:600 }}>{f.patient_name}</div>
+                              <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>Medicare</div>
+                            </div>
+                            <span style={{ fontSize:12, fontWeight:700, color:'var(--gray)' }}>{f.region}</span>
+                            <div>
+                              <span style={{ fontSize:16, fontWeight:900, fontFamily:'DM Mono, monospace', color:barColor }}>{f.total_completed_visits}</span>
+                              <span style={{ fontSize:10, color:'var(--gray)' }}>/20</span>
+                            </div>
+                            <div>
+                              {needsNote ? (
+                                <button onClick={() => setActiveModal({ flag: f, type: 'progress' })}
+                                  style={{ fontSize:10, fontWeight:700, color:'#92400E', background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:6, padding:'3px 10px', cursor:'pointer', textAlign:'left' }}>
+                                  {'📋'} {f.progress_note_due_reason === '10_visits' ? `${visitsSinceAnchor} visits` : `${daysSinceAnchor}d since note`}
+                                </button>
+                              ) : f.last_progress_note_date ? (
+                                <span style={{ fontSize:10, fontWeight:600, color:'#065F46', background:'#ECFDF5', padding:'2px 8px', borderRadius:999 }}>
+                                  {'✓'} {fmtDate(f.last_progress_note_date)} ({visitsSinceAnchor}v / {daysSinceAnchor}d)
+                                </span>
+                              ) : (
+                                <span style={{ fontSize:10, color:'var(--gray)' }}>
+                                  {visitsSinceAnchor}v / {daysSinceAnchor ?? 0}d since start
+                                </span>
+                              )}
+                            </div>
+                            <div>
+                              {!f.flag_20th_discharge ? (
+                                <span style={{ fontSize:10, color:'var(--gray)' }}>{20 - f.total_completed_visits} visits left</span>
+                              ) : f.flag_20th_acknowledged ? (
+                                <span style={{ fontSize:10, fontWeight:600, color:'#065F46', background:'#ECFDF5', padding:'2px 8px', borderRadius:999 }}>{'✅'} Discharged</span>
+                              ) : (
+                                <button onClick={() => setActiveModal({ flag: f, type: '20' })}
+                                  style={{ fontSize:10, fontWeight:700, color:'#DC2626', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:6, padding:'3px 10px', cursor:'pointer' }}>
+                                  {'🚨'} Discharge Now
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
