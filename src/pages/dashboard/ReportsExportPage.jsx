@@ -134,6 +134,7 @@ const REPORTS = [
   // CLINICAL DEPARTMENT
   { id: 'clinical_discipline',  icon: '🩺', title: 'Discipline Breakdown (PT vs OT)',    desc: 'How patients split between Lymphedema PT and OT, by region — capacity planning input. Multi-sheet (Summary + All Patients).', formats: ['xlsx','csv'], category: 'Clinical Dept' },
   { id: 'clinical_eval_pending',icon: '⏱', title: 'Eval Pending Backlog',                desc: 'Patients awaiting clinical evaluation — 48h SLA.', formats: ['xlsx','csv'], category: 'Clinical Dept' },
+  { id: 'clinical_high_risk',   icon: '⚠', title: 'High Risk Patients (LOC + CareMap)',  desc: 'Full high-risk roster with CareMap, LOC level, wounds, comorbidities, falls, compliance & environmental risk. Multi-sheet (LOC 4+5 first, then full list).', formats: ['xlsx','csv'], category: 'Clinical Dept' },
   // INTAKE DEPARTMENT
   { id: 'intake_this_week',     icon: '📥', title: 'This Week\'s Referrals',              desc: 'New referrals received in the last 7 days — with welcome call + accept/decline status.', formats: ['xlsx','csv'], category: 'Intake Dept' },
   { id: 'intake_ref_sources',   icon: '📊', title: 'Referral Source Breakdown',           desc: 'Which Pariox codes are sending referrals, mapped to insurance + accept rate.', formats: ['xlsx','csv'], category: 'Intake Dept' },
@@ -151,6 +152,8 @@ export default function ReportsExportPage() {
   const [clinicians, setClinicians] = useState([]);
   // Added 2026-05-17 for dept reports consolidation
   const [careCoordNotes, setCareCoordNotes] = useState([]);
+  // High-risk reassessment roster — drives the clinical_high_risk report
+  const [highRisk, setHighRisk] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -168,11 +171,14 @@ export default function ReportsExportPage() {
       fetchAllPages(supabase.from('clinicians').select('*').eq('is_active', true)),
       // For cc_notes_log report (added 2026-05-17 in consolidation)
       fetchAllPages(supabase.from('care_coord_notes').select('patient_name,region,note_type,note,contact_date,updated_by').order('contact_date', { ascending: false })),
-    ]).then(([v,i,a,c,cl,cn]) => {
+      // High-risk roster (added 2026-05-19) — drives clinical_high_risk report
+      fetchAllPages(supabase.from('patient_risk_factors').select('*').order('caremap_score', { ascending: false, nullsFirst: false })),
+    ]).then(([v,i,a,c,cl,cn,hr]) => {
       setVisits(v); setIntake(i);
       setAuth(a); setCensus(c);
       setClinicians(cl);
       setCareCoordNotes(cn);
+      setHighRisk(hr || []);
       setLoading(false);
     });
   }
@@ -897,6 +903,66 @@ export default function ReportsExportPage() {
             XLSX.writeFile(wb, 'Discipline_Breakdown'+suffix+'.xlsx');
           } else {
             exportCSV(detailRows, 'Discipline_Breakdown'+suffix);
+          }
+          break;
+        }
+
+        case 'clinical_high_risk': {
+          // High Risk Patients report — uses patient_risk_factors. Two sheets in XLSX:
+          //   Sheet 1: LOC 4+5 (the critical watchlist Liam reviews first)
+          //   Sheet 2: All patients on watchlist (sorted by CareMap desc)
+          const tierOf = (loc) => {
+            if (loc === 5) return 'Critical (LOC 5)';
+            if (loc === 4) return 'High (LOC 4)';
+            if (loc === 3) return 'Moderate (LOC 3)';
+            if (loc === 2) return 'Mild (LOC 2)';
+            if (loc === 1) return 'Low (LOC 1)';
+            return 'No CareMap';
+          };
+          const mapRow = (r) => ({
+            'Patient': r.patient_name,
+            'Region': r.region || '',
+            'Health Plan': r.health_plan || '',
+            'CareMap Score': r.caremap_score ?? '',
+            'LOC Level': r.loc_level ?? '',
+            'LOC Tier': tierOf(r.loc_level),
+            'Wounds': r.has_wounds ? 'Yes' : 'No',
+            '3+ Comorbidities': r.comorbidities_3plus ? 'Yes' : 'No',
+            'Falls (6mo)': r.falls_6mo ? 'Yes' : 'No',
+            'Compliance Score': r.compliance_score ?? '',
+            'High Compliance Risk (>8)': r.high_compliance_risk ? 'Yes' : 'No',
+            'Environmental Score': r.environmental_score ?? '',
+            'High Environmental Risk (>12)': r.high_environmental_risk ? 'Yes' : 'No',
+            'Last Reassessment': r.last_reassessment_date || '',
+            'Comments': r.comments || '',
+          });
+          const scoped = regionFilter === 'ALL' ? highRisk : highRisk.filter(r => r.region === regionFilter);
+          const sortFn = (a, b) => (b.caremap_score ?? -1) - (a.caremap_score ?? -1);
+          const high = scoped.filter(r => r.loc_level === 4 || r.loc_level === 5).sort(sortFn).map(mapRow);
+          const all = [...scoped].sort(sortFn).map(mapRow);
+          if (format === 'xlsx') {
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(high), 'LOC 4 + 5');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(all),  'All Watchlist');
+            // Summary sheet — counts by LOC level and region
+            const summary = [];
+            for (const loc of [5, 4, 3, 2, 1, null]) {
+              const set = scoped.filter(r => r.loc_level === loc);
+              summary.push({
+                'LOC Level': loc ?? 'No CareMap',
+                'Tier': tierOf(loc),
+                'Patient Count': set.length,
+                'With Wounds': set.filter(r => r.has_wounds).length,
+                'With 3+ Comorbidities': set.filter(r => r.comorbidities_3plus).length,
+                'With Falls (6mo)': set.filter(r => r.falls_6mo).length,
+                'High Compliance Risk': set.filter(r => r.high_compliance_risk).length,
+                'High Environmental Risk': set.filter(r => r.high_environmental_risk).length,
+              });
+            }
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'Summary by LOC');
+            XLSX.writeFile(wb, 'High_Risk_Patients' + suffix + '.xlsx');
+          } else {
+            exportCSV(all, 'High_Risk_Patients' + suffix);
           }
           break;
         }

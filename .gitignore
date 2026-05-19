@@ -28,6 +28,8 @@ yarn-error.log*
 
 # Cowork / Claude session artifacts
 .claude/
+.claude-flow/
+.mcp.json
 .auto-memory/
 .npm/
 .env*.local

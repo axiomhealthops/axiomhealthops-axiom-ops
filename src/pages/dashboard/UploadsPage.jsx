@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { runAlertEngine } from '../../lib/alertEngine';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import HighRiskUploadCard from '../../components/HighRiskUploadCard';
  
 // ── XLSX → CSV ────────────────────────────────────────────────────────
 function parseXLSXFile(arrayBuffer) {
@@ -705,6 +706,7 @@ export default function UploadsPage() {
             parseType="census"
             profile={profile}
           />
+          <HighRiskUploadCard profile={profile} />
         </div>
  
         {/* Upload History */}

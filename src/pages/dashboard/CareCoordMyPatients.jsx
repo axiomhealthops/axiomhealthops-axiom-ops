@@ -6,6 +6,8 @@ import ScheduleVisitModal from '../../components/ScheduleVisitModal';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import { useRiskMap } from '../../hooks/useRiskMap';
+import RiskBadge from '../../components/RiskBadge';
 
 const FREQUENCY_OPTIONS = ['1x/week','2x/week','3x/week','4x/week','5x/week','1x/month','2x/month','PRN','Daily'];
 
@@ -124,6 +126,7 @@ function TaskItem({ priority, icon, title, subtitle, count, urgency, onClick }) 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function CareCoordMyPatients() {
   const { profile } = useAuth();
+  const risk = useRiskMap();
   const [census, setCensus] = useState([]);
   const [auths, setAuths] = useState([]);
   const [notes, setNotes] = useState([]);
@@ -771,7 +774,10 @@ export default function CareCoordMyPatients() {
                   return (
                     <div key={p.id||i} style={{ display:'grid', gridTemplateColumns:'1.4fr 0.4fr 0.6fr 0.6fr 0.7fr 0.7fr 0.8fr 0.9fr 1.1fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', background:rowBg, alignItems:'center', gap:8 }}>
                       <div>
-                        <div style={{ fontSize:12, fontWeight:600 }}>{p.patient_name}</div>
+                        <div style={{ fontSize:12, fontWeight:600 }}>
+                          {p.patient_name}
+                          <RiskBadge name={p.patient_name} region={p.region} risk={risk} />
+                        </div>
                         {p.followUpDue && (
                           <div style={{ fontSize:9, color:'#DC2626', fontWeight:700, display:'flex', alignItems:'center', gap:4 }}>
                             ⚠ Follow-up overdue: {fmtDate(p.followUpNote?.follow_up_date)}

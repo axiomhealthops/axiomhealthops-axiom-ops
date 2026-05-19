@@ -4,6 +4,8 @@ import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import { useRiskMap } from '../../hooks/useRiskMap';
+import RiskBadge from '../../components/RiskBadge';
 
 const LYMPH_BENCHMARK = 1;   // <1% target
 const OTHER_BENCHMARK = 5;   // <5% target
@@ -246,6 +248,7 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames }) {
 
 export default function HospitalizationTrackerPage() {
   const { profile } = useAuth();
+  const risk = useRiskMap();
   const [records, setRecords] = useState([]);
   const [census, setCensus] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -526,7 +529,10 @@ export default function HospitalizationTrackerPage() {
                   {stillAdmitted.map(r => (
                     <div key={r.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 12px', background:'white', borderRadius:7, marginBottom:6, border:'1px solid #FECACA' }}>
                       <div>
-                        <span style={{ fontWeight:700, fontSize:13 }}>{r.patient_name}</span>
+                        <span style={{ fontWeight:700, fontSize:13 }}>
+                          {r.patient_name}
+                          <RiskBadge name={r.patient_name} region={r.region} risk={risk} />
+                        </span>
                         <span style={{ fontSize:11, color:'var(--gray)', marginLeft:10 }}>Admitted {r.admission_date}</span>
                         <span style={{ fontSize:11, color:'var(--gray)', marginLeft:10 }}>{r.admitting_diagnosis}</span>
                       </div>
@@ -646,7 +652,10 @@ export default function HospitalizationTrackerPage() {
                   <div key={r.id} style={{ background:'var(--card-bg)', border:'1px solid #FCD34D', borderRadius:10, padding:16 }}>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
                       <div>
-                        <span style={{ fontSize:15, fontWeight:700 }}>{r.patient_name}</span>
+                        <span style={{ fontSize:15, fontWeight:700 }}>
+                          {r.patient_name}
+                          <RiskBadge name={r.patient_name} region={r.region} risk={risk} />
+                        </span>
                         <span style={{ fontSize:11, color:'var(--gray)', marginLeft:10 }}>Region {r.region||'?'} · Admitted {r.admission_date}</span>
                       </div>
                       <div style={{ display:'flex', gap:8, alignItems:'center' }}>

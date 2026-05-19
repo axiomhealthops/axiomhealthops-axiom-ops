@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import { useRiskMap } from '../../hooks/useRiskMap';
+import RiskBadge from '../../components/RiskBadge';
 
 const BLENDED_RATE = 185;
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
@@ -271,7 +273,10 @@ function CliniciansTab({ clinicians, visits, census }) {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                     {cl.inactivePatients.map(p => (
                       <div key={p.patient_name} style={{ background: '#fff', border: '1px solid #FECACA', borderRadius: 7, padding: '8px 12px' }}>
-                        <div style={{ fontSize: 11, fontWeight: 600 }}>{p.patient_name}</div>
+                        <div style={{ fontSize: 11, fontWeight: 600 }}>
+                          {p.patient_name}
+                          <RiskBadge name={p.patient_name} region={p.region} risk={risk} />
+                        </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
                           <span style={{ fontSize: 9, color: 'var(--gray)' }}>Rgn {p.region} · {p.insurance}</span>
                           <span style={{ fontSize: 10, fontWeight: 700, color: '#DC2626' }}>
@@ -402,7 +407,10 @@ function InactivePatientsTab({ census, clinicians }) {
           return (
             <div key={p.patient_name + i} style={{ display: 'grid', gridTemplateColumns: '1.7fr 0.4fr 0.9fr 0.5fr 0.7fr 0.6fr 0.6fr 1.2fr 0.6fr', padding: '9px 16px', borderBottom: '1px solid var(--border)', background: rowBg, alignItems: 'center', gap: 8 }}>
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>{p.patient_name}</div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  {p.patient_name}
+                  <RiskBadge name={p.patient_name} region={p.region} risk={risk} />
+                </div>
                 <div style={{ fontSize: 9, color: 'var(--gray)', marginTop: 1 }}>{p.status}</div>
               </div>
               <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--gray)' }}>{p.region}</span>
@@ -432,6 +440,7 @@ function InactivePatientsTab({ census, clinicians }) {
 }
 
 export default function ClinicianAccountabilityPage() {
+  const risk = useRiskMap();
   const [loading, setLoading] = useState(true);
   const [clinicians, setClinicians] = useState([]);
   const [visits, setVisits] = useState([]);

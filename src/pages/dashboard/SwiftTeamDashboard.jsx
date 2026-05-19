@@ -5,6 +5,8 @@ import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import { useRiskMap } from '../../hooks/useRiskMap';
+import RiskBadge from '../../components/RiskBadge';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const WOUND_TYPES = [
@@ -531,6 +533,7 @@ function PatientDetail({ patient, assessments, onAssess, onClose }) {
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function SwiftTeamDashboard() {
   const { profile } = useAuth();
+  const risk = useRiskMap();
   const [patients, setPatients] = useState([]);
   const [assessments, setAssessments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -740,7 +743,10 @@ export default function SwiftTeamDashboard() {
                   onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = urgentRow ? '#FECACA' : 'var(--border)'; }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
                     <div>
-                      <div style={{ fontSize: 13, fontWeight: 700 }}>{wt.icon} {p.patient_name}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>
+                        {wt.icon} {p.patient_name}
+                        <RiskBadge name={p.patient_name} region={p.region} risk={risk} />
+                      </div>
                       <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 1 }}>Rgn {p.region} · {p.insurance}</div>
                     </div>
                     <span style={{ fontSize: 10, fontWeight: 700, color: sc.color, background: sc.bg, padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap' }}>{sc.l}</span>

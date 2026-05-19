@@ -7,6 +7,8 @@ import ScheduleVisitModal from '../../components/ScheduleVisitModal';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useAuth } from '../../hooks/useAuth';
+import { useRiskMap } from '../../hooks/useRiskMap';
+import RiskBadge from '../../components/RiskBadge';
 
 const FREQUENCY_OPTIONS = ['1x/week','2x/week','3x/week','4x/week','5x/week','1x/month','2x/month','PRN','Daily'];
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
@@ -1053,6 +1055,9 @@ export default function PatientCensusPage({ intent } = {}) {
   // Coord/etc. only see rows for their assigned regions.
   const { regions: allowedRegions, isAllAccess, loading: regionsLoading, applyToQuery } = useAssignedRegions();
 
+  // High-risk watchlist lookup — surfaces LOC 4/5 badges next to patient names.
+  const risk = useRiskMap();
+
   function load() {
     if (regionsLoading) return;
     if (!isAllAccess && (!allowedRegions || allowedRegions.length === 0)) {
@@ -1232,7 +1237,10 @@ export default function PatientCensusPage({ intent } = {}) {
                 onMouseEnter={e => e.currentTarget.style.background='#F0F7FF'}
                 onMouseLeave={e => e.currentTarget.style.background=i%2===0?'var(--card-bg)':'var(--bg)'}>
                 <div>
-                  <div style={{ fontSize:13, fontWeight:600, color:'var(--black)' }}>{patient.patient_name}</div>
+                  <div style={{ fontSize:13, fontWeight:600, color:'var(--black)' }}>
+                    {patient.patient_name}
+                    <RiskBadge name={patient.patient_name} region={patient.region} risk={risk} />
+                  </div>
                   <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>{patient.discipline||''}</div>
                 </div>
                 <span style={{ fontSize:13, fontWeight:700, color:'var(--gray)' }}>{patient.region||'—'}</span>
