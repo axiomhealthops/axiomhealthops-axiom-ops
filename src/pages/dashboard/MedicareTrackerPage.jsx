@@ -37,6 +37,14 @@ function isStraightMedicare(insurance) {
   return v === 'medicare';
 }
 
+// "Last, First" -> "First Last". visit_schedule_data stores staff as
+// "Last, First"; the clinician roster stores full_name as "First Last".
+function flipName(name) {
+  if (!name) return '';
+  const m = name.match(/^\s*([^,]+),\s*(.+)$/);
+  return m ? `${m[2].trim()} ${m[1].trim()}` : name.trim();
+}
+
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 const MANAGERS = { A:'Uma Jacobs',B:'Lia Davis',C:'Earl Dimaano',G:'Samantha Faliks',H:'Kaylee Ramsey',J:'Hollie Fincher',M:'Ariel Maboudi',N:'Ariel Maboudi',T:'Samantha Faliks',V:'Samantha Faliks' };
 
@@ -82,8 +90,24 @@ export default function MedicareTrackerPage() {
       }
 
       const visits = await fetchAllPages(supabase.from('visit_schedule_data')
-        .select('patient_name, staff_name, event_type, status, visit_date, region')
+        .select('patient_name, staff_name, staff_name_normalized, event_type, status, visit_date, region')
         .ilike('status', '%completed%'));
+
+      // Discipline lookup — only PTs/OTs may head a tracker group. Assistants
+      // (PTA/COTA) never perform evaluations, so they must not be listed as a
+      // patient's evaluating therapist.
+      const clinicians = await fetchAllPages(supabase.from('clinicians')
+        .select('full_name, aliases, discipline'));
+      const disciplineByName = new Map();
+      for (const c of (clinicians || [])) {
+        if (c.full_name) disciplineByName.set(c.full_name.toLowerCase().trim(), c.discipline);
+        (c.aliases || []).forEach(a => { if (a) disciplineByName.set(a.toLowerCase().trim(), c.discipline); });
+      }
+      const therapistName = v => (v.staff_name_normalized || flipName(v.staff_name) || '').trim();
+      const isPtOt = name => {
+        const d = disciplineByName.get((name || '').toLowerCase().trim());
+        return d === 'PT' || d === 'OT';
+      };
 
       const today = new Date().toISOString().split('T')[0];
       const dueList = [];
@@ -102,10 +126,20 @@ export default function MedicareTrackerPage() {
         const evalVisit = ptVisits.find(v => /eval/i.test(v.event_type || ''));
         const careStartDate = evalVisit?.visit_date || ptVisits[0].visit_date;
 
-        // Evaluating PT (eval visit staff, fallback to most frequent staff)
+        // Evaluating therapist — must be a PT or OT. Prefer the eval visit's
+        // therapist; otherwise the most-frequent PT/OT among the patient's
+        // visit staff. PTAs/COTAs are never eligible — they don't do evals.
         const staffCounts = {};
-        ptVisits.forEach(v => { if (v.staff_name) staffCounts[v.staff_name] = (staffCounts[v.staff_name] || 0) + 1; });
-        const evalPT = evalVisit?.staff_name || Object.entries(staffCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unassigned';
+        ptVisits.forEach(v => {
+          const name = therapistName(v);
+          if (name) staffCounts[name] = (staffCounts[name] || 0) + 1;
+        });
+        const evalVisitTherapist = evalVisit ? therapistName(evalVisit) : null;
+        const evalPT = (evalVisitTherapist && isPtOt(evalVisitTherapist))
+          ? evalVisitTherapist
+          : (Object.entries(staffCounts)
+              .filter(([name]) => isPtOt(name))
+              .sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unassigned');
 
         const { data: existing } = await supabase.from('medicare_visit_flags')
           .select('id, flag_10th_acknowledged, flag_20th_acknowledged, last_progress_note_date, last_progress_note_visit')
