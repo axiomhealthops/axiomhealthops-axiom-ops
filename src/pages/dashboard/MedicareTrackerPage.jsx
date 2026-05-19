@@ -26,15 +26,33 @@ function daysBetween(fromYmd, toYmd) {
   return Math.floor((b - a) / 86400000);
 }
 
-// True only for traditional ("straight" / Original) Medicare. Medicare Advantage
-// plans are administered by private carriers and carry that carrier's name
-// (e.g. "Aetna Medicare", "Cigna Medicare") — they do NOT follow Medicare's
+// Build a lookup from the insurance_abbreviations table: any identifier a
+// census_data.insurance value might hold -> its authoritative category.
+// That field can carry the bare insurance_name ("Medicare", "Aetna Medicare"),
+// the region display_name ("A - Medicare"), or a raw abbreviation code
+// ("AMA" = Aetna Medicare, region A).
+function buildInsuranceClassifier(rows) {
+  const byId = new Map();
+  for (const r of (rows || [])) {
+    for (const id of [r.display_name, r.insurance_name, r.abbreviation]) {
+      if (id) byId.set(id.toLowerCase().trim(), r.category);
+    }
+  }
+  return byId;
+}
+
+// Straight (traditional / Original) Medicare only — category 'Medicare'.
+// Medicare Advantage plans are run by private carriers (Aetna Medicare, Cigna
+// Medicare, Humana, CarePlus, Devoted, etc.) and do NOT follow Medicare's
 // 10-visit / 30-day progress-note or 20-visit cap rules, so they must not be
-// tracked here. census_data.insurance may carry a "X - " region prefix.
-function isStraightMedicare(insurance) {
+// tracked here. Falls back to a region-prefix-stripped name match only when a
+// value is missing from the insurance_abbreviations lookup.
+function isStraightMedicare(insurance, classifier) {
   if (!insurance) return false;
-  const v = insurance.replace(/^[A-Za-z]\s*-\s*/, '').trim().toLowerCase();
-  return v === 'medicare';
+  const cat = classifier.get(insurance.toLowerCase().trim());
+  if (cat) return cat === 'Medicare';
+  const stripped = insurance.replace(/^[A-Za-z0-9]{1,3}\s*-\s*/, '').trim().toLowerCase();
+  return stripped === 'medicare';
 }
 
 // "Last, First" -> "First Last". visit_schedule_data stores staff as
@@ -73,12 +91,16 @@ export default function MedicareTrackerPage() {
     try {
       // 2026-05-17: paginated — visit_schedule_data with status='completed'
       // can easily exceed 1000 rows when calculating Medicare cap utilization.
+      // Authoritative insurance classification from the lookup table.
+      const insRows = await fetchAllPages(supabase.from('insurance_abbreviations')
+        .select('abbreviation, display_name, insurance_name, category'));
+      const insClassifier = buildInsuranceClassifier(insRows);
+
       const mcPtsRaw = await fetchAllPages(supabase.from('census_data')
-        .select('patient_name, region, insurance')
-        .ilike('insurance', '%medicare%'));
-      // Straight Medicare only — drop Medicare Advantage plans (Aetna Medicare,
-      // Cigna Medicare, etc.) that the broad ILIKE also matches.
-      const mcPts = (mcPtsRaw || []).filter(p => isStraightMedicare(p.insurance));
+        .select('patient_name, region, insurance'));
+      // Straight Medicare only — category 'Medicare'. Drops Medicare Advantage
+      // (Aetna/Cigna Medicare, Humana, CarePlus, ...), Commercial and Self-Pay.
+      const mcPts = (mcPtsRaw || []).filter(p => isStraightMedicare(p.insurance, insClassifier));
 
       // Purge flag rows for patients no longer tracked — Medicare Advantage
       // patients carried over from before this filter, plus anyone off census.
@@ -530,7 +552,7 @@ export default function MedicareTrackerPage() {
                           <div key={f.id} style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 0.9fr 1.5fr 1.5fr', padding:'10px 20px 10px 42px', borderBottom:'1px solid var(--border)', background: needs20 ? '#FFF5F5' : needsNote ? '#FFFBEB' : 'transparent', alignItems:'center', gap:8 }}>
                             <div>
                               <div style={{ fontSize:12, fontWeight:600 }}>{f.patient_name}</div>
-                              <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>Medicare</div>
+                              <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>{f.insurance || 'Medicare'}</div>
                             </div>
                             <span style={{ fontSize:12, fontWeight:700, color:'var(--gray)' }}>{f.region}</span>
                             <div>
