@@ -591,18 +591,30 @@ export default function AuthTrackerPage() {
     if (currentStatus === newStatus) return;
     setSavingStatusId(authId);
     try {
-      await safeUpdate('auth_tracker', authId, {
-        auth_status: newStatus,
-        updated_at: new Date().toISOString(),
-        updated_by: profile?.full_name || profile?.email,
-      });
+      // 2026-05-19 BUG FIX: safeUpdate is (table, payload, matchObj) — was being
+      // called as (table, id, payload) which silently no-op'd.
+      const { error: updErr, rowCount } = await safeUpdate(
+        'auth_tracker',
+        {
+          auth_status: newStatus,
+          updated_at: new Date().toISOString(),
+          updated_by: profile?.full_name || profile?.email,
+        },
+        { id: authId }
+      );
+      if (updErr || rowCount === 0) {
+        throw new Error(updErr?.message || 'No row updated — refresh and retry');
+      }
       setRecords(function(prev) { return prev.map(function(r) { return r.id === authId ? Object.assign({}, r, { auth_status: newStatus }) : r; }); });
       try {
         await logActivity({
-          action_type: 'auth_status_change',
-          resource_type: 'auth_tracker',
-          resource_id: authId,
-          detail: 'Status: ' + currentStatus + ' → ' + newStatus,
+          coordinatorId: profile?.id,
+          coordinatorName: profile?.full_name || profile?.email,
+          coordinatorRole: profile?.role,
+          actionType: 'auth_status_change',
+          tableName: 'auth_tracker',
+          recordId: authId,
+          actionDetail: 'Status: ' + currentStatus + ' -> ' + newStatus,
         });
       } catch (e) { /* non-blocking */ }
     } catch (err) {

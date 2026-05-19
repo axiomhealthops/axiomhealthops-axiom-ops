@@ -18,14 +18,34 @@ export function AuthProvider({ children }) {
       else setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) loadProfile(session.user.id);
-      else { setProfile(null); setPermissions([]); setLoading(false); }
+    // 2026-05-19 BUG FIX: previously reloaded profile on EVERY auth event
+    // including TOKEN_REFRESHED (fires ~hourly). The async profile reload
+    // briefly nulled state during peak hours, which under heavy realtime
+    // load caused ProtectedRoute to flip and Dashboard to remount, sending
+    // users back to their role's defaultPage (Intake Dashboard for intake
+    // coords, etc.). Token refresh doesn't change the user — skip the
+    // reload for those events. Only reload on actual sign-in/sign-out.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
+      const userChanged = newSession?.user?.id !== user?.id;
+      setSession(newSession);
+      setUser(newSession?.user ?? null);
+
+      if (event === 'SIGNED_OUT' || !newSession?.user) {
+        setProfile(null);
+        setPermissions([]);
+        setLoading(false);
+        return;
+      }
+
+      // SIGNED_IN, INITIAL_SESSION, USER_UPDATED → reload profile only if the
+      // user actually changed. TOKEN_REFRESHED keeps the same user and never
+      // needs a profile reload.
+      if (event === 'TOKEN_REFRESHED') return;
+      if (userChanged || !profile) loadProfile(newSession.user.id);
     });
 
     return () => subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadProfile(userId) {
@@ -36,10 +56,17 @@ export function AuthProvider({ children }) {
         .eq('user_id', userId)
         .maybeSingle();           // maybeSingle() returns null instead of throwing if no row
 
-      setProfile(prof || null);
-      if (prof) await loadPermissions(prof);
+      // 2026-05-19: only nuke profile state on confirmed-empty result.
+      // A network error means we should KEEP the existing profile rather
+      // than briefly blank it out (which causes Dashboard remount).
+      if (error) {
+        console.warn('loadProfile network error — keeping existing profile:', error.message);
+      } else {
+        setProfile(prof || null);
+        if (prof) await loadPermissions(prof);
+      }
     } catch (err) {
-      console.error('loadProfile error:', err);
+      console.error('loadProfile error — keeping existing profile:', err);
     } finally {
       setLoading(false);
     }

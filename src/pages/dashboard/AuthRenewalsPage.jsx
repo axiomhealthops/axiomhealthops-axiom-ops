@@ -149,19 +149,31 @@ export default function AuthRenewalsPage() {
     setSavingId(taskId);
     try {
       const completes = ['approved','denied','closed'].indexOf(newStatus) >= 0;
-      await safeUpdate('auth_renewal_tasks', taskId, {
-        task_status: newStatus,
-        updated_at: new Date().toISOString(),
-        completed_at: completes ? new Date().toISOString() : null,
-        completed_by: completes ? (profile?.full_name || profile?.email || null) : null,
-      });
+      // 2026-05-19 BUG FIX: safeUpdate is (table, payload, matchObj) — was being
+      // called as (table, id, payload) which silently no-op'd.
+      const { error: updErr, rowCount } = await safeUpdate(
+        'auth_renewal_tasks',
+        {
+          task_status: newStatus,
+          updated_at: new Date().toISOString(),
+          completed_at: completes ? new Date().toISOString() : null,
+          completed_by: completes ? (profile?.full_name || profile?.email || null) : null,
+        },
+        { id: taskId }
+      );
+      if (updErr || rowCount === 0) {
+        throw new Error(updErr?.message || 'No row updated — refresh and retry');
+      }
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, task_status: newStatus } : t));
       try {
         await logActivity({
-          action_type: 'renewal_status_change',
-          resource_type: 'auth_renewal_tasks',
-          resource_id: taskId,
-          detail: 'Status: ' + currentStatus + ' → ' + newStatus,
+          coordinatorId: profile?.id,
+          coordinatorName: profile?.full_name || profile?.email,
+          coordinatorRole: profile?.role,
+          actionType: 'renewal_status_change',
+          tableName: 'auth_renewal_tasks',
+          recordId: taskId,
+          actionDetail: 'Status: ' + currentStatus + ' -> ' + newStatus,
         });
       } catch (e) { /* non-blocking */ }
     } catch (err) {

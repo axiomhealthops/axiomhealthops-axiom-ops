@@ -365,8 +365,11 @@ export default function AuthCoordDashboard() {
     const [a, r, al] = await Promise.all([
       fetchAllPages(regionScope.applyToQuery(supabase.from('auth_tracker').select('*').order('auth_expiry_date', { ascending: true }))),
       fetchAllPages(regionScope.applyToQuery(supabase.from('auth_renewal_tasks').select('*').not('task_status', 'in', '("approved","denied","closed")').order('days_until_expiry', { ascending: true }))),
+      // 2026-05-19: use canonical column names (table_name, record_id, action_detail).
+      // Legacy aliases (resource_type, resource_id, detail) are still maintained
+      // by a DB trigger as a safety net but new code should use canonical names.
       fetchAllPages(supabase.from('coordinator_activity_log')
-        .select('coordinator_name,action_type,resource_type,resource_id,detail,created_at')
+        .select('coordinator_name,action_type,table_name,record_id,action_detail,created_at')
         .eq('coordinator_name', profileName)
         .gte('created_at', todayStart.toISOString())
         .order('created_at', { ascending: false })),
@@ -387,20 +390,34 @@ export default function AuthCoordDashboard() {
     if (currentStatus === newStatus) return;
     setSavingStatusId(authId);
     try {
-      await safeUpdate('auth_tracker', authId, {
-        auth_status: newStatus,
-        updated_at: new Date().toISOString(),
-        updated_by: profileName,
-      });
+      // 2026-05-19 BUG FIX: safeUpdate signature is (table, payload, matchObj).
+      // Previously called with (table, authId, payload) which silently failed
+      // because authId-as-payload is a string, and safeUpdate rejects non-object
+      // payloads. UI updated optimistically but DB never changed.
+      const { error: updErr, rowCount } = await safeUpdate(
+        'auth_tracker',
+        {
+          auth_status: newStatus,
+          updated_at: new Date().toISOString(),
+          updated_by: profileName,
+        },
+        { id: authId }
+      );
+      if (updErr || rowCount === 0) {
+        throw new Error(updErr?.message || 'No row updated — refresh and retry');
+      }
       // Optimistic UI update so the change is instant
       setAuths(function(prev) { return prev.map(function(a) { return a.id === authId ? Object.assign({}, a, { auth_status: newStatus }) : a; }); });
-      // Log so it shows in Recent Activity sidebar
+      // Log so it shows in Recent Activity sidebar — use canonical field names.
       try {
         await logActivity({
-          action_type: 'auth_status_change',
-          resource_type: 'auth_tracker',
-          resource_id: authId,
-          detail: 'Status: ' + currentStatus + ' → ' + newStatus,
+          coordinatorId: profile?.id,
+          coordinatorName: profileName,
+          coordinatorRole: profile?.role,
+          actionType: 'auth_status_change',
+          tableName: 'auth_tracker',
+          recordId: authId,
+          actionDetail: 'Status: ' + currentStatus + ' -> ' + newStatus,
         });
       } catch (e) { /* non-blocking */ }
     } catch (err) {
