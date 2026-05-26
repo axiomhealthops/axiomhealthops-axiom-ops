@@ -56,6 +56,7 @@ import InsuranceSettingsPage from './dashboard/InsuranceSettingsPage';
 import OperationsManagerDashboard from './dashboard/OperationsManagerDashboard';
 import AuthAuditImportPage from './dashboard/AuthAuditImportPage';
 import HighRiskPatientsPage from './dashboard/HighRiskPatientsPage';
+import AuthOverLimitPage from './dashboard/AuthOverLimitPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
@@ -111,6 +112,7 @@ const PAGE_COMPONENTS = {
   'ops-dashboard':           OperationsManagerDashboard,
   'audit-import':            AuthAuditImportPage,
   'high-risk-patients':      HighRiskPatientsPage,
+  'auth-over-limit':         AuthOverLimitPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 

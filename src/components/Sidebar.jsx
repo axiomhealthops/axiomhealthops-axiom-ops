@@ -33,6 +33,7 @@ const PAGE_ICONS = {
   'clinician-schedule': '📅',
   'ops-reports': '📊',
   'high-risk-patients': '⚠',
+  'auth-over-limit': '🚨',
   users: '👥', uploads: '↑', settings: '⚙', 'insurance-settings': '🏥', 'audit-import': '📋', 'dept-reports': '📑',
 };
 

@@ -352,13 +352,18 @@ function UploadCard(props) {
 
           // Sync completed visit counts → auth_tracker.visits_used and
           // recompute auth sequences (predecessor→successor transitions).
+          // 2026-05-20: switched to sync_pending_auths(), which only syncs
+          // patients touched by THIS upload (via the auth_sync_pending dirty-
+          // flag table populated by trg_visit_data_flag). Faster than the
+          // bulk sync_visits_to_auth(), and also refreshes auth_health +
+          // fires/clears low_visits / expiring / over_limit alerts.
           setMessage('Syncing visit counts to authorization tracker...');
-          var syncRes = await supabase.rpc('sync_visits_to_auth');
+          var syncRes = await supabase.rpc('sync_pending_auths');
           var authSyncMsg = '';
-          if (syncRes && syncRes.data && syncRes.data.success) {
-            authSyncMsg = ' · synced ' + (syncRes.data.auths_updated || 0) + ' auth record(s)';
+          if (syncRes && typeof syncRes.data === 'number') {
+            authSyncMsg = ' · synced ' + syncRes.data + ' patient auth record(s)';
           } else if (syncRes && syncRes.error) {
-            console.warn('sync_visits_to_auth failed:', syncRes.error.message);
+            console.warn('sync_pending_auths failed:', syncRes.error.message);
           }
 
           // Refresh last_visit_date / last_visit_clinician on census_data and

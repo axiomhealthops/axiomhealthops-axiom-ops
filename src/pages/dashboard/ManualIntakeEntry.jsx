@@ -20,6 +20,105 @@ const DENIAL_REASONS = [
   'Other',
 ];
 
+// Confidence tier -> visual treatment for the duplicate-match banner.
+const DUP_TIER = {
+  exact_today: { bg: '#FEF2F2', border: '#FCA5A5', color: '#991B1B', dot: '#DC2626', label: 'Exact match (same day)' },
+  very_likely: { bg: '#FFF7ED', border: '#FDBA74', color: '#9A3412', dot: '#EA580C', label: 'Very likely duplicate' },
+  dob_match:   { bg: '#FFF7ED', border: '#FDBA74', color: '#9A3412', dot: '#EA580C', label: 'Date of birth matches' },
+  possible:    { bg: '#FFFBEB', border: '#FCD34D', color: '#92400E', dot: '#D97706', label: 'Possible duplicate' },
+  low:         { bg: '#F9FAFB', border: '#E5E7EB', color: '#374151', dot: '#9CA3AF', label: 'Similar name' },
+};
+
+function tierFor(c) { return DUP_TIER[c] || DUP_TIER.low; }
+
+function fmtMatchDate(d) {
+  if (!d) return '?';
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// Duplicate-match banner shown in Step 1 of the intake form. Three states:
+// (a) checking spinner, (b) one or more matches found, (c) nothing (parent
+// hides the wrapper). Top match drives the banner color; up to 5 matches
+// listed underneath so the coordinator can compare.
+function DupMatchBanner({ checking, matches, override, onOverrideChange }) {
+  if (checking && matches.length === 0) {
+    return (
+      <div style={{ background:'#F9FAFB', border:'1px dashed var(--border)', borderRadius:8, padding:'8px 12px', fontSize:11, color:'var(--gray)' }}>
+        Checking for duplicate referrals...
+      </div>
+    );
+  }
+  const top = matches[0];
+  if (!top) return null;
+  const t = tierFor(top.confidence);
+  const requiresOverride = top.confidence === 'exact_today';
+  return (
+    <div style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:8, padding:'12px 14px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+        <span style={{ width:8, height:8, borderRadius:'50%', background:t.dot, display:'inline-block' }} />
+        <div style={{ fontSize:13, fontWeight:700, color:t.color }}>
+          {t.label}
+        </div>
+        <div style={{ fontSize:11, color:t.color, marginLeft:'auto' }}>
+          {matches.length} potential match{matches.length === 1 ? '' : 'es'}
+        </div>
+      </div>
+      <div style={{ fontSize:12, color:t.color, lineHeight:1.5, marginBottom:10 }}>
+        A patient with a similar name was already entered. Review the matches below to avoid creating a duplicate referral.
+      </div>
+      <div style={{ background:'rgba(255,255,255,0.6)', borderRadius:6, overflow:'hidden' }}>
+        {matches.slice(0, 5).map((m, i) => {
+          const mt = tierFor(m.confidence);
+          return (
+            <div key={m.id} style={{
+              display:'grid',
+              gridTemplateColumns:'1fr 90px 60px 90px 70px',
+              gap:8, padding:'7px 10px', fontSize:11,
+              borderTop: i === 0 ? 'none' : '1px solid rgba(0,0,0,0.06)',
+              alignItems:'center',
+            }}>
+              <div style={{ fontWeight:600, color:'var(--black)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                {m.patient_name}
+              </div>
+              <div style={{ color:'var(--gray)', fontFamily:'DM Mono, monospace' }}>
+                {fmtMatchDate(m.date_received)}
+              </div>
+              <div style={{ color:'var(--gray)', fontWeight:600 }}>
+                Rgn {m.region || '?'}
+              </div>
+              <div style={{ color:'var(--gray)' }}>
+                {m.insurance || ''}
+              </div>
+              <div style={{
+                color:mt.color, background:mt.bg, border:`1px solid ${mt.border}`,
+                fontSize:9, fontWeight:700, padding:'2px 6px', borderRadius:999,
+                textAlign:'center', textTransform:'uppercase', letterSpacing:'0.04em',
+              }}>
+                {Math.round((m.similarity_score || 0) * 100)}%
+              </div>
+            </div>
+          );
+        })}
+        {matches.length > 5 && (
+          <div style={{ padding:'6px 10px', fontSize:10, color:'var(--gray)', textAlign:'center', borderTop:'1px solid rgba(0,0,0,0.06)' }}>
+            +{matches.length - 5} more potential matches
+          </div>
+        )}
+      </div>
+      {requiresOverride && (
+        <label style={{
+          display:'flex', alignItems:'center', gap:8, marginTop:10,
+          padding:'8px 10px', background:'#fff', border:`1px solid ${t.border}`,
+          borderRadius:6, cursor:'pointer', fontSize:12, color:t.color, fontWeight:600,
+        }}>
+          <input type="checkbox" checked={override} onChange={e => onOverrideChange(e.target.checked)} />
+          I have reviewed the matches above and confirm this is a separate referral, not a duplicate.
+        </label>
+      )}
+    </div>
+  );
+}
+
 // Module-scope field helpers. Previously defined inside the component body,
 // which caused React to unmount/remount every <input>/<select> on each keystroke
 // (new component reference per render) — resulting in focus loss after every
@@ -73,6 +172,22 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
   const [aiApplied, setAiApplied] = useState(false);
   const [aiFile, setAiFile] = useState(null);
 
+  // 2026-05-20: Fuzzy duplicate detection. As the user types name + date,
+  // the find_intake_duplicates RPC returns potential matches. We block submit
+  // when an exact_today match exists unless the user explicitly confirms it's
+  // a separate referral. Triggered by the historical pattern of "Sifonte,
+  // Cristobal Sr" vs "Sifonte, Cristobal Sr." landing as two rows.
+  const [dupMatches, setDupMatches] = useState([]);     // RPC result rows
+  const [dupChecking, setDupChecking] = useState(false);
+  const [dupOverride, setDupOverride] = useState(false); // user confirmed not-a-dup
+  const dupTimerRef = useRef(null);
+
+  // Highest-confidence match in the current set (or null). Drives banner color
+  // and the submit guard.
+  const topDup = dupMatches.length > 0 ? dupMatches[0] : null;
+  const hasExactDup = topDup && topDup.confidence === 'exact_today';
+  const hasStrongDup = topDup && ['exact_today', 'very_likely', 'dob_match'].includes(topDup.confidence);
+
   // Defensive escape hatch — if anything in the modal ever gets stuck (save
   // error, network hang, stale state), users can always Esc out. Skip the
   // handler while the AI extractor is open so its own Esc doesn't double-fire.
@@ -84,7 +199,44 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, showAI, saving]);
 
-  function set(key, val) { setForm(p => ({ ...p, [key]: val })); }
+  function set(key, val) {
+    setForm(p => ({ ...p, [key]: val }));
+    // Whenever the patient name, date_received, or DOB changes, reset the
+    // override flag — the user has to re-confirm if they then enter a name
+    // that re-triggers the duplicate match.
+    if (key === 'patient_name' || key === 'date_received' || key === 'dob') {
+      setDupOverride(false);
+    }
+  }
+
+  // Debounced fuzzy duplicate check. Runs whenever patient_name + date_received
+  // are both populated (DOB is optional but improves recall when entered).
+  useEffect(() => {
+    if (dupTimerRef.current) clearTimeout(dupTimerRef.current);
+    const name = (form.patient_name || '').trim();
+    const dr = form.date_received;
+    if (name.length < 3 || !dr) {
+      setDupMatches([]);
+      setDupChecking(false);
+      return;
+    }
+    setDupChecking(true);
+    dupTimerRef.current = setTimeout(async () => {
+      const { data, error } = await supabase.rpc('find_intake_duplicates', {
+        p_name: name,
+        p_date: dr,
+        p_dob: form.dob || null,
+      });
+      if (error) {
+        console.warn('find_intake_duplicates failed:', error.message);
+        setDupMatches([]);
+      } else {
+        setDupMatches(data || []);
+      }
+      setDupChecking(false);
+    }, 400);
+    return () => { if (dupTimerRef.current) clearTimeout(dupTimerRef.current); };
+  }, [form.patient_name, form.date_received, form.dob]);
 
   function handleFileChange(e) {
     const f = e.target.files?.[0];
@@ -105,6 +257,14 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
 
   async function handleSave() {
     if (!validate()) { setStep(1); return; }
+
+    // 2026-05-20 dup guard: block submit when there's a near-certain duplicate
+    // and the user hasn't explicitly confirmed it's a separate referral.
+    if (hasExactDup && !dupOverride) {
+      setErrors({ submit: 'A near-identical referral already exists for this patient on this date. Check the duplicate warning above and confirm before saving.' });
+      setStep(1);
+      return;
+    }
     setSaving(true);
 
     let referral_document_path = null;
@@ -241,6 +401,18 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
                   <I name="patient_name" value={form.patient_name} onChange={set} err={errors.patient_name} placeholder="Last, First" />
                 </F>
               </div>
+
+              {/* Duplicate-match banner — drives the no-more-duplicates workflow */}
+              {(dupChecking || dupMatches.length > 0) && (
+                <div style={{ gridColumn:'span 2' }}>
+                  <DupMatchBanner
+                    checking={dupChecking}
+                    matches={dupMatches}
+                    override={dupOverride}
+                    onOverrideChange={setDupOverride}
+                  />
+                </div>
+              )}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, gridColumn:'span 2' }}>
                 <F label="Date Received *"><I name="date_received" value={form.date_received} onChange={set} err={errors.date_received} type="date" /></F>
                 <F label="Status"><S name="referral_status" value={form.referral_status} onChange={set} err={errors.referral_status} opts={STATUSES} /></F>
@@ -410,12 +582,27 @@ export default function ManualIntakeEntry({ onClose, onSaved }) {
                 style={{ padding:'8px 20px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'pointer' }}>
                 Next →
               </button>
-            ) : (
-              <button onClick={handleSave} disabled={saving}
-                style={{ padding:'8px 24px', background:'var(--red)', color:'#fff', border:'none', borderRadius:7, fontSize:14, fontWeight:700, cursor:saving?'wait':'pointer' }}>
-                {saving ? (file ? 'Uploading & Saving…' : 'Saving…') : '✓ Submit Referral'}
-              </button>
-            )}
+            ) : (() => {
+              // Block the submit button when a same-day exact-name match
+              // exists and the override checkbox is unchecked. Visually
+              // mute the button so it's clear submission is blocked.
+              const blocked = hasExactDup && !dupOverride;
+              return (
+                <button onClick={handleSave} disabled={saving || blocked}
+                  title={blocked ? 'Confirm the duplicate warning above before submitting' : undefined}
+                  style={{
+                    padding:'8px 24px',
+                    background: blocked ? '#9CA3AF' : 'var(--red)',
+                    color:'#fff', border:'none', borderRadius:7,
+                    fontSize:14, fontWeight:700,
+                    cursor: saving ? 'wait' : (blocked ? 'not-allowed' : 'pointer'),
+                  }}>
+                  {saving
+                    ? (file ? 'Uploading & Saving...' : 'Saving...')
+                    : blocked ? 'Confirm duplicate to submit' : 'Submit Referral'}
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>
