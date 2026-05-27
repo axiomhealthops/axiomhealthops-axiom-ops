@@ -122,8 +122,13 @@ function AuthEditModal({ auth, onClose, onSaved, profileName, allAuths }) {
       return;
     }
  
-    // Recompute sequence so visits_used / status changes propagate to is_currently_active
+    // 2026-05-27 audit fix: sync visits_used BEFORE recompute. Without sync, edits to
+    // visits_authorized leave the auth_health enum stale, so Auth Over Limit and
+    // AlertsBell may continue to show this patient as over_limit even after a renewal
+    // expands their authorized count. See README_auth_team_audit_2026_05_27.md.
     if (auth.patient_name) {
+      const { error: syncErr } = await supabase.rpc('sync_visits_to_auth_for_patient', { p_patient_name: auth.patient_name });
+      if (syncErr) console.warn('sync_visits_to_auth_for_patient failed:', syncErr.message);
       const { error: rpcErr } = await supabase.rpc('recompute_auth_sequence', { p_patient_name: auth.patient_name });
       if (rpcErr) console.warn('recompute_auth_sequence failed:', rpcErr.message);
     }
@@ -530,13 +535,19 @@ export default function AuthCoordDashboard() {
   return (
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
-        title="Auth Coordinator"
+        title="My Auth Queue"
         subtitle={`${today} · ${stats.urgentRenewals} urgent · ${stats.expiring7} expiring this week`}
         actions={
           <button onClick={load} style={{ padding:'6px 14px', background:'#0F1117', color:'#fff', border:'none', borderRadius:7, fontSize:11, fontWeight:700, cursor:'pointer' }}>↻ Refresh</button>
         }
       />
- 
+
+      {/* 2026-05-27 audit: purpose banner */}
+      <div style={{ padding:'10px 20px', background:'#EFF6FF', borderBottom:'1px solid #BFDBFE', fontSize:12, color:'#1E40AF', display:'flex', gap:8, alignItems:'center' }}>
+        <span style={{ fontSize:14 }}>👩‍💼</span>
+        <span><strong>Start your day here.</strong> Your assigned auths needing action today. Inline status toggle: pending → submitted → active. Need to edit fields or upload PDFs? Open <em>All Authorizations</em>.</span>
+      </div>
+
       {/* Urgent banner */}
       {(stats.expiringToday > 0 || stats.urgentRenewals > 0) && (
         <div style={{ background:'#FEF2F2', borderBottom:'2px solid #FECACA', padding:'8px 20px', display:'flex', alignItems:'center', gap:12 }}>

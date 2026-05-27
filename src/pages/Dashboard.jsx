@@ -57,6 +57,7 @@ import OperationsManagerDashboard from './dashboard/OperationsManagerDashboard';
 import AuthAuditImportPage from './dashboard/AuthAuditImportPage';
 import HighRiskPatientsPage from './dashboard/HighRiskPatientsPage';
 import AuthOverLimitPage from './dashboard/AuthOverLimitPage';
+import MyDayPage from './dashboard/MyDayPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
@@ -113,6 +114,7 @@ const PAGE_COMPONENTS = {
   'audit-import':            AuthAuditImportPage,
   'high-risk-patients':      HighRiskPatientsPage,
   'auth-over-limit':         AuthOverLimitPage,
+  'my-day':                  MyDayPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 
@@ -140,7 +142,7 @@ export default function Dashboard() {
   const defaultPage = (() => {
     const r = profile?.role;
     if (r === 'regional_manager')   return 'rm-daily';
-    if (r === 'auth_coordinator')   return 'auth-coordinator';
+    if (r === 'auth_coordinator')   return 'my-day';
     if (r === 'intake_coordinator') return 'intake-queue';
     if (r === 'care_coordinator')   return 'care-coord-patients';
     if (r === 'assoc_director')      return 'ad-dashboard';

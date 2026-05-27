@@ -335,11 +335,15 @@ export default function AIDocExtractor({ mode = 'intake', onExtracted, onClose }
           });
         }
 
-        // Recompute auth sequence for this patient — chains predecessor → successor,
-        // locks visits on the renewal until predecessor is exhausted, and updates
-        // is_currently_active + effective_visits_remaining across all auths.
+        // 2026-05-27 audit fix: sync visits_used from visit_schedule_data BEFORE
+        // recompute. AI extraction inserts with visits_used=0 hardcoded; the sync
+        // call recounts from actual visits and refreshes auth_health + alerts.
+        // Without it, a brand-new auth shows visits_used=0 until the next 15-min
+        // cron, making the just-uploaded letter appear to "not work."
+        // See README_auth_team_audit_2026_05_27.md.
         if (patientName) {
-          await supabase.rpc('recompute_auth_sequence', { p_patient_name: patientName });
+          await supabase.rpc('sync_visits_to_auth_for_patient', { p_patient_name: patientName });
+          await supabase.rpc('recompute_auth_sequence',         { p_patient_name: patientName });
         }
       }
 

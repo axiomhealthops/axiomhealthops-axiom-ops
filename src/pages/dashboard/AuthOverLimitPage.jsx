@@ -181,9 +181,15 @@ export default function AuthOverLimitPage() {
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar
-        title="Auth Over Limit"
+        title="Compliance: Over Limit"
         subtitle={`${stats.total} authorizations exceeded ${'·'} ${stats.active} active need emergency renewal ${'·'} ${stats.totalOverage} total visits beyond authorized`}
       />
+
+      {/* 2026-05-27 audit: purpose banner so the auth team knows what this page is for */}
+      <div style={{ padding:'10px 20px', background:'#FEF2F2', borderBottom:'1px solid #FECACA', fontSize:12, color:'#7F1D1D', display:'flex', gap:8, alignItems:'center' }}>
+        <span style={{ fontSize:14 }}>🚨</span>
+        <span><strong>Use this page when:</strong> a patient has exceeded their authorized visit count. Triage by overage size and prioritize emergency renewals. Read-only — edits happen in <em>All Authorizations</em>.</span>
+      </div>
 
       <div style={{ flex:1, overflow:'auto' }}>
         {/* KPI tiles */}

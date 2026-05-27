@@ -207,8 +207,14 @@ export default function AuthRenewalsPage() {
 
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100%'}}>
-      <TopBar title="Auth Renewals" subtitle={`${stats.open} open · ${stats.urgent} urgent · ${stats.expiring7} expiring within 7 days`} />
+      <TopBar title="Renewal Tasks" subtitle={`${stats.open} open · ${stats.urgent} urgent · ${stats.expiring7} expiring within 7 days`} />
       <div style={{flex:1}}>
+
+        {/* 2026-05-27 audit: purpose banner */}
+        <div style={{ padding:'10px 20px', background:'#FFFBEB', borderBottom:'1px solid #FDE68A', fontSize:12, color:'#92400E', display:'flex', gap:8, alignItems:'center' }}>
+          <span style={{ fontSize:14 }}>🔄</span>
+          <span><strong>Use this page when:</strong> an auth is expiring in ≤14 days or has ≤7 visits left and you need to submit a renewal. Once approved, the new auth record is created in <em>All Authorizations</em>.</span>
+        </div>
 
         {stats.urgent > 0 && (
           <div style={{background:'#FEF2F2',borderBottom:'2px solid #FECACA',padding:'8px 20px',display:'flex',alignItems:'center',gap:12}}>

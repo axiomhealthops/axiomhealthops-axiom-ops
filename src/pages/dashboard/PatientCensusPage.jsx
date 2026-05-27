@@ -544,6 +544,18 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
         if (authError) throw authError;
       }
 
+      // 2026-05-27 audit fix: this page was writing to auth_tracker without
+      // ANY sync — neither visits-recount nor sequence-recompute. Edits made
+      // from the patient chart appeared on the chart but never propagated to
+      // Auth Tracker, Auth Dashboard, or Auth Over Limit. Now syncs both ways.
+      // See README_auth_team_audit_2026_05_27.md.
+      if (editForm.patient_name && (editForm.auth_status || editForm.auth_number || latestAuthRecord?.id)) {
+        const { error: syncErr } = await supabase.rpc('sync_visits_to_auth_for_patient', { p_patient_name: editForm.patient_name });
+        if (syncErr) console.warn('sync_visits_to_auth_for_patient failed:', syncErr.message);
+        const { error: rpcErr } = await supabase.rpc('recompute_auth_sequence', { p_patient_name: editForm.patient_name });
+        if (rpcErr) console.warn('recompute_auth_sequence failed:', rpcErr.message);
+      }
+
       // Sync visit_frequency to patient_clinical_settings
       if (editForm.frequency) {
         const { data: csExist } = await supabase.from('patient_clinical_settings').select('id').eq('patient_name', editForm.patient_name).limit(1);

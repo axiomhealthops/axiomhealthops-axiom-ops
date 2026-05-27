@@ -194,7 +194,17 @@ function DocumentPanel(props) {
       doc_type: docType,
       notes: docNotes || null,
     }]);
- 
+
+    // 2026-05-27 audit fix: an uploaded auth letter often accompanies a
+    // visits_authorized change made via the Edit modal. Trigger a sync here so
+    // Auth Dashboard, Auth Over Limit, and AlertsBell reflect the change immediately
+    // rather than waiting on the 15-min cron. Safe to call on any upload — sync is
+    // idempotent. See README_auth_team_audit_2026_05_27.md.
+    if (patientName) {
+      await supabase.rpc('sync_visits_to_auth_for_patient', { p_patient_name: patientName });
+      await supabase.rpc('recompute_auth_sequence',         { p_patient_name: patientName });
+    }
+
     setDocNotes('');
     if (fileRef.current) fileRef.current.value = '';
     setUploading(false);
@@ -349,9 +359,13 @@ function AddEditModal(props) {
       ? await supabase.from('auth_tracker').update(data).eq('id', rec.id)
       : await supabase.from('auth_tracker').insert([data]);
     if (result.error) { alert('Error: ' + result.error.message); setSaving(false); return; }
-    // Recompute auth sequence for this patient after any save
+    // 2026-05-27 audit fix: every auth_tracker write must call sync_visits_to_auth_for_patient
+    // BEFORE recompute_auth_sequence. Sync recounts visits_used from visit_schedule_data and
+    // refreshes auth_health enum + alerts; recompute then chains predecessor→successor and
+    // sets is_currently_active. See README_auth_team_audit_2026_05_27.md.
     if (data.patient_name) {
-      await supabase.rpc('recompute_auth_sequence', { p_patient_name: data.patient_name });
+      await supabase.rpc('sync_visits_to_auth_for_patient', { p_patient_name: data.patient_name });
+      await supabase.rpc('recompute_auth_sequence',         { p_patient_name: data.patient_name });
     }
     props.onSave();
   }
@@ -707,7 +721,7 @@ export default function AuthTrackerPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar
-        title="Authorization Tracker"
+        title="All Authorizations"
         subtitle={censusPatients.length + ' total patients · ' + records.length + ' with auth · ' + active + ' active auth · ' + critical + ' critical'}
         actions={
           <div style={{ display:'flex', gap:8 }}>
@@ -722,6 +736,11 @@ export default function AuthTrackerPage() {
           </div>
         }
       />
+      {/* 2026-05-27 audit: purpose banner */}
+      <div style={{ padding:'10px 20px', background:'#F9FAFB', borderBottom:'1px solid #E5E7EB', fontSize:12, color:'#374151', display:'flex', gap:8, alignItems:'center' }}>
+        <span style={{ fontSize:14 }}>🔐</span>
+        <span><strong>The full authorization database.</strong> Search, edit, upload PDFs, or use ✨ AI Extract Auth to create a new record from a PDF. Every save here syncs visit counts to <em>My Auth Queue</em> and <em>Compliance: Over Limit</em>.</span>
+      </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
  
         {/* \u2500\u2500\u2500 COMPACT SUMMARY STRIP (rebuilt 2026-05-17) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
