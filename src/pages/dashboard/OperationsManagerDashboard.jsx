@@ -30,6 +30,12 @@ import StatusChangeModal from '../../components/StatusChangeModal';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+// 2026-05-28: Carla Ops Manager extension — three additive components
+// role-gated to admin + super_admin (other roles see the existing dashboard
+// unchanged).
+import EngagementAlertBanner from '../../components/ops/EngagementAlertBanner';
+import TeamPerformanceToday from '../../components/ops/TeamPerformanceToday';
+import TodaysStandups from '../../components/ops/TodaysStandups';
 
 // ─── Pipeline stage definitions ─────────────────────────────────────────
 // Each stage knows: its display label, which census statuses count toward it,
@@ -532,6 +538,13 @@ export default function OperationsManagerDashboard(props) {
         actions={<button onClick={load} style={{ padding: '5px 10px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>↻ Refresh</button>}
       />
 
+      {/* 2026-05-28: Engagement banner ONLY for admin / super_admin. Other
+          roles never see staff login-recency data. Banner self-hides when
+          there are no stale coordinators. */}
+      {['admin','super_admin'].includes(profile?.role) && (
+        <EngagementAlertBanner />
+      )}
+
       <div style={{ flex: 1, overflow: 'auto', padding: '14px 18px' }}>
 
         {/* Identity strip */}
@@ -591,6 +604,19 @@ export default function OperationsManagerDashboard(props) {
             })}
           </div>
         </div>
+
+        {/* 2026-05-28: Team Performance Today + Today's Standups — admin/super_admin only.
+            These two sections are additive; coordinator roles never see them. */}
+        {['admin','super_admin'].includes(profile?.role) && (
+          <>
+            <div style={{ marginLeft: -18, marginRight: -18 }}>
+              <TeamPerformanceToday />
+            </div>
+            <div style={{ marginLeft: -18, marginRight: -18 }}>
+              <TodaysStandups />
+            </div>
+          </>
+        )}
 
         {/* ── DEPARTMENT HEALTH SNAPSHOT ─────────────────────────────── */}
         <div style={{ marginBottom: 14 }}>
