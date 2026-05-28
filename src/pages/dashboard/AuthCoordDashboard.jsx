@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import PatientAuthDrawer from '../../components/PatientAuthDrawer';
 import { supabase, safeUpdate, logActivity, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
@@ -841,15 +842,16 @@ export default function AuthCoordDashboard() {
         </div>
       </div>
 
-      {editAuth && (
-        <AuthEditModal
-          auth={editAuth}
-          allAuths={auths}
-          profileName={profile?.full_name || profile?.email}
-          onClose={() => setEditAuth(null)}
-          onSaved={() => { setEditAuth(null); load(); }}
-        />
-      )}
+      {/* 2026-05-28: switched from centered AuthEditModal to shared right-side
+          drawer. The drawer reuses the same RPCs + safeUpdate path, so all
+          guardrails (validation, sync, recompute) still apply uniformly. */}
+      <PatientAuthDrawer
+        isOpen={!!editAuth}
+        authId={editAuth?.id || null}
+        patientName={editAuth?.patient_name || null}
+        listLabel="My Auth Queue"
+        onClose={() => setEditAuth(null)}
+        onActionTaken={() => { load(); }} />
     </div>
   );
 }

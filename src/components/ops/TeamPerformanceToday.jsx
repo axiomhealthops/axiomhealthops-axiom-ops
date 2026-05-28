@@ -30,30 +30,59 @@ function fmtAgo(ts) {
   return Math.floor(hrs / 24) + 'd';
 }
 
-function statusDot(daysSinceLogin) {
-  if (daysSinceLogin === null || daysSinceLogin === undefined) return { color: '#9CA3AF', label: 'never' };
-  if (daysSinceLogin === 0) return { color: '#10B981', label: 'today' };
-  if (daysSinceLogin <= 2)  return { color: '#3B82F6', label: 'recent' };
-  if (daysSinceLogin <= 7)  return { color: '#F59E0B', label: 'week' };
+function statusDot(daysInactive) {
+  // 2026-05-28 hotfix: input is now days_inactive_local from the engagement
+  // view (calendar days in coordinator's home TZ), not last_sign_in_at.
+  if (daysInactive === null || daysInactive === undefined) return { color: '#9CA3AF', label: 'no data' };
+  if (daysInactive === 0) return { color: '#10B981', label: 'today' };
+  if (daysInactive <= 2)  return { color: '#3B82F6', label: 'recent' };
+  if (daysInactive <= 7)  return { color: '#F59E0B', label: 'week' };
   return { color: '#DC2626', label: 'stale' };
 }
 
+// Render "Last seen: <local> <tz> / <ET> ET" tooltip plus the short "ago" label.
+function lastSeenLabel(c) {
+  if (!c.last_active_utc) return 'no recorded activity';
+  if ((c.days_inactive_local ?? 0) === 0) return 'active today';
+  return c.days_inactive_local + 'd ago';
+}
+
+function fmtInTZ(utcString, tz) {
+  if (!utcString) return null;
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(new Date(utcString));
+  } catch (e) { return null; }
+}
+
+function tooltipFor(c) {
+  if (!c.last_active_utc) return 'No recorded activity';
+  const tz = c.home_timezone || 'Asia/Manila';
+  const local = fmtInTZ(c.last_active_utc, tz);
+  const et = fmtInTZ(c.last_active_utc, 'America/New_York');
+  const tzShort = tz === 'Asia/Manila' ? 'Manila' : tz === 'America/New_York' ? 'ET' : tz.split('/').pop().replace(/_/g, ' ');
+  const etPart = tz !== 'America/New_York' && et ? ' / ' + et + ' ET' : '';
+  return 'Last active: ' + local + ' ' + tzShort + etPart;
+}
+
 function CoordinatorRow({ c, open, doneToday }) {
-  const s = statusDot(c.days_since_last_login);
+  // 2026-05-28 hotfix: read days_inactive_local + last_active_utc from the new
+  // multi-source engagement view, not days_since_last_login.
+  const s = statusDot(c.days_inactive_local);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '12px 1fr 50px 50px 50px',
       gap: 6, alignItems: 'center', padding: '7px 10px',
-      borderBottom: '1px solid var(--border)' }}>
+      borderBottom: '1px solid var(--border)' }}
+      title={tooltipFor(c)}>
       <span style={{ width: 8, height: 8, background: s.color, borderRadius: '50%' }} />
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--black)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {c.full_name}
         </div>
-        <div style={{ fontSize: 9, color: c.days_since_last_login >= 7 ? '#DC2626' : '#6B7280' }}>
-          {c.days_since_last_login === null ? 'never logged in' :
-           c.days_since_last_login === 0 ? 'active today' :
-           c.days_since_last_login + 'd ago'}
+        <div style={{ fontSize: 9, color: (c.days_inactive_local ?? 0) >= 7 ? '#DC2626' : '#6B7280' }}>
+          {lastSeenLabel(c)}
         </div>
       </div>
       <div title="Open tasks" style={{ fontSize: 13, fontWeight: 700, fontFamily: 'DM Mono, monospace',
@@ -65,7 +94,7 @@ function CoordinatorRow({ c, open, doneToday }) {
         {doneToday}
       </div>
       <div style={{ fontSize: 10, color: '#6B7280', textAlign: 'right' }}>
-        {fmtAgo(c.last_sign_in_at)}
+        {fmtAgo(c.last_active_utc)}
       </div>
     </div>
   );
@@ -264,21 +293,21 @@ export default function TeamPerformanceToday() {
             <div style={{ padding: 20, textAlign:'center', color:'var(--gray)', fontSize: 11 }}>No intake coordinators</div>
           )}
           {intakeCoords.map(c => {
-            const s = statusDot(c.days_since_last_login);
+            // 2026-05-28 hotfix: use the multi-source engagement signal here too.
+            const s = statusDot(c.days_inactive_local);
             return (
               <div key={c.coordinator_id} style={{ display:'grid',
                 gridTemplateColumns:'12px 1fr 80px 50px', gap: 6, alignItems: 'center',
-                padding: '7px 10px', borderBottom: '1px solid var(--border)' }}>
+                padding: '7px 10px', borderBottom: '1px solid var(--border)' }}
+                title={tooltipFor(c)}>
                 <span style={{ width: 8, height: 8, background: s.color, borderRadius:'50%' }} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color:'var(--black)',
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {c.full_name}
                   </div>
-                  <div style={{ fontSize: 9, color: c.days_since_last_login >= 7 ? '#DC2626' : '#6B7280' }}>
-                    {c.days_since_last_login === null ? 'never logged in' :
-                     c.days_since_last_login === 0 ? 'active today' :
-                     c.days_since_last_login + 'd ago'}
+                  <div style={{ fontSize: 9, color: (c.days_inactive_local ?? 0) >= 7 ? '#DC2626' : '#6B7280' }}>
+                    {lastSeenLabel(c)}
                   </div>
                 </div>
                 <div title="Pending referrals this week (no welcome call)"
@@ -288,7 +317,7 @@ export default function TeamPerformanceToday() {
                   {intakeOpenTotal}
                 </div>
                 <div style={{ fontSize: 10, color: '#6B7280', textAlign: 'right' }}>
-                  {fmtAgo(c.last_sign_in_at)}
+                  {fmtAgo(c.last_active_utc)}
                 </div>
               </div>
             );

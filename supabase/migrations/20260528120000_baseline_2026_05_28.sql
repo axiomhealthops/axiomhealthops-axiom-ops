@@ -1659,3 +1659,2238 @@ CREATE OR REPLACE VIEW public.v_auth_pending_coverage AS
    FROM needs_coverage c
      LEFT JOIN pt_latest_auth a ON a.pname_key = lower(TRIM(BOTH FROM c.patient_name))
   ORDER BY c.days_since_last_visit;
+
+-- ---------------------------------------------------------------------------
+-- 10. FUNCTIONS
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.admin_create_user(p_email text, p_full_name text, p_role text, p_password text DEFAULT NULL::text, p_regions text[] DEFAULT '{}'::text[], p_team text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'auth', 'extensions'
+AS $function$
+DECLARE
+  caller_role text;
+  new_user_id uuid;
+  existing_auth_id uuid;
+  existing_coord_id uuid;
+BEGIN
+  SELECT role INTO caller_role FROM public.coordinators WHERE user_id = auth.uid();
+  IF caller_role NOT IN ('super_admin', 'admin', 'ceo') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Unauthorized');
+  END IF;
+
+  SELECT id INTO existing_coord_id FROM public.coordinators WHERE email = p_email;
+  IF existing_coord_id IS NOT NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'A coordinator profile with this email already exists');
+  END IF;
+
+  SELECT id INTO existing_auth_id FROM auth.users WHERE email = p_email;
+
+  IF existing_auth_id IS NOT NULL THEN
+    new_user_id := existing_auth_id;
+  ELSE
+    new_user_id := gen_random_uuid();
+    INSERT INTO auth.users (
+      id, instance_id, aud, role,
+      email, email_confirmed_at,
+      encrypted_password,
+      raw_app_meta_data, raw_user_meta_data,
+      created_at, updated_at,
+      -- All token/change columns must be '' (GoTrue is NULL-intolerant on these)
+      confirmation_token,
+      recovery_token,
+      email_change,
+      email_change_token_new,
+      email_change_token_current,
+      reauthentication_token,
+      phone_change,
+      phone_change_token,
+      is_super_admin
+    ) VALUES (
+      new_user_id,
+      '00000000-0000-0000-0000-000000000000',
+      'authenticated', 'authenticated',
+      p_email, now(),
+      CASE
+        WHEN p_password IS NOT NULL AND p_password <> ''
+        THEN extensions.crypt(p_password, extensions.gen_salt('bf'))
+        ELSE extensions.crypt(gen_random_uuid()::text, extensions.gen_salt('bf'))
+      END,
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      jsonb_build_object('full_name', p_full_name),
+      now(), now(),
+      '', '', '', '', '', '', '', '',
+      false
+    );
+  END IF;
+
+  -- Update password if provided and auth user already existed
+  IF existing_auth_id IS NOT NULL AND p_password IS NOT NULL AND p_password <> '' THEN
+    UPDATE auth.users
+    SET encrypted_password = extensions.crypt(p_password, extensions.gen_salt('bf')), updated_at = now()
+    WHERE id = existing_auth_id;
+  END IF;
+
+  -- Ensure matching auth.identities row exists (login path)
+  INSERT INTO auth.identities (provider_id, user_id, identity_data, provider, created_at, updated_at)
+  VALUES (
+    new_user_id::text,
+    new_user_id,
+    jsonb_build_object(
+      'sub', new_user_id::text,
+      'email', p_email,
+      'email_verified', true,   -- we already set email_confirmed_at; keep identity_data consistent
+      'phone_verified', false,
+      'name', p_full_name
+    ),
+    'email',
+    now(),
+    now()
+  )
+  ON CONFLICT (provider, provider_id) DO NOTHING;
+
+  -- Create coordinator profile
+  INSERT INTO public.coordinators (full_name, email, role, regions, team, user_id, is_active)
+  VALUES (p_full_name, p_email, p_role, p_regions, p_team, new_user_id, true);
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'user_id', new_user_id,
+    'note', CASE WHEN existing_auth_id IS NOT NULL THEN 'Linked to existing auth account' ELSE 'New auth account created' END
+  );
+
+EXCEPTION WHEN OTHERS THEN
+  RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_delete_user(target_user_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'extensions'
+AS $function$
+BEGIN
+  -- Only super_admin can delete users
+  IF NOT EXISTS (
+    SELECT 1 FROM public.coordinators
+    WHERE user_id = auth.uid() AND role = 'super_admin'
+  ) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Unauthorized');
+  END IF;
+
+  -- Delete auth user (cascades to sessions, identities, etc.)
+  DELETE FROM auth.users WHERE id = target_user_id;
+
+  RETURN jsonb_build_object('success', true);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_set_password(target_user_id uuid, new_password text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'auth', 'extensions'
+AS $function$
+DECLARE
+  caller_role text;
+  rows_updated int;
+BEGIN
+  SELECT role INTO caller_role 
+  FROM public.coordinators 
+  WHERE user_id = auth.uid();
+  
+  IF caller_role NOT IN ('super_admin', 'admin') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Unauthorized');
+  END IF;
+
+  UPDATE auth.users 
+  SET 
+    encrypted_password = extensions.crypt(new_password, extensions.gen_salt('bf')),
+    updated_at = now()
+  WHERE id = target_user_id;
+
+  GET DIAGNOSTICS rows_updated = ROW_COUNT;
+  
+  IF rows_updated = 0 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'No user found with that ID');
+  END IF;
+
+  RETURN jsonb_build_object('success', true, 'rows_updated', rows_updated);
+EXCEPTION WHEN OTHERS THEN
+  RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_update_user(target_user_id uuid, new_email text DEFAULT NULL::text, new_password text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'auth', 'extensions'
+AS $function$
+DECLARE
+  caller_role text;
+BEGIN
+  SELECT role INTO caller_role 
+  FROM public.coordinators 
+  WHERE user_id = auth.uid();
+  
+  IF caller_role NOT IN ('super_admin', 'admin') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Unauthorized');
+  END IF;
+
+  IF new_email IS NOT NULL AND new_email <> '' THEN
+    UPDATE auth.users 
+    SET email = new_email, email_confirmed_at = now(), updated_at = now()
+    WHERE id = target_user_id;
+    
+    UPDATE public.coordinators 
+    SET email = new_email, updated_at = now()
+    WHERE user_id = target_user_id;
+  END IF;
+
+  IF new_password IS NOT NULL AND new_password <> '' THEN
+    UPDATE auth.users 
+    SET 
+      encrypted_password = extensions.crypt(new_password, extensions.gen_salt('bf')),
+      updated_at = now()
+    WHERE id = target_user_id;
+  END IF;
+
+  RETURN jsonb_build_object('success', true);
+EXCEPTION WHEN OTHERS THEN
+  RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.apply_audit_row(staging_id uuid, applied_by_name text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  s RECORD;
+  c_row census_data%ROWTYPE;
+  a_row auth_tracker%ROWTYPE;
+  changes_made INTEGER := 0;
+  audit_source TEXT;
+BEGIN
+  -- Load the staging row
+  SELECT * INTO s FROM auth_audit_staging WHERE id = staging_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('error', 'staging row not found');
+  END IF;
+  IF s.applied_at IS NOT NULL THEN
+    RETURN jsonb_build_object('error', 'already applied', 'applied_at', s.applied_at);
+  END IF;
+
+  audit_source := s.imported_batch;
+
+  -- ── Find matching census row (most recent if multiple) ──────────────
+  SELECT * INTO c_row
+  FROM census_data
+  WHERE LOWER(patient_name) = LOWER(s.patient_name) AND region = s.region
+  ORDER BY uploaded_at DESC NULLS LAST
+  LIMIT 1;
+
+  IF FOUND THEN
+    -- Apply each non-NULL field from staging, logging the old value
+    IF s.status_normalized IS NOT NULL AND s.status_normalized IS DISTINCT FROM c_row.status THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'census_data', c_row.id, c_row.patient_name, c_row.region, 'status', c_row.status, s.status_normalized, applied_by_name);
+      UPDATE census_data SET status = s.status_normalized, status_changed_at = NOW() WHERE id = c_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.address IS NOT NULL AND s.address IS DISTINCT FROM c_row.address THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'census_data', c_row.id, c_row.patient_name, c_row.region, 'address', c_row.address, s.address, applied_by_name);
+      UPDATE census_data SET address = s.address WHERE id = c_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.discipline IS NOT NULL AND s.discipline IS DISTINCT FROM c_row.discipline THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'census_data', c_row.id, c_row.patient_name, c_row.region, 'discipline', c_row.discipline, s.discipline, applied_by_name);
+      UPDATE census_data SET discipline = s.discipline WHERE id = c_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.ref_source IS NOT NULL AND s.ref_source IS DISTINCT FROM c_row.ref_source THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'census_data', c_row.id, c_row.patient_name, c_row.region, 'ref_source', c_row.ref_source, s.ref_source, applied_by_name);
+      UPDATE census_data SET ref_source = s.ref_source WHERE id = c_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.insurance_clean IS NOT NULL AND s.insurance_clean IS DISTINCT FROM c_row.insurance THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'census_data', c_row.id, c_row.patient_name, c_row.region, 'insurance', c_row.insurance, s.insurance_clean, applied_by_name);
+      UPDATE census_data SET insurance = s.insurance_clean WHERE id = c_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.frequency IS NOT NULL AND s.frequency IS DISTINCT FROM c_row.inferred_frequency THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'census_data', c_row.id, c_row.patient_name, c_row.region, 'inferred_frequency', c_row.inferred_frequency, s.frequency, applied_by_name);
+      UPDATE census_data SET inferred_frequency = s.frequency, frequency_reviewed_at = NOW(), frequency_reviewed_by = applied_by_name WHERE id = c_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+  END IF;
+
+  -- ── Find or insert auth_tracker row ─────────────────────────────────
+  SELECT * INTO a_row
+  FROM auth_tracker
+  WHERE LOWER(patient_name) = LOWER(s.patient_name) AND region = s.region AND COALESCE(is_currently_active, true) = true
+  ORDER BY updated_at DESC NULLS LAST
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    -- No auth row exists yet — INSERT one with the audit data
+    INSERT INTO auth_tracker (
+      patient_name, region, insurance, soc_date, auth_start_date, auth_expiry_date,
+      visits_authorized, evals_authorized, reassessments_authorized,
+      is_ppo, is_scheduled, notes, assigned_to, updated_by,
+      is_currently_active, auth_status
+    ) VALUES (
+      s.patient_name, s.region, s.insurance_clean, s.soc_date, s.auth_start_date, s.auth_end_date,
+      s.visits_authorized, s.evals_authorized, s.ras_authorized,
+      s.is_ppo, s.is_scheduled, s.notes, applied_by_name, applied_by_name,
+      TRUE, CASE WHEN s.auth_end_date IS NOT NULL THEN 'approved' ELSE 'pending' END
+    ) RETURNING * INTO a_row;
+    INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+      VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, '_created_from_audit', NULL, 'inserted', applied_by_name);
+    changes_made := changes_made + 1;
+  ELSE
+    -- UPDATE existing auth row, logging each change
+    IF s.soc_date IS NOT NULL AND s.soc_date IS DISTINCT FROM a_row.soc_date THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'soc_date', a_row.soc_date::text, s.soc_date::text, applied_by_name);
+      UPDATE auth_tracker SET soc_date = s.soc_date WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.auth_start_date IS NOT NULL AND s.auth_start_date IS DISTINCT FROM a_row.auth_start_date THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'auth_start_date', a_row.auth_start_date::text, s.auth_start_date::text, applied_by_name);
+      UPDATE auth_tracker SET auth_start_date = s.auth_start_date WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.auth_end_date IS NOT NULL AND s.auth_end_date IS DISTINCT FROM a_row.auth_expiry_date THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'auth_expiry_date', a_row.auth_expiry_date::text, s.auth_end_date::text, applied_by_name);
+      UPDATE auth_tracker SET auth_expiry_date = s.auth_end_date WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.visits_authorized IS NOT NULL AND s.visits_authorized IS DISTINCT FROM a_row.visits_authorized THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'visits_authorized', a_row.visits_authorized::text, s.visits_authorized::text, applied_by_name);
+      UPDATE auth_tracker SET visits_authorized = s.visits_authorized WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.evals_authorized IS NOT NULL AND s.evals_authorized IS DISTINCT FROM a_row.evals_authorized THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'evals_authorized', a_row.evals_authorized::text, s.evals_authorized::text, applied_by_name);
+      UPDATE auth_tracker SET evals_authorized = s.evals_authorized WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.ras_authorized IS NOT NULL AND s.ras_authorized IS DISTINCT FROM a_row.reassessments_authorized THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'reassessments_authorized', a_row.reassessments_authorized::text, s.ras_authorized::text, applied_by_name);
+      UPDATE auth_tracker SET reassessments_authorized = s.ras_authorized WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.is_ppo IS NOT NULL AND s.is_ppo IS DISTINCT FROM a_row.is_ppo THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'is_ppo', a_row.is_ppo::text, s.is_ppo::text, applied_by_name);
+      UPDATE auth_tracker SET is_ppo = s.is_ppo WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.is_scheduled IS NOT NULL AND s.is_scheduled IS DISTINCT FROM a_row.is_scheduled THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'is_scheduled', a_row.is_scheduled::text, s.is_scheduled::text, applied_by_name);
+      UPDATE auth_tracker SET is_scheduled = s.is_scheduled WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    IF s.notes IS NOT NULL AND s.notes IS DISTINCT FROM a_row.notes THEN
+      INSERT INTO data_audit_log(source, table_name, row_id, patient_name, region, field_name, old_value, new_value, changed_by)
+        VALUES (audit_source, 'auth_tracker', a_row.id, a_row.patient_name, a_row.region, 'notes', a_row.notes, s.notes, applied_by_name);
+      UPDATE auth_tracker SET notes = s.notes WHERE id = a_row.id;
+      changes_made := changes_made + 1;
+    END IF;
+    UPDATE auth_tracker SET updated_at = NOW(), updated_by = applied_by_name WHERE id = a_row.id;
+  END IF;
+
+  -- ── CC notes — always APPEND (never overwrite) ──────────────────────
+  IF s.cc_notes IS NOT NULL THEN
+    INSERT INTO care_coord_notes (patient_name, region, note_type, note, contact_date, updated_by)
+      VALUES (s.patient_name, s.region, 'audit_import', s.cc_notes, COALESCE(s.changed_at::date, CURRENT_DATE), applied_by_name);
+    changes_made := changes_made + 1;
+  END IF;
+
+  -- ── Mark staging row applied ────────────────────────────────────────
+  UPDATE auth_audit_staging
+  SET applied_at = NOW(),
+      applied_by = applied_by_name,
+      match_patient_id = c_row.id,
+      match_auth_id = a_row.id,
+      match_status = CASE WHEN c_row.id IS NULL THEN 'no_census_match' ELSE 'matched' END
+  WHERE id = staging_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'changes_made', changes_made,
+    'census_matched', c_row.id IS NOT NULL,
+    'auth_matched', a_row.id IS NOT NULL
+  );
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.approve_frequency_change(p_patient_name text, p_new_frequency text, p_reviewed_by text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  updated int;
+  thresh int;
+BEGIN
+  SELECT CASE p_new_frequency
+    WHEN '4w4'  THEN 3
+    WHEN '2w4'  THEN 4
+    WHEN '1w4'  THEN 10
+    WHEN '1em1' THEN 30
+    WHEN '1em2' THEN 60
+    ELSE 9999
+  END INTO thresh;
+
+  UPDATE public.census_data
+  SET inferred_frequency      = p_new_frequency,
+      overdue_threshold_days  = thresh,
+      frequency_locked_at     = now(),
+      frequency_reviewed_by   = p_reviewed_by,
+      frequency_reviewed_at   = now(),
+      needs_frequency_review  = false,
+      days_overdue            = GREATEST(0, COALESCE(days_since_last_visit, 0) - thresh)
+  WHERE LOWER(TRIM(patient_name)) = LOWER(TRIM(p_patient_name));
+  GET DIAGNOSTICS updated = ROW_COUNT;
+
+  RETURN jsonb_build_object('success', true, 'rows_updated', updated);
+EXCEPTION WHEN OTHERS THEN
+  RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.auto_clear_freq_review_on_status_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND NEW.status IN (
+       'Discharge', 'Discharge - Change Insurance', 'Discharged',
+       'Non-Admit', 'Non-admit',
+       'On Hold', 'On Hold - Facility', 'On Hold - Pt Request', 'On Hold - MD Request',
+       'Hospitalized', 'Waitlist'
+     ) THEN
+    NEW.needs_frequency_review := false;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.calc_reassessment_status(last_reassessment date, next_scheduled date)
+ RETURNS text
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  IF last_reassessment IS NULL THEN RETURN 'no_data'; END IF;
+  IF next_scheduled IS NOT NULL THEN RETURN 'scheduled'; END IF;
+  IF (last_reassessment + 45) < CURRENT_DATE  THEN RETURN 'overdue'; END IF;
+  IF (last_reassessment + 45) <= CURRENT_DATE + 7  THEN RETURN 'critical'; END IF;
+  IF (last_reassessment + 45) <= CURRENT_DATE + 14 THEN RETURN 'urgent'; END IF;
+  IF (last_reassessment + 30) <= CURRENT_DATE + 7  THEN RETURN 'approaching'; END IF;
+  RETURN 'ok';
+END; $function$
+;
+
+CREATE OR REPLACE FUNCTION public.check_coordinator_overload()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+  v_today date := CURRENT_DATE;
+  v_result jsonb := '[]'::jsonb;
+BEGIN
+  -- Check coordinator_tasks + auth_renewal_tasks combined incomplete count
+  WITH combined_incomplete AS (
+    SELECT assigned_to as name,
+           SUM(cnt) as incomplete_total
+    FROM (
+      SELECT assigned_to, COUNT(*) as cnt
+      FROM coordinator_tasks WHERE status != 'completed'
+      GROUP BY assigned_to
+      UNION ALL
+      SELECT assigned_to, COUNT(*) as cnt
+      FROM auth_renewal_tasks WHERE task_status != 'completed'
+      GROUP BY assigned_to
+    ) sub
+    GROUP BY assigned_to
+  ),
+  already_alerted AS (
+    SELECT coordinator_name FROM coordinator_overload_alerts WHERE alert_date = v_today
+  )
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'name', ci.name,
+    'incomplete_count', ci.incomplete_total,
+    'coordinator_id', c.id,
+    'email', c.email,
+    'role', c.role
+  )), '[]'::jsonb)
+  INTO v_result
+  FROM combined_incomplete ci
+  JOIN coordinators c ON c.full_name = ci.name
+  LEFT JOIN already_alerted aa ON aa.coordinator_name = ci.name
+  WHERE ci.incomplete_total >= 30
+    AND aa.coordinator_name IS NULL; -- not already alerted today
+
+  RETURN v_result;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.compute_auth_health(p_auth_id uuid)
+ RETURNS auth_health_t
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+  a            auth_tracker%ROWTYPE;
+  remaining    integer;
+  days_left    integer;
+  is_terminal  boolean;
+BEGIN
+  SELECT * INTO a FROM auth_tracker WHERE id = p_auth_id;
+  IF NOT FOUND THEN RETURN 'ok'; END IF;
+
+  is_terminal := a.auth_status IN ('denied','cancelled','expired','discharged');
+  remaining   := GREATEST(0, COALESCE(a.visits_authorized,0) - COALESCE(a.visits_used,0));
+  days_left   := CASE WHEN a.auth_expiry_date IS NOT NULL
+                       THEN (a.auth_expiry_date - CURRENT_DATE)::integer
+                       ELSE NULL END;
+
+  -- Over-limit takes precedence over everything when the visit count exceeds
+  IF COALESCE(a.visits_used,0) >= COALESCE(a.visits_authorized,0) AND a.visits_authorized > 0 THEN
+    IF days_left IS NOT NULL AND days_left < 0 THEN
+      RETURN 'exhausted';
+    ELSE
+      RETURN 'over_limit';
+    END IF;
+  END IF;
+
+  -- low_visits beats expiring when both apply (UI shows red over amber)
+  IF remaining < 7 THEN
+    RETURN 'low_visits';
+  END IF;
+
+  IF days_left IS NOT NULL AND days_left <= 14 AND days_left >= 0 THEN
+    RETURN 'expiring';
+  END IF;
+
+  RETURN 'ok';
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.compute_loc_level()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF NEW.caremap_score IS NULL THEN
+    NEW.loc_level := NULL;
+  ELSIF NEW.caremap_score <= 19 THEN
+    NEW.loc_level := 1;
+  ELSIF NEW.caremap_score <= 39 THEN
+    NEW.loc_level := 2;
+  ELSIF NEW.caremap_score <= 69 THEN
+    NEW.loc_level := 3;
+  ELSIF NEW.caremap_score <= 85 THEN
+    NEW.loc_level := 4;
+  ELSE
+    NEW.loc_level := 5;
+  END IF;
+  NEW.updated_at := NOW();
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.coordinator_tasks_touch_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.current_coordinator_role()
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT role FROM public.coordinators
+  WHERE user_id = (SELECT auth.uid()) AND is_active = true
+  LIMIT 1;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.find_intake_duplicates(p_name text, p_date date, p_dob date DEFAULT NULL::date, p_exclude_id uuid DEFAULT NULL::uuid)
+ RETURNS TABLE(id uuid, patient_name text, date_received date, dob date, region text, insurance text, referral_status text, similarity_score real, days_apart integer, confidence text)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+  v_norm TEXT;
+BEGIN
+  v_norm := norm_patient_name(p_name);
+  IF v_norm = '' OR p_date IS NULL THEN
+    RETURN;  -- nothing to compare against
+  END IF;
+
+  RETURN QUERY
+  WITH candidates AS (
+    SELECT
+      r.id,
+      r.patient_name,
+      r.date_received,
+      r.dob,
+      r.region,
+      r.insurance,
+      r.referral_status,
+      similarity(r.patient_name_norm, v_norm)::real AS sim,
+      ABS(r.date_received - p_date) AS days_apart,
+      (p_dob IS NOT NULL AND r.dob IS NOT NULL AND r.dob = p_dob) AS dob_match
+    FROM intake_referrals r
+    WHERE
+      (p_exclude_id IS NULL OR r.id <> p_exclude_id)
+      AND (
+        -- Pull anything with reasonable name overlap (trigram threshold)
+        r.patient_name_norm % v_norm
+        -- Or anything with matching DOB
+        OR (p_dob IS NOT NULL AND r.dob = p_dob)
+      )
+      AND r.date_received BETWEEN (p_date - INTERVAL '90 days')::date
+                              AND (p_date + INTERVAL '90 days')::date
+  )
+  SELECT
+    c.id, c.patient_name, c.date_received, c.dob, c.region, c.insurance, c.referral_status,
+    c.sim AS similarity_score,
+    c.days_apart::int,
+    CASE
+      WHEN c.sim >= 0.95 AND c.days_apart = 0           THEN 'exact_today'
+      WHEN c.sim >= 0.85 AND c.days_apart <= 7          THEN 'very_likely'
+      WHEN c.sim >= 0.70 AND c.days_apart <= 30         THEN 'possible'
+      WHEN c.dob_match                                  THEN 'dob_match'
+      WHEN c.sim >= 0.60                                THEN 'possible'
+      ELSE 'low'
+    END AS confidence
+  FROM candidates c
+  WHERE
+    c.sim >= 0.60
+    OR c.dob_match
+  ORDER BY
+    -- Surface most-likely-dup first
+    CASE
+      WHEN c.sim >= 0.95 AND c.days_apart = 0     THEN 1
+      WHEN c.sim >= 0.85 AND c.days_apart <= 7    THEN 2
+      WHEN c.dob_match                            THEN 3
+      WHEN c.sim >= 0.70 AND c.days_apart <= 30   THEN 4
+      ELSE 5
+    END,
+    c.sim DESC,
+    c.days_apart ASC
+  LIMIT 10;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.fire_auth_health_alerts(p_auth_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  a auth_tracker%ROWTYPE;
+  remaining int;
+  days_left int;
+  is_active boolean;
+BEGIN
+  SELECT * INTO a FROM auth_tracker WHERE id = p_auth_id;
+  IF NOT FOUND THEN RETURN; END IF;
+
+  is_active := COALESCE(a.is_currently_active, TRUE);
+  remaining := GREATEST(0, COALESCE(a.visits_authorized,0) - COALESCE(a.visits_used,0));
+  days_left := CASE WHEN a.auth_expiry_date IS NOT NULL
+                     THEN (a.auth_expiry_date - CURRENT_DATE)::int
+                     ELSE NULL END;
+
+  -- OVER_LIMIT — fires for ANY auth in over_limit state, active or not
+  IF a.auth_health = 'over_limit' THEN
+    INSERT INTO alerts (alert_type, priority, title, message, patient_name, region, related_date, metadata)
+    SELECT 'auth_over_limit', 'critical',
+           'Auth over limit: ' || a.patient_name,
+           'Auth #' || a.id || ' (' || a.insurance || ', ' || a.visits_authorized || ' authorized)' ||
+           ' has ' || a.visits_used || ' completed visits — ' ||
+           (a.visits_used - a.visits_authorized) || ' beyond the auth.' ||
+           CASE WHEN a.auth_expiry_date IS NOT NULL THEN ' Expires ' || a.auth_expiry_date ELSE '' END ||
+           CASE WHEN is_active THEN ' Submit emergency renewal.'
+                ELSE ' (Historical predecessor auth — verify billing reconciliation.)' END,
+           a.patient_name, a.region, a.auth_expiry_date,
+           jsonb_build_object('auth_id', a.id, 'visits_authorized', a.visits_authorized,
+                              'visits_used', a.visits_used,
+                              'overage', a.visits_used - a.visits_authorized,
+                              'is_currently_active', is_active,
+                              'auth_expiry_date', a.auth_expiry_date)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM alerts
+      WHERE alert_type='auth_over_limit' AND is_dismissed=FALSE
+        AND (metadata->>'auth_id')::uuid = a.id
+    );
+  END IF;
+
+  -- LOW_VISITS — only on currently_active auths (predictive operational alert)
+  IF a.auth_health = 'low_visits' AND is_active THEN
+    INSERT INTO alerts (alert_type, priority, title, message, patient_name, region, related_date, metadata)
+    SELECT 'auth_low_visits', 'high',
+           'Low visits remaining: ' || a.patient_name,
+           a.patient_name || ' has ' || remaining || ' visit' ||
+           CASE WHEN remaining=1 THEN '' ELSE 's' END ||
+           ' remaining on auth #' || a.id || ' (' || a.insurance || ').' ||
+           CASE WHEN a.auth_expiry_date IS NOT NULL THEN ' Expires ' || a.auth_expiry_date || '.' ELSE '' END ||
+           ' Submit renewal soon.',
+           a.patient_name, a.region, a.auth_expiry_date,
+           jsonb_build_object('auth_id', a.id, 'visits_authorized', a.visits_authorized,
+                              'visits_used', a.visits_used, 'remaining', remaining,
+                              'auth_expiry_date', a.auth_expiry_date)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM alerts
+      WHERE alert_type='auth_low_visits' AND is_dismissed=FALSE
+        AND (metadata->>'auth_id')::uuid = a.id
+    );
+  END IF;
+
+  -- EXPIRING — only on currently_active, fires INDEPENDENTLY of low_visits
+  IF is_active AND (a.auth_health = 'expiring' 
+                    OR (a.auth_health = 'low_visits' AND days_left BETWEEN 0 AND 14)) THEN
+    INSERT INTO alerts (alert_type, priority, title, message, patient_name, region, related_date, metadata)
+    SELECT 'auth_expiring', 'medium',
+           'Auth expiring: ' || a.patient_name,
+           'Auth #' || a.id || ' expires in ' || days_left || ' day' ||
+           CASE WHEN days_left=1 THEN '' ELSE 's' END ||
+           ' (' || a.auth_expiry_date || '). ' || remaining || ' visit' ||
+           CASE WHEN remaining=1 THEN '' ELSE 's' END || ' remaining.',
+           a.patient_name, a.region, a.auth_expiry_date,
+           jsonb_build_object('auth_id', a.id, 'days_until_expiry', days_left,
+                              'auth_expiry_date', a.auth_expiry_date, 'remaining', remaining)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM alerts
+      WHERE alert_type='auth_expiring' AND is_dismissed=FALSE
+        AND (metadata->>'auth_id')::uuid = a.id
+    );
+  END IF;
+
+  -- Auto-dismiss when recovered
+  IF a.auth_health = 'ok' THEN
+    UPDATE alerts SET is_dismissed=TRUE, updated_at=now()
+    WHERE is_dismissed=FALSE
+      AND alert_type IN ('auth_over_limit','auth_low_visits','auth_expiring')
+      AND (metadata->>'auth_id')::uuid = a.id;
+  END IF;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.fn_log_care_coord_note()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+  v_name text;
+  v_role text;
+BEGIN
+  SELECT full_name, role INTO v_name, v_role FROM coordinators WHERE id = NEW.coordinator_id;
+  INSERT INTO coordinator_activity_log (
+    coordinator_id, coordinator_name, coordinator_role,
+    action_type, action_detail, patient_name, table_name, record_id
+  ) VALUES (
+    NEW.coordinator_id, COALESCE(v_name, 'Unknown'), COALESCE(v_role, 'care_coordinator'),
+    'note_added',
+    'Care coord note added (' || COALESCE(NEW.note_type, 'general') || ') for ' || COALESCE(NEW.patient_name, '—'),
+    NEW.patient_name, 'care_coord_notes', NEW.id
+  );
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.fn_log_coordinator_activity()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+  v_actor_name text;
+  v_actor_id uuid;
+  v_actor_role text;
+  v_action_type text;
+  v_action_detail text;
+  v_patient text;
+BEGIN
+  -- ═══ AUTH TRACKER ═══
+  IF TG_TABLE_NAME = 'auth_tracker' THEN
+    v_patient := COALESCE(NEW.patient_name, OLD.patient_name);
+    v_actor_name := COALESCE(NEW.updated_by, NEW.assigned_to, 'System');
+    
+    IF TG_OP = 'INSERT' THEN
+      v_action_type := 'auth_created';
+      v_action_detail := 'New auth record created for ' || v_patient || ' — ' || COALESCE(NEW.insurance, 'Unknown') || ', status: ' || COALESCE(NEW.auth_status, 'pending');
+    ELSIF TG_OP = 'UPDATE' THEN
+      IF OLD.auth_status IS DISTINCT FROM NEW.auth_status THEN
+        v_action_type := 'auth_status_changed';
+        v_action_detail := 'Auth status changed: ' || COALESCE(OLD.auth_status, '—') || ' → ' || COALESCE(NEW.auth_status, '—') || ' for ' || v_patient;
+      ELSIF OLD.visits_used IS DISTINCT FROM NEW.visits_used THEN
+        v_action_type := 'auth_visits_updated';
+        v_action_detail := 'Visits updated: ' || COALESCE(OLD.visits_used::text, '0') || ' → ' || COALESCE(NEW.visits_used::text, '0') || ' of ' || COALESCE(NEW.visits_authorized::text, '?') || ' for ' || v_patient;
+      ELSE
+        v_action_type := 'auth_updated';
+        v_action_detail := 'Auth record updated for ' || v_patient;
+      END IF;
+    END IF;
+
+  -- ═══ INTAKE REFERRALS ═══
+  ELSIF TG_TABLE_NAME = 'intake_referrals' THEN
+    v_patient := COALESCE(NEW.patient_name, OLD.patient_name);
+    v_actor_name := COALESCE(NEW.updated_by, 'System');
+    
+    IF TG_OP = 'INSERT' THEN
+      v_action_type := 'referral_received';
+      v_action_detail := 'New referral received for ' || v_patient || ' — ' || COALESCE(NEW.insurance, 'Unknown');
+    ELSIF TG_OP = 'UPDATE' AND OLD.referral_status IS DISTINCT FROM NEW.referral_status THEN
+      v_action_type := 'referral_' || lower(COALESCE(NEW.referral_status, 'updated'));
+      v_action_detail := 'Referral status: ' || COALESCE(OLD.referral_status, '—') || ' → ' || COALESCE(NEW.referral_status, '—') || ' for ' || v_patient;
+    ELSIF TG_OP = 'UPDATE' AND OLD.chart_status IS DISTINCT FROM NEW.chart_status THEN
+      v_action_type := 'chart_status_changed';
+      v_action_detail := 'Chart status: ' || COALESCE(OLD.chart_status, '—') || ' → ' || COALESCE(NEW.chart_status, '—') || ' for ' || v_patient;
+    ELSE
+      v_action_type := 'referral_updated';
+      v_action_detail := 'Referral updated for ' || v_patient;
+    END IF;
+
+  -- ═══ COORDINATOR TASKS ═══
+  ELSIF TG_TABLE_NAME = 'coordinator_tasks' THEN
+    v_patient := COALESCE(NEW.patient_name, OLD.patient_name);
+    v_actor_name := COALESCE(NEW.completed_by, NEW.assigned_to, 'System');
+    
+    IF TG_OP = 'UPDATE' AND NEW.status = 'completed' AND OLD.status != 'completed' THEN
+      v_action_type := 'task_completed';
+      v_action_detail := 'Task completed: ' || COALESCE(NEW.title, NEW.task_type, 'untitled') || ' for ' || COALESCE(v_patient, '—');
+    ELSIF TG_OP = 'INSERT' THEN
+      v_action_type := 'task_created';
+      v_action_detail := 'Task created: ' || COALESCE(NEW.title, NEW.task_type, 'untitled') || ' assigned to ' || COALESCE(NEW.assigned_to, '—');
+    ELSE
+      v_action_type := 'task_updated';
+      v_action_detail := 'Task updated: ' || COALESCE(NEW.title, NEW.task_type, 'untitled');
+    END IF;
+
+  -- ═══ AUTH RENEWAL TASKS ═══
+  ELSIF TG_TABLE_NAME = 'auth_renewal_tasks' THEN
+    v_patient := COALESCE(NEW.patient_name, OLD.patient_name);
+    v_actor_name := COALESCE(NEW.completed_by, NEW.assigned_to, 'System');
+    
+    IF TG_OP = 'UPDATE' AND NEW.task_status = 'completed' AND OLD.task_status != 'completed' THEN
+      v_action_type := 'renewal_completed';
+      v_action_detail := 'Auth renewal completed for ' || v_patient || ' — ' || COALESCE(NEW.insurance, '');
+    ELSE
+      v_action_type := 'renewal_updated';
+      v_action_detail := 'Auth renewal updated for ' || v_patient;
+    END IF;
+
+  -- ═══ PATIENT DISCHARGES ═══
+  ELSIF TG_TABLE_NAME = 'patient_discharges' THEN
+    v_patient := COALESCE(NEW.patient_name, OLD.patient_name);
+    v_actor_name := COALESCE(NEW.discharged_by, NEW.updated_by, 'System');
+    v_action_type := 'discharge_processed';
+    v_action_detail := 'Discharge processed for ' || v_patient;
+
+  -- ═══ ON HOLD RECOVERY ═══
+  ELSIF TG_TABLE_NAME = 'on_hold_recovery' THEN
+    v_patient := COALESCE(NEW.patient_name, OLD.patient_name);
+    v_actor_name := COALESCE(NEW.updated_by, 'System');
+    IF TG_OP = 'UPDATE' AND OLD.recovery_status IS DISTINCT FROM NEW.recovery_status THEN
+      v_action_type := 'onhold_status_changed';
+      v_action_detail := 'On-hold status: ' || COALESCE(OLD.recovery_status, '—') || ' → ' || COALESCE(NEW.recovery_status, '—') || ' for ' || v_patient;
+    ELSIF TG_OP = 'UPDATE' THEN
+      v_action_type := 'onhold_updated';
+      v_action_detail := 'On-hold record updated for ' || v_patient;
+    END IF;
+
+  -- ═══ WAITLIST ASSIGNMENTS ═══
+  ELSIF TG_TABLE_NAME = 'waitlist_assignments' THEN
+    v_patient := COALESCE(NEW.patient_name, OLD.patient_name);
+    v_actor_name := COALESCE(NEW.assigned_by, NEW.updated_by, 'System');
+    v_action_type := CASE WHEN TG_OP = 'INSERT' THEN 'waitlist_assigned' ELSE 'waitlist_updated' END;
+    v_action_detail := CASE WHEN TG_OP = 'INSERT' 
+      THEN 'Patient added to waitlist: ' || v_patient
+      ELSE 'Waitlist updated for ' || v_patient END;
+  END IF;
+
+  -- Skip if no action type was set (unchanged row)
+  IF v_action_type IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- Look up coordinator
+  SELECT id, role INTO v_actor_id, v_actor_role
+  FROM coordinators WHERE full_name = v_actor_name LIMIT 1;
+
+  INSERT INTO coordinator_activity_log (
+    coordinator_id, coordinator_name, coordinator_role,
+    action_type, action_detail, patient_name, table_name, record_id
+  ) VALUES (
+    v_actor_id, v_actor_name, COALESCE(v_actor_role, 'unknown'),
+    v_action_type, v_action_detail, v_patient, TG_TABLE_NAME, NEW.id
+  );
+
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.fn_log_patient_note()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+  v_coord_id uuid;
+  v_role text;
+BEGIN
+  SELECT id, role INTO v_coord_id, v_role FROM coordinators WHERE full_name = NEW.author_name LIMIT 1;
+  INSERT INTO coordinator_activity_log (
+    coordinator_id, coordinator_name, coordinator_role,
+    action_type, action_detail, patient_name, table_name, record_id
+  ) VALUES (
+    v_coord_id, COALESCE(NEW.author_name, 'Unknown'), COALESCE(v_role, 'unknown'),
+    'chart_note_added',
+    'Chart note added for ' || COALESCE(NEW.patient_name, '—'),
+    NEW.patient_name, 'patient_notes', NEW.id
+  );
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.generate_daily_ops_report(p_report_type text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+  v_today date := CURRENT_DATE;
+  v_result jsonb;
+BEGIN
+
+  -- ═══ AUTH COORDINATOR SUMMARY ═══
+  WITH auth_open AS (
+    SELECT assigned_to,
+           COUNT(*) as total_open,
+           COUNT(*) FILTER (WHERE priority = 'urgent' OR priority = 'high') as urgent,
+           COUNT(*) FILTER (WHERE due_date <= v_today) as overdue,
+           COUNT(*) FILTER (WHERE due_date = v_today) as due_today
+    FROM coordinator_tasks
+    WHERE status != 'completed' AND task_type ILIKE '%auth%'
+    GROUP BY assigned_to
+  ),
+  auth_completed_today AS (
+    SELECT completed_by as name, COUNT(*) as done_today
+    FROM coordinator_tasks
+    WHERE status = 'completed' AND completed_at::date = v_today AND task_type ILIKE '%auth%'
+    GROUP BY completed_by
+  ),
+  auth_renewal_open AS (
+    SELECT assigned_to,
+           COUNT(*) as total_open,
+           COUNT(*) FILTER (WHERE priority = 'urgent' OR priority = 'high') as urgent,
+           COUNT(*) FILTER (WHERE due_date <= v_today) as overdue
+    FROM auth_renewal_tasks
+    WHERE task_status != 'completed'
+    GROUP BY assigned_to
+  ),
+  auth_renewal_done AS (
+    SELECT completed_by as name, COUNT(*) as done_today
+    FROM auth_renewal_tasks
+    WHERE task_status = 'completed' AND completed_at::date = v_today
+    GROUP BY completed_by
+  ),
+  auth_updates AS (
+    SELECT updated_by as name, COUNT(*) as updates_today
+    FROM auth_tracker
+    WHERE updated_at::date = v_today AND updated_by IS NOT NULL
+    GROUP BY updated_by
+  ),
+
+  -- ═══ INTAKE COORDINATOR SUMMARY ═══
+  intake_updates AS (
+    SELECT updated_by as name,
+           COUNT(*) as total_updated,
+           COUNT(*) FILTER (WHERE referral_status = 'Accepted') as accepted,
+           COUNT(*) FILTER (WHERE referral_status = 'Denied') as denied,
+           COUNT(*) FILTER (WHERE referral_status = 'Pending') as still_pending
+    FROM intake_referrals
+    WHERE updated_at::date = v_today AND updated_by IS NOT NULL
+    GROUP BY updated_by
+  ),
+  intake_pending AS (
+    SELECT COUNT(*) as total_pending,
+           COUNT(*) FILTER (WHERE created_at::date = v_today) as new_today
+    FROM intake_referrals
+    WHERE referral_status = 'Pending'
+  ),
+
+  -- ═══ CARE COORDINATOR SUMMARY ═══
+  care_notes_today AS (
+    SELECT c.full_name as name, COUNT(*) as notes_added
+    FROM care_coord_notes cn
+    JOIN coordinators c ON c.id = cn.coordinator_id
+    WHERE cn.created_at::date = v_today
+    GROUP BY c.full_name
+  ),
+  care_chart_notes AS (
+    SELECT author_name as name, COUNT(*) as chart_notes
+    FROM patient_notes
+    WHERE created_at::date = v_today
+    GROUP BY author_name
+  ),
+  discharge_today AS (
+    SELECT discharged_by as name, COUNT(*) as discharges
+    FROM patient_discharges
+    WHERE created_at::date = v_today AND discharged_by IS NOT NULL
+    GROUP BY discharged_by
+  ),
+  onhold_today AS (
+    SELECT c.full_name as name, COUNT(*) as onhold_updates
+    FROM on_hold_recovery oh
+    JOIN coordinators c ON c.id = oh.coordinator_id
+    WHERE oh.updated_at::date = v_today
+    GROUP BY c.full_name
+  ),
+  all_coord_tasks AS (
+    SELECT assigned_to,
+           COUNT(*) as total_assigned,
+           COUNT(*) FILTER (WHERE status = 'completed') as completed,
+           COUNT(*) FILTER (WHERE status != 'completed') as incomplete,
+           COUNT(*) FILTER (WHERE status != 'completed' AND due_date <= v_today) as overdue
+    FROM coordinator_tasks
+    GROUP BY assigned_to
+  ),
+
+  -- ═══ LAST ACTIVITY per coordinator (for inactivity tracking) ═══
+  last_activity AS (
+    SELECT coordinator_name,
+           MAX(created_at) as last_action_at,
+           COUNT(*) FILTER (WHERE created_at::date = v_today) as actions_today
+    FROM coordinator_activity_log
+    GROUP BY coordinator_name
+  )
+
+  SELECT jsonb_build_object(
+    'report_type', p_report_type,
+    'report_date', v_today,
+    'generated_at', now(),
+
+    'auth_coordinators', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'name', c.full_name,
+        'role', 'Auth Coordinator',
+        'tasks_open', COALESCE(ao.total_open,0) + COALESCE(aro.total_open,0),
+        'tasks_urgent', COALESCE(ao.urgent,0) + COALESCE(aro.urgent,0),
+        'tasks_overdue', COALESCE(ao.overdue,0) + COALESCE(aro.overdue,0),
+        'tasks_due_today', COALESCE(ao.due_today,0),
+        'completed_today', COALESCE(acd.done_today,0) + COALESCE(ard.done_today,0),
+        'auth_records_updated', COALESCE(au.updates_today,0),
+        'renewal_tasks_open', COALESCE(aro.total_open,0),
+        'actions_today', COALESCE(la.actions_today,0),
+        'last_activity_at', la.last_action_at,
+        'is_inactive', COALESCE(la.actions_today,0) = 0
+      ) ORDER BY COALESCE(la.actions_today,0) ASC, c.full_name), '[]'::jsonb)
+      FROM coordinators c
+      LEFT JOIN auth_open ao ON ao.assigned_to = c.full_name
+      LEFT JOIN auth_completed_today acd ON acd.name = c.full_name
+      LEFT JOIN auth_renewal_open aro ON aro.assigned_to = c.full_name
+      LEFT JOIN auth_renewal_done ard ON ard.name = c.full_name
+      LEFT JOIN auth_updates au ON au.name = c.full_name
+      LEFT JOIN last_activity la ON la.coordinator_name = c.full_name
+      WHERE c.role = 'auth_coordinator' AND c.is_active = true
+    ),
+
+    'intake_coordinators', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'name', c.full_name,
+        'role', 'Intake Coordinator',
+        'referrals_updated_today', COALESCE(iu.total_updated,0),
+        'accepted_today', COALESCE(iu.accepted,0),
+        'denied_today', COALESCE(iu.denied,0),
+        'still_pending', COALESCE(iu.still_pending,0),
+        'actions_today', COALESCE(la.actions_today,0),
+        'last_activity_at', la.last_action_at,
+        'is_inactive', COALESCE(la.actions_today,0) = 0
+      ) ORDER BY COALESCE(la.actions_today,0) ASC, c.full_name), '[]'::jsonb)
+      FROM coordinators c
+      LEFT JOIN intake_updates iu ON iu.name = c.full_name
+      LEFT JOIN last_activity la ON la.coordinator_name = c.full_name
+      WHERE c.role = 'intake_coordinator' AND c.is_active = true
+    ),
+
+    'care_coordinators', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'name', c.full_name,
+        'role', 'Care Coordinator',
+        'coord_notes_today', COALESCE(cnt.notes_added,0),
+        'chart_notes_today', COALESCE(ccn.chart_notes,0),
+        'discharges_today', COALESCE(dt.discharges,0),
+        'onhold_updates_today', COALESCE(oht.onhold_updates,0),
+        'tasks_open', COALESCE(act.incomplete,0),
+        'tasks_overdue', COALESCE(act.overdue,0),
+        'completed_today', COALESCE(act.completed,0),
+        'actions_today', COALESCE(la.actions_today,0),
+        'last_activity_at', la.last_action_at,
+        'is_inactive', COALESCE(la.actions_today,0) = 0
+      ) ORDER BY COALESCE(la.actions_today,0) ASC, c.full_name), '[]'::jsonb)
+      FROM coordinators c
+      LEFT JOIN care_notes_today cnt ON cnt.name = c.full_name
+      LEFT JOIN care_chart_notes ccn ON ccn.name = c.full_name
+      LEFT JOIN discharge_today dt ON dt.name = c.full_name
+      LEFT JOIN onhold_today oht ON oht.name = c.full_name
+      LEFT JOIN all_coord_tasks act ON act.assigned_to = c.full_name
+      LEFT JOIN last_activity la ON la.coordinator_name = c.full_name
+      WHERE c.role = 'care_coordinator' AND c.is_active = true
+    ),
+
+    -- Pod leaders tracked separately
+    'pod_leaders', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'name', c.full_name,
+        'role', 'Pod Leader',
+        'actions_today', COALESCE(la.actions_today,0),
+        'last_activity_at', la.last_action_at,
+        'chart_notes_today', COALESCE(ccn.chart_notes,0),
+        'is_inactive', COALESCE(la.actions_today,0) = 0
+      ) ORDER BY COALESCE(la.actions_today,0) ASC, c.full_name), '[]'::jsonb)
+      FROM coordinators c
+      LEFT JOIN last_activity la ON la.coordinator_name = c.full_name
+      LEFT JOIN care_chart_notes ccn ON ccn.name = c.full_name
+      WHERE c.role = 'pod_leader' AND c.is_active = true
+    ),
+
+    'intake_pipeline', (SELECT row_to_json(ip)::jsonb FROM intake_pending ip),
+
+    -- ═══ INACTIVITY ALERT: coordinators with ZERO actions today ═══
+    'inactive_coordinators', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'name', c.full_name,
+        'role', c.role,
+        'role_label', CASE c.role
+          WHEN 'auth_coordinator' THEN 'Auth Coordinator'
+          WHEN 'intake_coordinator' THEN 'Intake Coordinator'
+          WHEN 'care_coordinator' THEN 'Care Coordinator'
+          WHEN 'pod_leader' THEN 'Pod Leader'
+          ELSE c.role
+        END,
+        'last_activity_at', la.last_action_at,
+        'days_since_activity', CASE
+          WHEN la.last_action_at IS NULL THEN NULL
+          ELSE EXTRACT(DAY FROM now() - la.last_action_at)::int
+        END,
+        'never_logged_in', la.last_action_at IS NULL
+      ) ORDER BY
+        CASE WHEN la.last_action_at IS NULL THEN 0 ELSE 1 END,
+        COALESCE(la.last_action_at, '1970-01-01'::timestamptz) ASC
+      ), '[]'::jsonb)
+      FROM coordinators c
+      LEFT JOIN last_activity la ON la.coordinator_name = c.full_name
+      WHERE c.role IN ('auth_coordinator','intake_coordinator','care_coordinator','pod_leader')
+        AND c.is_active = true
+        AND COALESCE(la.actions_today, 0) = 0
+    ),
+
+    'overload_coordinators', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'name', act.assigned_to,
+        'incomplete', act.incomplete,
+        'overdue', act.overdue
+      )), '[]'::jsonb)
+      FROM all_coord_tasks act
+      WHERE act.incomplete >= 30
+    ),
+
+    'activity_log_today', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'coordinator', cal.coordinator_name,
+        'action', cal.action_type,
+        'detail', cal.action_detail,
+        'patient', cal.patient_name,
+        'time', cal.created_at
+      ) ORDER BY cal.created_at DESC), '[]'::jsonb)
+      FROM coordinator_activity_log cal
+      WHERE cal.created_at::date = v_today
+    )
+
+  ) INTO v_result;
+
+  RETURN v_result;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.get_auth_user(target_user_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE caller_role text; u record;
+BEGIN
+  SELECT role INTO caller_role FROM public.coordinators WHERE user_id = auth.uid();
+  IF caller_role NOT IN ('super_admin', 'admin') THEN
+    RETURN jsonb_build_object('error', 'Unauthorized');
+  END IF;
+  SELECT id, email, email_confirmed_at, last_sign_in_at, created_at INTO u FROM auth.users WHERE id = target_user_id;
+  RETURN jsonb_build_object('id', u.id, 'email', u.email, 'email_confirmed', u.email_confirmed_at IS NOT NULL, 'last_sign_in', u.last_sign_in_at, 'created_at', u.created_at);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.get_coordinator_engagement()
+ RETURNS SETOF v_coordinator_engagement
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  caller_role text;
+BEGIN
+  SELECT role INTO caller_role FROM coordinators WHERE user_id = auth.uid();
+  IF caller_role NOT IN ('super_admin','admin','director','ceo','assoc_director') THEN
+    -- Non-admins get nothing — silently empty for safety
+    RETURN;
+  END IF;
+  RETURN QUERY SELECT * FROM v_coordinator_engagement;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.infer_visit_frequency(p_patient_name text)
+ RETURNS text
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_count integer;
+BEGIN
+  SELECT COUNT(*) INTO v_count
+  FROM public.visit_schedule_data
+  WHERE LOWER(TRIM(patient_name)) = LOWER(TRIM(p_patient_name))
+    AND status ILIKE '%completed%'
+    AND visit_date >= CURRENT_DATE - 60;
+  RETURN CASE
+    WHEN v_count >= 32 THEN '4x_week'  WHEN v_count >= 20 THEN '3x_week'
+    WHEN v_count >= 12 THEN '2x_week'  WHEN v_count >= 6  THEN '1x_week'
+    WHEN v_count >= 3  THEN '2x_month' WHEN v_count >= 1  THEN '1x_month'
+    ELSE 'prn'
+  END;
+END; $function$
+;
+
+CREATE OR REPLACE FUNCTION public.is_active_coordinator()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT EXISTS (
+    SELECT 1 FROM public.coordinators
+    WHERE user_id = (SELECT auth.uid()) AND is_active = true
+  );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.is_admin()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT EXISTS (
+    SELECT 1 FROM public.coordinators
+    WHERE user_id = (SELECT auth.uid())
+      AND is_active = true
+      AND role IN ('super_admin', 'admin', 'ceo')
+  );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.is_admin_or_above()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT EXISTS (
+    SELECT 1 FROM public.coordinators
+    WHERE user_id = (SELECT auth.uid())
+      AND is_active = true
+      AND role IN ('super_admin','admin','ceo','assoc_director')
+  );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.is_super_admin()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT EXISTS (
+    SELECT 1 FROM public.coordinators
+    WHERE user_id = (SELECT auth.uid())
+      AND is_active = true
+      AND role = 'super_admin'
+  );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.mark_expired_auths()
+ RETURNS TABLE(rows_updated integer, affected_patients text[])
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_count integer;
+  v_patients text[];
+BEGIN
+  -- Capture distinct patient names BEFORE update (we'll re-sequence them after)
+  SELECT ARRAY_AGG(DISTINCT patient_name)
+  INTO v_patients
+  FROM public.auth_tracker
+  WHERE auth_expiry_date IS NOT NULL
+    AND auth_expiry_date < CURRENT_DATE
+    AND (auth_status NOT IN ('expired','denied','cancelled') OR is_currently_active = true);
+
+  WITH upd AS (
+    UPDATE public.auth_tracker
+    SET auth_status = 'expired',
+        is_currently_active = false,
+        effective_visits_remaining = 0,
+        updated_at = now()
+    WHERE auth_expiry_date IS NOT NULL
+      AND auth_expiry_date < CURRENT_DATE
+      AND (auth_status NOT IN ('expired','denied','cancelled') OR is_currently_active = true)
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_count FROM upd;
+
+  -- Re-sequence each affected patient so any successor auths properly activate
+  IF v_patients IS NOT NULL THEN
+    FOR i IN 1 .. array_length(v_patients,1) LOOP
+      PERFORM public.recompute_auth_sequence(v_patients[i]);
+    END LOOP;
+  END IF;
+
+  RETURN QUERY SELECT v_count, COALESCE(v_patients, ARRAY[]::text[]);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.norm_patient_name(input text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  SELECT LOWER(REGEXP_REPLACE(COALESCE(input, ''), '[^a-zA-Z0-9]', '', 'g'));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.normalize_pariox_name(pariox_name text)
+ RETURNS text
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  parts text[];
+  last_name text;
+  first_name text;
+BEGIN
+  IF pariox_name IS NULL OR pariox_name = '' THEN RETURN NULL; END IF;
+  -- Already "FirstName LastName" format (no comma)
+  IF POSITION(',' IN pariox_name) = 0 THEN RETURN TRIM(pariox_name); END IF;
+  parts := STRING_TO_ARRAY(pariox_name, ',');
+  last_name  := TRIM(parts[1]);
+  first_name := TRIM(parts[2]);
+  RETURN first_name || ' ' || last_name;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.pca_set_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN NEW.updated_at := now(); RETURN NEW; END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.recompute_auth_sequence(p_patient_name text)
+ RETURNS void
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  rec RECORD;
+  prev_id uuid := NULL;
+  prev_visits_auth integer := 0;
+  prev_visits_used integer := 0;
+  seq integer := 1;
+  today_d date := CURRENT_DATE;
+BEGIN
+  FOR rec IN
+    SELECT id, visits_authorized, visits_used,
+           soc_date, auth_approved_date, auth_expiry_date, auth_status
+    FROM public.auth_tracker
+    WHERE LOWER(TRIM(patient_name)) = LOWER(TRIM(p_patient_name))
+      AND auth_status NOT IN ('denied','cancelled','expired')
+    ORDER BY COALESCE(soc_date, auth_approved_date, created_at) ASC
+  LOOP
+    DECLARE
+      pred_exhausted boolean := (prev_id IS NULL OR prev_visits_used >= prev_visits_auth);
+      visits_remaining integer := GREATEST(0, rec.visits_authorized - rec.visits_used);
+      self_exhausted boolean := (rec.visits_used >= rec.visits_authorized);
+      self_expired boolean := (rec.auth_expiry_date IS NOT NULL AND rec.auth_expiry_date < today_d);
+      should_be_active boolean := pred_exhausted AND NOT self_exhausted AND NOT self_expired;
+    BEGIN
+      UPDATE public.auth_tracker SET
+        auth_sequence            = seq,
+        predecessor_auth_id      = prev_id,
+        is_currently_active      = should_be_active,
+        alert_predecessor_pending = (prev_id IS NOT NULL AND NOT pred_exhausted),
+        effective_visits_remaining = CASE WHEN should_be_active THEN visits_remaining ELSE 0 END,
+        request_category         = CASE WHEN seq = 1 THEN 'initial' ELSE 'renewal' END,
+        updated_at               = now()
+      WHERE id = rec.id;
+
+      prev_id          := rec.id;
+      prev_visits_auth := rec.visits_authorized;
+      prev_visits_used := rec.visits_used;
+      seq              := seq + 1;
+    END;
+  END LOOP;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.recompute_last_visit_dates()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  RETURN public.recompute_patient_status_fields();
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.recompute_patient_status_fields()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  census_nulled int;
+  master_nulled int;
+  census_updated int;
+  master_updated int;
+  drift_flagged int;
+BEGIN
+  UPDATE public.census_data
+  SET last_visit_date = NULL, last_visit_clinician = NULL, days_since_last_visit = NULL
+  WHERE last_visit_date IS NOT NULL AND last_visit_date > current_date;
+  GET DIAGNOSTICS census_nulled = ROW_COUNT;
+
+  UPDATE public.patient_master
+  SET last_visit_date = NULL, last_visit_clinician = NULL, days_since_last_visit = NULL
+  WHERE last_visit_date IS NOT NULL AND last_visit_date > current_date;
+  GET DIAGNOSTICS master_nulled = ROW_COUNT;
+
+  CREATE TEMP TABLE _real_visits ON COMMIT DROP AS
+  SELECT
+    LOWER(TRIM(v.patient_name)) AS patient_key,
+    v.visit_date::date AS visit_date,
+    v.staff_name_normalized,
+    c.discipline,
+    c.is_telehealth
+  FROM public.visit_schedule_data v
+  LEFT JOIN public.clinicians c
+    ON LOWER(TRIM(c.full_name)) = LOWER(TRIM(v.staff_name_normalized))
+    OR LOWER(TRIM(c.pariox_name)) = LOWER(TRIM(v.staff_name_normalized))
+  WHERE v.visit_date IS NOT NULL
+    AND v.patient_name IS NOT NULL
+    AND v.visit_date::date <= current_date
+    AND (v.event_type IS NULL OR (
+           v.event_type NOT ILIKE '%cancel%'
+       AND v.event_type NOT ILIKE '%attempt%'
+       AND v.event_type NOT ILIKE '%missed%'
+       AND v.event_type NOT ILIKE '%no show%'
+       AND v.event_type NOT ILIKE '%no-show%'))
+    AND (v.status IS NULL OR v.status NOT ILIKE '%cancel%');
+
+  CREATE TEMP TABLE _latest_visits ON COMMIT DROP AS
+  WITH ranked AS (
+    SELECT
+      patient_key, visit_date, staff_name_normalized,
+      ROW_NUMBER() OVER (
+        PARTITION BY patient_key
+        ORDER BY visit_date DESC NULLS LAST,
+                 CASE
+                   WHEN discipline IN ('PTA','COTA') THEN 1
+                   WHEN discipline IN ('PT','OT') AND is_telehealth = false THEN 2
+                   WHEN discipline IN ('PT','OT') AND is_telehealth = true  THEN 3
+                   ELSE 4
+                 END ASC
+      ) AS rn
+    FROM _real_visits
+  )
+  SELECT patient_key, visit_date AS last_visit_date, staff_name_normalized AS last_visit_clinician
+  FROM ranked WHERE rn = 1;
+
+  CREATE TEMP TABLE _cadence ON COMMIT DROP AS
+  SELECT
+    patient_key,
+    count(*) AS visits_60d,
+    CASE
+      WHEN count(*) >= 30 THEN '4w4'
+      WHEN count(*) >= 13 THEN '2w4'
+      WHEN count(*) >= 6  THEN '1w4'
+      WHEN count(*) >= 2  THEN '1em1'
+      WHEN count(*) = 1   THEN '1em2'
+      ELSE 'prn'
+    END AS current_cadence
+  FROM _real_visits
+  WHERE visit_date >= current_date - 60
+  GROUP BY patient_key;
+
+  -- Threshold map
+  CREATE TEMP TABLE _threshold_map ON COMMIT DROP AS
+  SELECT 'prn'::text AS freq, 9999 AS days UNION ALL
+  SELECT '1em2',60 UNION ALL SELECT '1em1',30 UNION ALL
+  SELECT '1w4',10 UNION ALL SELECT '2w4',4 UNION ALL SELECT '4w4',3;
+
+  UPDATE public.census_data c
+  SET
+    last_visit_date      = l.last_visit_date,
+    last_visit_clinician = COALESCE(l.last_visit_clinician, c.last_visit_clinician),
+    days_since_last_visit = (current_date - l.last_visit_date),
+    -- current cadence always refreshed
+    current_visit_cadence = COALESCE(cd.current_cadence, 'prn'),
+    -- inferred_frequency: only fill if unlocked (first-time / cleared)
+    inferred_frequency = CASE
+      WHEN c.frequency_locked_at IS NULL THEN COALESCE(cd.current_cadence, 'prn')
+      ELSE c.inferred_frequency
+    END,
+    frequency_locked_at = CASE
+      WHEN c.frequency_locked_at IS NULL AND cd.current_cadence IS NOT NULL THEN now()
+      ELSE c.frequency_locked_at
+    END,
+    -- Needs review when live cadence differs from prescribed (ignore prn↔prn)
+    needs_frequency_review = (
+      COALESCE(cd.current_cadence, 'prn') IS DISTINCT FROM
+      COALESCE(
+        CASE WHEN c.frequency_locked_at IS NULL THEN cd.current_cadence ELSE c.inferred_frequency END,
+        'prn'
+      )
+    ),
+    -- Threshold always follows the PRESCRIBED (inferred_frequency), not live cadence
+    overdue_threshold_days = (
+      SELECT days FROM _threshold_map
+      WHERE freq = COALESCE(
+        CASE WHEN c.frequency_locked_at IS NULL THEN cd.current_cadence ELSE c.inferred_frequency END,
+        'prn'
+      )
+    ),
+    days_overdue = GREATEST(
+      0,
+      (current_date - l.last_visit_date) -
+      (SELECT days FROM _threshold_map
+       WHERE freq = COALESCE(
+         CASE WHEN c.frequency_locked_at IS NULL THEN cd.current_cadence ELSE c.inferred_frequency END,
+         'prn'
+       ))
+    )
+  FROM _latest_visits l
+  LEFT JOIN _cadence cd ON cd.patient_key = l.patient_key
+  WHERE LOWER(TRIM(c.patient_name)) = l.patient_key;
+  GET DIAGNOSTICS census_updated = ROW_COUNT;
+
+  -- Patients with no visits → harmless prn baseline
+  UPDATE public.census_data
+  SET current_visit_cadence     = 'prn',
+      inferred_frequency        = COALESCE(inferred_frequency, 'prn'),
+      overdue_threshold_days    = 9999,
+      days_overdue              = 0,
+      needs_frequency_review    = false
+  WHERE NOT EXISTS (
+    SELECT 1 FROM _latest_visits l WHERE l.patient_key = LOWER(TRIM(public.census_data.patient_name))
+  );
+
+  UPDATE public.patient_master p
+  SET last_visit_date = l.last_visit_date,
+      last_visit_clinician = COALESCE(l.last_visit_clinician, p.last_visit_clinician),
+      days_since_last_visit = (current_date - l.last_visit_date)
+  FROM _latest_visits l
+  WHERE LOWER(TRIM(p.patient_name)) = l.patient_key;
+  GET DIAGNOSTICS master_updated = ROW_COUNT;
+
+  SELECT count(*) INTO drift_flagged FROM public.census_data WHERE needs_frequency_review = true;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'census_future_nulled', census_nulled,
+    'master_future_nulled', master_nulled,
+    'census_rows_updated', census_updated,
+    'patient_master_rows_updated', master_updated,
+    'drift_flagged_for_review', drift_flagged,
+    'computed_at', now()
+  );
+
+EXCEPTION WHEN OTHERS THEN
+  RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.revert_audit_change(audit_log_id uuid, reverted_by_name text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  log_row data_audit_log%ROWTYPE;
+  sql_stmt TEXT;
+BEGIN
+  SELECT * INTO log_row FROM data_audit_log WHERE id = audit_log_id;
+  IF NOT FOUND THEN RETURN jsonb_build_object('error', 'log row not found'); END IF;
+  IF log_row.reverted_at IS NOT NULL THEN
+    RETURN jsonb_build_object('error', 'already reverted', 'reverted_at', log_row.reverted_at);
+  END IF;
+  IF log_row.field_name LIKE '\_%' THEN
+    RETURN jsonb_build_object('error', 'creation events cannot be reverted via this function');
+  END IF;
+
+  -- Build dynamic SQL to restore old value
+  sql_stmt := format('UPDATE %I SET %I = $1 WHERE id = $2', log_row.table_name, log_row.field_name);
+  EXECUTE sql_stmt USING log_row.old_value, log_row.row_id;
+  UPDATE data_audit_log SET reverted_at = NOW(), reverted_by = reverted_by_name WHERE id = audit_log_id;
+  RETURN jsonb_build_object('success', true);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.set_auth_defaults()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  IF NEW.insurance_type = 'medicare' THEN
+    IF NEW.visits_authorized = 24 THEN -- only override if still at default
+      NEW.visits_authorized := 20;
+    END IF;
+    NEW.evals_authorized := 1;
+    NEW.reassessments_authorized := 0;
+  END IF;
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.set_visit_target()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  IF NEW.employment_type = 'ft' THEN
+    NEW.weekly_visit_target := 25;
+  ELSIF NEW.employment_type = 'pt' THEN
+    NEW.weekly_visit_target := 15;
+  ELSIF NEW.employment_type = 'prn' THEN
+    NEW.weekly_visit_target := 10; -- alert threshold, not hard limit
+  END IF;
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sync_activity_log_legacy_columns()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  -- Forward sync: canonical -> legacy (for old well-formed inserts)
+  IF NEW.resource_type IS NULL AND NEW.table_name IS NOT NULL THEN
+    NEW.resource_type := NEW.table_name;
+  END IF;
+  IF NEW.resource_id IS NULL AND NEW.record_id IS NOT NULL THEN
+    NEW.resource_id := NEW.record_id::text;
+  END IF;
+  IF NEW.detail IS NULL AND NEW.action_detail IS NOT NULL THEN
+    NEW.detail := NEW.action_detail;
+  END IF;
+
+  -- Reverse sync: legacy -> canonical (for buggy inserts)
+  IF NEW.table_name IS NULL AND NEW.resource_type IS NOT NULL THEN
+    NEW.table_name := NEW.resource_type;
+  END IF;
+  IF NEW.record_id IS NULL AND NEW.resource_id IS NOT NULL THEN
+    BEGIN
+      NEW.record_id := NEW.resource_id::uuid;
+    EXCEPTION WHEN invalid_text_representation THEN
+      -- Some legacy callers pass non-UUID identifiers; just leave null.
+      NULL;
+    END;
+  END IF;
+  IF NEW.action_detail IS NULL AND NEW.detail IS NOT NULL THEN
+    NEW.action_detail := NEW.detail;
+  END IF;
+
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.sync_pending_auths()
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  pending_count int := 0;
+  pname text;
+BEGIN
+  -- Snapshot the queue, sync each patient, clear processed rows.
+  FOR pname IN
+    SELECT pname_key FROM auth_sync_pending ORDER BY flagged_at
+  LOOP
+    PERFORM sync_visits_to_auth_for_patient(pname);
+    DELETE FROM auth_sync_pending WHERE pname_key = pname;
+    pending_count := pending_count + 1;
+  END LOOP;
+  RETURN pending_count;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.sync_visits_to_auth()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+  auth_rec RECORD;
+  visit_count integer;
+  eval_count integer;
+  reassess_count integer;
+  updated_patients text[] := ARRAY[]::text[];
+  total_updated integer := 0;
+BEGIN
+  -- For each non-terminal auth record, count completed ENCOUNTERS (not rows).
+  -- Co-treat visits (PT + PTA on same day) count as ONE encounter via DISTINCT visit_date.
+  FOR auth_rec IN
+    SELECT id, patient_name, soc_date, auth_expiry_date,
+           visits_authorized, visits_used,
+           evals_authorized, evals_used,
+           reassessments_authorized, reassessments_used
+    FROM auth_tracker
+    WHERE auth_status NOT IN ('denied', 'cancelled', 'expired', 'discharged')
+      AND is_currently_active = true
+  LOOP
+    -- Count completed regular visit ENCOUNTERS (distinct dates, not rows)
+    SELECT COUNT(DISTINCT v.visit_date) INTO visit_count
+    FROM visit_schedule_data v
+    WHERE LOWER(TRIM(v.patient_name)) = LOWER(TRIM(auth_rec.patient_name))
+      AND v.status ILIKE '%coD v.event_type NOT ILIKE '%reassess%'
+      AND v.event_type NOT ILIKE '%re-assess%'
+      AND v.event_type NOT ILIKE '%recert%'
+      AND v.event_type NOT ILIKE '%cancel%'
+      AND (auth_rec.soc_date IS NULL OR v.visit_date >= auth_rec.soc_date)
+      AND (auth_rec.auth_expiry_date IS NULL OR v.visit_date <= auth_rec.auth_expiry_date);
+
+    -- Count completed eval ENCOUNTERS (distinct dates)
+    SELECT COUNT(DISTINCT v.visit_date) INTO eval_count
+    FROM visit_schedule_data v
+    WHERE LOWER(TRIM(v.patient_name)) = LOWER(TRIM(auth_rec.patient_name))
+      AND v.status ILIKE '%completed%'
+      AND (v.event_type ILIKE '%eval%' AND v.event_type NOT ILIKE '%reassess%' AND v.event_type NOT ILIKE '%re-assess%' AND v.event_type NOT ILIKE '%recert%')
+      AND (auth_rec.soc_date IS NULL OR v.visit_date >= auth_rec.soc_date)
+      AND (auth_rec.auth_expiry_date IS NULL OR v.visit_date <= auth_rec.auth_expiry_date);
+
+    -- Count completed reassessment ENCOUNTERS (distinct dates)
+    SELECT COUNT(DISTINCT v.visit_date) INTO reassess_count
+    FROM visit_schedule_data v
+    WHERE LOWER(TRIM(v.patient_name)) = LOWER(TRIM(auth_rec.patient_name))
+      AND v.status ILIKE '%completed%'
+      AND (v.event_type ILIKE '%reassess%' OR v.event_type ILIKE '%re-assess%' OR v.event_type ILIKE '%recert%')
+      AND (auth_rec.soc_date IS NULL OR v.visit_date >= auth_rec.soc_date)
+      AND (auth_rec.auth_expiry_date IS NULL OR v.visit_date <= auth_rec.auth_expiry_date);
+
+    -- Only update if counts changed
+    IF visit_count != COALESCE(auth_rec.visits_used, 0)
+       OR eval_count != COALESCE(auth_rec.evals_used, 0)
+       OR reassess_count != COALESCE(auth_rec.reassessments_used, 0)
+    THEN
+      UPDATE auth_tracker SET
+        visits_used = visit_count,
+        evals_used = eval_count,
+        reassessments_used = reassess_count,
+        updated_at = now()
+      WHERE id = auth_rec.id;
+
+      total_updated := total_updated + 1;
+
+      IF NOT auth_rec.patient_name = ANY(updated_patients) THEN
+        updated_patients := array_append(updated_patients, auth_rec.patient_name);
+      END IF;
+    END IF;
+  END LOOP;
+
+  -- Recompute auth sequences for all patients whose counts changed
+  IF array_length(updated_patients, 1) IS NOT NULL THEN
+    FOR i IN 1..array_length(updated_patients, 1) LOOP
+      PERFORM recompute_auth_sequence(updated_patients[i]);
+    END LOOP;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'auths_updated', total_updated,
+    'patients_resequenced', COALESCE(array_length(updated_patients, 1), 0)
+  );
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sync_visits_to_auth_for_patient(p_patient_name text)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  auth_rec       RECORD;
+  visit_count    integer;
+  eval_count     integer;
+  reassess_count integer;
+  updated_count  integer := 0;
+  pname_key      text;
+BEGIN
+  IF p_patient_name IS NULL OR length(trim(p_patient_name)) = 0 THEN
+    RETURN 0;
+  END IF;
+  pname_key := lower(trim(p_patient_name));
+
+  FOR auth_rec IN
+    SELECT id, visits_authorized, evals_authorized, reassessments_authorized,
+           soc_date, auth_expiry_date, visits_used, evals_used, reassessments_used
+    FROM auth_tracker
+    WHERE LOWER(TRIM(patient_name)) = pname_key
+      AND auth_status NOT IN ('denied','cancelled','expired','discharged')
+  LOOP
+    -- VISITS
+    SELECT COUNT(DISTINCT visit_date) INTO visit_count
+    FROM visit_schedule_data
+    WHERE LOWER(TRIM(patient_name)) = pname_key
+      AND status ILIKE '%completed%'
+      AND event_type NOT ILIKE '%eval%'
+      AND event_type NOT ILIKE '%reassess%'
+      AND event_type NOT ILIKE '%re-assess%'
+      AND event_type NOT ILIKE '%recert%'
+      AND event_type NOT ILIKE '%cancel%'
+      AND (auth_rec.soc_date IS NULL OR visit_date >= auth_rec.soc_date)
+      AND (auth_rec.auth_expiry_date IS NULL OR visit_date <= auth_rec.auth_expiry_date);
+
+    -- Plus completed visits from in-app scheduled_visits (telehealth + in-person bucketed together)
+    SELECT visit_count + COUNT(DISTINCT visit_date) INTO visit_count
+    FROM scheduled_visits
+    WHERE LOWER(TRIM(patient_name)) = pname_key
+      AND status ILIKE '%completed%'
+      AND visit_type NOT ILIKE '%eval%'
+      AND visit_type NOT ILIKE '%reassess%'
+      AND (auth_rec.soc_date IS NULL OR visit_date >= auth_rec.soc_date)
+      AND (auth_rec.auth_expiry_date IS NULL OR visit_date <= auth_rec.auth_expiry_date);
+
+    -- EVALS
+    SELECT COUNT(DISTINCT visit_date) INTO eval_count
+    FROM visit_schedule_data
+    WHERE LOWER(TRIM(patient_name)) = pname_key
+      AND status ILIKE '%completed%'
+      AND event_type ILIKE '%eval%'
+      AND event_type NOT ILIKE '%cancel%'
+      AND (auth_rec.soc_date IS NULL OR visit_date >= auth_rec.soc_date)
+      AND (auth_rec.auth_expiry_date IS NULL OR visit_date <= auth_rec.auth_expiry_date);
+
+    -- REASSESSMENTS
+    SELECT COUNT(DISTINCT visit_date) INTO reassess_count
+    FROM visit_schedule_data
+    WHERE LOWER(TRIM(patient_name)) = pname_key
+      AND status ILIKE '%completed%'
+      AND (event_type ILIKE '%reassess%' OR event_type ILIKE '%re-assess%' OR event_type ILIKE '%recert%')
+      AND event_type NOT ILIKE '%cancel%'
+      AND (auth_rec.soc_date IS NULL OR visit_date >= auth_rec.soc_date)
+      AND (auth_rec.auth_expiry_date IS NULL OR visit_date <= auth_rec.auth_expiry_date);
+
+    -- Write only when something changed
+    IF visit_count IS DISTINCT FROM auth_rec.visits_used
+       OR eval_count IS DISTINCT FROM auth_rec.evals_used
+       OR reassess_count IS DISTINCT FROM auth_rec.reassessments_used THEN
+      UPDATE auth_tracker
+      SET visits_used        = COALESCE(visit_count, 0),
+          evals_used         = COALESCE(eval_count, 0),
+          reassessments_used = COALESCE(reassess_count, 0),
+          updated_at         = now()
+      WHERE id = auth_rec.id;
+      updated_count := updated_count + 1;
+    END IF;
+  END LOOP;
+
+  -- Re-sequence (effective_visits_remaining, is_currently_active)
+  PERFORM recompute_auth_sequence(p_patient_name);
+
+  -- Refresh auth_health for every auth this patient has
+  UPDATE auth_tracker
+  SET auth_health = compute_auth_health(id)
+  WHERE LOWER(TRIM(patient_name)) = pname_key
+    AND auth_status NOT IN ('denied','cancelled','expired','discharged');
+
+  -- Fire / clear alerts for each auth (proper loop scope this time)
+  FOR auth_rec IN
+    SELECT id FROM auth_tracker
+    WHERE LOWER(TRIM(patient_name)) = pname_key
+  LOOP
+    PERFORM fire_auth_health_alerts(auth_rec.id);
+  END LOOP;
+
+  RETURN updated_count;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.sync_wound_to_census()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF NEW.has_wounds IS NOT NULL THEN
+    UPDATE census_data
+    SET has_wound = NEW.has_wounds,
+        wound_flag_date = CASE WHEN NEW.has_wounds = TRUE AND wound_flag_date IS NULL THEN CURRENT_DATE ELSE wound_flag_date END
+    WHERE LOWER(patient_name) = LOWER(NEW.patient_name) AND region = NEW.region;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.touch_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_scheduled_visit_sync_auth()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  -- INSERT/UPDATE: sync for the patient on NEW. UPDATE that changes
+  -- patient_name (rare) syncs both OLD and NEW patients.
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    PERFORM sync_visits_to_auth_for_patient(NEW.patient_name);
+    IF TG_OP = 'UPDATE' AND OLD.patient_name IS DISTINCT FROM NEW.patient_name THEN
+      PERFORM sync_visits_to_auth_for_patient(OLD.patient_name);
+    END IF;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    PERFORM sync_visits_to_auth_for_patient(OLD.patient_name);
+    RETURN OLD;
+  END IF;
+  RETURN NULL;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_visit_data_flag_pending()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  pname_key text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    pname_key := LOWER(TRIM(OLD.patient_name));
+  ELSE
+    pname_key := LOWER(TRIM(NEW.patient_name));
+  END IF;
+  IF pname_key IS NOT NULL AND length(pname_key) > 0 THEN
+    INSERT INTO auth_sync_pending (pname_key) VALUES (pname_key)
+    ON CONFLICT (pname_key) DO UPDATE SET flagged_at = now();
+  END IF;
+  -- Also flag OLD on UPDATE if name changed (rare)
+  IF TG_OP = 'UPDATE' AND OLD.patient_name IS DISTINCT FROM NEW.patient_name THEN
+    INSERT INTO auth_sync_pending (pname_key) VALUES (LOWER(TRIM(OLD.patient_name)))
+    ON CONFLICT (pname_key) DO UPDATE SET flagged_at = now();
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.update_coordinator_tasks_timestamp()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN NEW.updated_at = now(); RETURN NEW; END;
+$function$
+;
+
+-- ---------------------------------------------------------------------------
+-- 11. TRIGGERS
+-- ---------------------------------------------------------------------------
+CREATE TRIGGER auth_tracker_defaults BEFORE INSERT OR UPDATE ON public.auth_tracker FOR EACH ROW EXECUTE FUNCTION set_auth_defaults();
+CREATE TRIGGER clinician_visit_target_trigger BEFORE INSERT OR UPDATE ON public.clinicians FOR EACH ROW EXECUTE FUNCTION set_visit_target();
+CREATE TRIGGER coordinator_tasks_set_updated_at BEFORE UPDATE ON public.coordinator_tasks FOR EACH ROW EXECUTE FUNCTION coordinator_tasks_touch_updated_at();
+CREATE TRIGGER coordinator_tasks_updated BEFORE UPDATE ON public.coordinator_tasks FOR EACH ROW EXECUTE FUNCTION update_coordinator_tasks_timestamp();
+CREATE TRIGGER pca_updated_at BEFORE UPDATE ON public.patient_clinician_assignments FOR EACH ROW EXECUTE FUNCTION pca_set_updated_at();
+CREATE TRIGGER trg_activity_auth_renewal_tasks AFTER INSERT OR UPDATE ON public.auth_renewal_tasks FOR EACH ROW EXECUTE FUNCTION fn_log_coordinator_activity();
+CREATE TRIGGER trg_activity_auth_tracker AFTER INSERT OR UPDATE ON public.auth_tracker FOR EACH ROW EXECUTE FUNCTION fn_log_coordinator_activity();
+CREATE TRIGGER trg_activity_care_coord_notes AFTER INSERT ON public.care_coord_notes FOR EACH ROW EXECUTE FUNCTION fn_log_care_coord_note();
+CREATE TRIGGER trg_activity_coordinator_tasks AFTER INSERT OR UPDATE ON public.coordinator_tasks FOR EACH ROW EXECUTE FUNCTION fn_log_coordinator_activity();
+CREATE TRIGGER trg_activity_intake_referrals AFTER INSERT OR UPDATE ON public.intake_referrals FOR EACH ROW EXECUTE FUNCTION fn_log_coordinator_activity();
+CREATE TRIGGER trg_activity_on_hold_recovery AFTER UPDATE ON public.on_hold_recovery FOR EACH ROW EXECUTE FUNCTION fn_log_coordinator_activity();
+CREATE TRIGGER trg_activity_patient_discharges AFTER INSERT ON public.patient_discharges FOR EACH ROW EXECUTE FUNCTION fn_log_coordinator_activity();
+CREATE TRIGGER trg_activity_patient_notes AFTER INSERT ON public.patient_notes FOR EACH ROW EXECUTE FUNCTION fn_log_patient_note();
+CREATE TRIGGER trg_activity_waitlist_assignments AFTER INSERT OR UPDATE ON public.waitlist_assignments FOR EACH ROW EXECUTE FUNCTION fn_log_coordinator_activity();
+CREATE TRIGGER trg_auto_clear_freq_review BEFORE UPDATE ON public.census_data FOR EACH ROW EXECUTE FUNCTION auto_clear_freq_review_on_status_change();
+CREATE TRIGGER trg_compute_loc_level BEFORE INSERT OR UPDATE OF caremap_score ON public.patient_risk_factors FOR EACH ROW EXECUTE FUNCTION compute_loc_level();
+CREATE TRIGGER trg_ins_abbr_touch BEFORE UPDATE ON public.insurance_abbreviations FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+CREATE TRIGGER trg_scheduled_visit_sync AFTER INSERT OR DELETE OR UPDATE ON public.scheduled_visits FOR EACH ROW EXECUTE FUNCTION trg_scheduled_visit_sync_auth();
+CREATE TRIGGER trg_sync_activity_legacy BEFORE INSERT OR UPDATE ON public.coordinator_activity_log FOR EACH ROW EXECUTE FUNCTION sync_activity_log_legacy_columns();
+CREATE TRIGGER trg_sync_wound_to_census AFTER INSERT OR UPDATE OF has_wounds ON public.patient_risk_factors FOR EACH ROW EXECUTE FUNCTION sync_wound_to_census();
+CREATE TRIGGER trg_visit_data_flag AFTER INSERT OR DELETE OR UPDATE ON public.visit_schedule_data FOR EACH ROW EXECUTE FUNCTION trg_visit_data_flag_pending();
+
+-- ---------------------------------------------------------------------------
+-- 12. ROW LEVEL SECURITY (enable + policies)
+-- ---------------------------------------------------------------------------
+ALTER TABLE public."action_items" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."action_responses" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."alerts" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."auth_audit_staging" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."auth_documents" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."auth_renewal_tasks" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."auth_team_assignments" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."auth_tracker" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."care_coord_discharges" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."care_coord_notes" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."care_coord_referrals" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."care_coord_task_log" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."census_data" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."census_status_log" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."clinician_productivity" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."clinician_pto" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."clinicians" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."coordinator_daily_metrics" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."coordinator_overload_alerts" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."coordinator_tasks" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."coordinators" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."daily_ops_reports" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."daily_reports" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."data_audit_log" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."data_freshness" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."hospitalizations" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."hospitalized_tracker" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."insurance_abbreviations" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."intake_referrals" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."marketing_contacts" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."marketing_encounters" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."medicare_visit_flags" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."note_notifications" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."notifications" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."on_hold_recovery" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."page_permissions" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."patient_clinical_settings" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."patient_clinician_assignments" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."patient_discharges" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."patient_documents" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."patient_master" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."patient_notes" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."patient_risk_factors" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."patient_visit_history" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."rm_kpi_goals" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."scheduled_visits" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."swift_team_patients" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."swift_wound_assessments" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."upload_batches" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."user_page_overrides" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."visit_schedule_data" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."waitlist_assignments" ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Active coordinators full access" ON public."action_items" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Authenticated users can insert action_responses" ON public."action_responses" AS PERMISSIVE FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Authenticated users can read action_responses" ON public."action_responses" AS PERMISSIVE FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Authenticated users can update action_responses" ON public."action_responses" AS PERMISSIVE FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Active coordinators full access" ON public."alerts" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Admin only access to auth_audit_staging" ON public."auth_audit_staging" AS PERMISSIVE FOR ALL TO public USING ((EXISTS ( SELECT 1 FROM coordinators WHERE ((coordinators.user_id = auth.uid()) AND (coordinators.role = ANY (ARRAY['super_admin'::text, 'admin'::text, 'ceo'::text, 'director'::text])) AND (coordinators.is_active = true))))) WITH CHECK ((EXISTS ( SELECT 1 FROM coordinators WHERE ((coordinators.user_id = auth.uid()) AND (coordinators.role = ANY (ARRAY['super_admin'::text, 'admin'::text, 'ceo'::text, 'director'::text])) AND (coordinators.is_active = true)))));
+CREATE POLICY "Active coordinators full access" ON public."auth_documents" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."auth_renewal_tasks" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."auth_team_assignments" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."auth_tracker" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."care_coord_discharges" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."care_coord_notes" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."care_coord_referrals" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."care_coord_task_log" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."census_data" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."census_status_log" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."clinician_productivity" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."clinician_pto" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."clinicians" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "coordinator_daily_metrics_insert" ON public."coordinator_daily_metrics" AS PERMISSIVE FOR INSERT TO public WITH CHECK ((EXISTS ( SELECT 1 FROM coordinators p WHERE ((p.user_id = auth.uid()) AND ((p.full_name = coordinator_daily_metrics.coordinator_name) OR (p.email = coordinator_daily_metrics.coordinator_name))))));
+CREATE POLICY "coordinator_daily_metrics_select" ON public."coordinator_daily_metrics" AS PERMISSIVE FOR SELECT TO public USING (((EXISTS ( SELECT 1 FROM coordinators p WHERE ((p.user_id = auth.uid()) AND (p.role = ANY (ARRAY['super_admin'::text, 'director'::text, 'admin'::text, 'assoc_director'::text, 'regional_manager'::text, 'pod_leader'::text, 'ceo'::text]))))) OR (EXISTS ( SELECT 1 FROM coordinators p WHERE ((p.user_id = auth.uid()) AND ((p.full_name = coordinator_daily_metrics.coordinator_name) OR (p.email = coordinator_daily_metrics.coordinator_name)))))));
+CREATE POLICY "coordinator_daily_metrics_update" ON public."coordinator_daily_metrics" AS PERMISSIVE FOR UPDATE TO public USING ((EXISTS ( SELECT 1 FROM coordinators p WHERE ((p.user_id = auth.uid()) AND ((p.full_name = coordinator_daily_metrics.coordinator_name) OR (p.email = coordinator_daily_metrics.coordinator_name))))));
+CREATE POLICY "Active coordinators full access (temp - tighten to admin only)" ON public."coordinator_overload_alerts" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."coordinator_tasks" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators read coordinators" ON public."coordinators" AS PERMISSIVE FOR SELECT TO authenticated USING (is_active_coordinator());
+CREATE POLICY "Admins insert coordinators" ON public."coordinators" AS PERMISSIVE FOR INSERT TO authenticated WITH CHECK (is_admin_or_above());
+CREATE POLICY "Admins update coordinators" ON public."coordinators" AS PERMISSIVE FOR UPDATE TO authenticated USING (is_admin_or_above()) WITH CHECK (is_admin_or_above());
+CREATE POLICY "Authenticated users can delete coordinators" ON public."coordinators" AS PERMISSIVE FOR DELETE TO authenticated USING (true);
+CREATE POLICY "Authenticated users can insert coordinators" ON public."coordinators" AS PERMISSIVE FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Authenticated users can read all coordinators" ON public."coordinators" AS PERMISSIVE FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Authenticated users can update coordinators" ON public."coordinators" AS PERMISSIVE FOR UPDATE TO authenticated USING (true);
+CREATE POLICY "Only super_admin can delete coordinators" ON public."coordinators" AS PERMISSIVE FOR DELETE TO authenticated USING (is_super_admin());
+CREATE POLICY "Active coordinators full access (temp - tighten to admin only)" ON public."daily_ops_reports" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."daily_reports" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Admin only access to data_audit_log" ON public."data_audit_log" AS PERMISSIVE FOR ALL TO public USING ((EXISTS ( SELECT 1 FROM coordinators WHERE ((coordinators.user_id = auth.uid()) AND (coordinators.role = ANY (ARRAY['super_admin'::text, 'admin'::text, 'ceo'::text, 'director'::text])) AND (coordinators.is_active = true))))) WITH CHECK ((EXISTS ( SELECT 1 FROM coordinators WHERE ((coordinators.user_id = auth.uid()) AND (coordinators.role = ANY (ARRAY['super_admin'::text, 'admin'::text, 'ceo'::text, 'director'::text])) AND (coordinators.is_active = true)))));
+CREATE POLICY "Active coordinators full access" ON public."data_freshness" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."hospitalizations" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."hospitalized_tracker" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators can read" ON public."insurance_abbreviations" AS PERMISSIVE FOR SELECT TO authenticated USING (is_active_coordinator());
+CREATE POLICY "Admins can delete" ON public."insurance_abbreviations" AS PERMISSIVE FOR DELETE TO authenticated USING (is_admin());
+CREATE POLICY "Admins can insert" ON public."insurance_abbreviations" AS PERMISSIVE FOR INSERT TO authenticated WITH CHECK (is_admin());
+CREATE POLICY "Admins can update" ON public."insurance_abbreviations" AS PERMISSIVE FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());
+CREATE POLICY "Active coordinators full access" ON public."intake_referrals" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."marketing_contacts" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."marketing_encounters" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."medicare_visit_flags" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Anyone can insert notifications" ON public."note_notifications" AS PERMISSIVE FOR INSERT TO public WITH CHECK (true);
+CREATE POLICY "Users can read own notifications" ON public."note_notifications" AS PERMISSIVE FOR SELECT TO public USING (true);
+CREATE POLICY "Users can update own notifications" ON public."note_notifications" AS PERMISSIVE FOR UPDATE TO public USING (true);
+CREATE POLICY "Authenticated users can insert notifications" ON public."notifications" AS PERMISSIVE FOR INSERT TO public WITH CHECK (true);
+CREATE POLICY "Users can update own notifications" ON public."notifications" AS PERMISSIVE FOR UPDATE TO public USING ((auth.uid() = user_id));
+CREATE POLICY "Users can view own notifications" ON public."notifications" AS PERMISSIVE FOR SELECT TO public USING ((auth.uid() = user_id));
+CREATE POLICY "Active coordinators full access" ON public."on_hold_recovery" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators read" ON public."page_permissions" AS PERMISSIVE FOR SELECT TO authenticated USING (is_active_coordinator());
+CREATE POLICY "Admins manage" ON public."page_permissions" AS PERMISSIVE FOR ALL TO authenticated USING (is_admin_or_above()) WITH CHECK (is_admin_or_above());
+CREATE POLICY "Active coordinators full access" ON public."patient_clinical_settings" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "pca_authenticated_all" ON public."patient_clinician_assignments" AS PERMISSIVE FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Active coordinators full access" ON public."patient_discharges" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."patient_documents" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."patient_master" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Anyone can insert notes" ON public."patient_notes" AS PERMISSIVE FOR INSERT TO public WITH CHECK (true);
+CREATE POLICY "Anyone can read notes" ON public."patient_notes" AS PERMISSIVE FOR SELECT TO public USING (true);
+CREATE POLICY "Read patient_risk_factors" ON public."patient_risk_factors" AS PERMISSIVE FOR SELECT TO public USING ((EXISTS ( SELECT 1 FROM coordinators WHERE ((coordinators.user_id = auth.uid()) AND (coordinators.is_active = true)))));
+CREATE POLICY "Write patient_risk_factors" ON public."patient_risk_factors" AS PERMISSIVE FOR ALL TO public USING ((EXISTS ( SELECT 1 FROM coordinators WHERE ((coordinators.user_id = auth.uid()) AND (coordinators.role = ANY (ARRAY['super_admin'::text, 'admin'::text, 'ceo'::text, 'director'::text, 'assoc_director'::text])) AND (coordinators.is_active = true))))) WITH CHECK ((EXISTS ( SELECT 1 FROM coordinators WHERE ((coordinators.user_id = auth.uid()) AND (coordinators.role = ANY (ARRAY['super_admin'::text, 'admin'::text, 'ceo'::text, 'director'::text, 'assoc_director'::text])) AND (coordinators.is_active = true)))));
+CREATE POLICY "Active coordinators full access" ON public."patient_visit_history" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators read" ON public."rm_kpi_goals" AS PERMISSIVE FOR SELECT TO authenticated USING (is_active_coordinator());
+CREATE POLICY "Admins manage" ON public."rm_kpi_goals" AS PERMISSIVE FOR ALL TO authenticated USING (is_admin_or_above()) WITH CHECK (is_admin_or_above());
+CREATE POLICY "Active coordinators full access on scheduled_visits" ON public."scheduled_visits" AS PERMISSIVE FOR ALL TO public USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."swift_team_patients" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."swift_wound_assessments" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."upload_batches" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators read" ON public."user_page_overrides" AS PERMISSIVE FOR SELECT TO authenticated USING (is_active_coordinator());
+CREATE POLICY "Admins manage" ON public."user_page_overrides" AS PERMISSIVE FOR ALL TO authenticated USING (is_admin_or_above()) WITH CHECK (is_admin_or_above());
+CREATE POLICY "Active coordinators full access" ON public."visit_schedule_data" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+CREATE POLICY "Active coordinators full access" ON public."waitlist_assignments" AS PERMISSIVE FOR ALL TO authenticated USING (is_active_coordinator()) WITH CHECK (is_active_coordinator());
+
+-- ---------------------------------------------------------------------------
+-- 13. GRANTS (Supabase default — full DML on all public tables to all 3 roles)
+-- ---------------------------------------------------------------------------
+-- The live DB has identical grants on every public table for anon,
+-- authenticated, service_role: SELECT, INSERT, UPDATE, DELETE,
+-- TRUNCATE, REFERENCES, TRIGGER (the Supabase default). Row-level
+-- access is gated by the RLS policies above.
+
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- 14. pg_cron JOBS (registered via cron.schedule — listed here for reference)
+-- ---------------------------------------------------------------------------
+/* These jobs were active on the live DB as of 2026-05-28.
+   Recreate them on a new DB with:
+     SELECT cron.schedule('<jobname>', '<schedule>', $$<command>$$);
+
+   - daily-ops-morning         '0 12 * * 1-5'
+       -> POST https://kndiyailsqrialgbozac.supabase.co/functions/v1/daily-ops-report
+          body: {"report_type":"morning_overview"}
+   - daily-ops-midday          '0 16 * * 1-5'
+       -> POST daily-ops-report body: {"report_type":"midday_snapshot"}
+   - daily-ops-eod             '0 21 * * 1-5'
+       -> POST daily-ops-report body: {"report_type":"eod_review"}
+   - overload-check            '*/15 12-22 * * 1-5'
+       -> POST daily-ops-report body: {"report_type":"overload_check_only"}
+   - mark-expired-auths-daily  '30 9 * * *'
+       -> SELECT mark_expired_auths();
+   - sync-pending-auths-safety-net '*/15 * * * *'
+       -> SELECT sync_pending_auths();
+*/
+
+-- ---------------------------------------------------------------------------
+-- 15. EDGE FUNCTIONS (deployed separately via Supabase; reference only)
+-- ---------------------------------------------------------------------------
+/* Active edge functions as of 2026-05-28:
+     slug                 | status | version | verify_jwt
+     ---------------------+--------+---------+-----------
+     extract-document     | ACTIVE | v6      | false
+     notify-mention       | ACTIVE | v1      | true
+     daily-ops-report     | ACTIVE | v3      | false
+     admin-user-actions   | ACTIVE | v3      | true
+   Source lives under supabase/functions/<slug>/index.ts.
+*/
+
+-- ============================================================================
+-- END BASELINE
+-- ============================================================================

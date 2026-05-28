@@ -4,6 +4,7 @@ import { supabase, fetchAllPages, safeUpdate, logActivity } from '../../lib/supa
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import PatientAuthDrawer from '../../components/PatientAuthDrawer';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 
 const STATUS_CFG = {
@@ -330,7 +331,37 @@ export default function AuthRenewalsPage() {
           </div>
         </div>
       </div>
-      {selected && <ActionModal task={selected} onClose={()=>setSelected(null)} onSaved={()=>{setSelected(null);load();}} profile={profile} />}
+      {/* 2026-05-28: shared right-side drawer in place of ActionModal.
+          The drawer's "Submit Renewal" updates auth_tracker; this page also
+          marks the linked auth_renewal_tasks row as 'submitted' below so the
+          task drops off the open list once the renewal is sent. */}
+      <PatientAuthDrawer
+        isOpen={!!selected}
+        authId={selected?.auth_id || null}
+        patientName={selected?.patient_name || null}
+        listLabel="Renewal Tasks"
+        onClose={() => setSelected(null)}
+        onActionTaken={async () => {
+          // If the drawer's action moved the auth to submitted/active, close
+          // the linked renewal task too so it drops off this list.  Safe to
+          // run unconditionally — selected.auth_id may be null on bad data.
+          if (selected?.id && selected?.auth_id) {
+            try {
+              const { data: a } = await supabase.from('auth_tracker')
+                .select('auth_status').eq('id', selected.auth_id).maybeSingle();
+              const nowSubmitted = ['submitted', 'active'].includes(a?.auth_status);
+              if (nowSubmitted && !['submitted','approved','closed'].includes(selected.task_status)) {
+                await safeUpdate('auth_renewal_tasks', {
+                  task_status: a.auth_status === 'active' ? 'approved' : 'submitted',
+                  updated_at: new Date().toISOString(),
+                  completed_at: a.auth_status === 'active' ? new Date().toISOString() : null,
+                  completed_by: a.auth_status === 'active' ? (profile?.full_name || profile?.email) : null,
+                }, { id: selected.id });
+              }
+            } catch (_) { /* non-blocking */ }
+          }
+          load();
+        }} />
     </div>
   );
 }

@@ -20,6 +20,7 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import PatientAuthDrawer from '../../components/PatientAuthDrawer';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
@@ -70,6 +71,8 @@ export default function AuthOverLimitPage() {
   const [filterScope, setFilterScope] = useState('active'); // 'active' | 'all'
   const [searchQ, setSearchQ] = useState('');
   const [sortKey, setSortKey] = useState('overage_desc');
+  // 2026-05-28: drawer for in-place editing without leaving this list.
+  const [drawer, setDrawer] = useState({ open: false, authId: null, patientName: null });
 
   async function load() {
     setLoading(true);
@@ -252,7 +255,7 @@ export default function AuthOverLimitPage() {
           <div style={{ background:'#fff', border:'1px solid #E5E7EB', borderRadius:10, overflow:'hidden' }}>
             <div style={{
               display:'grid',
-              gridTemplateColumns:'minmax(180px, 1.6fr) 50px 100px 90px 100px 90px 80px 80px 80px 1fr',
+              gridTemplateColumns:'minmax(180px, 1.6fr) 50px 100px 90px 100px 90px 80px 80px 80px 1fr 40px',
               gap:0, background:'#F9FAFB', padding:'10px 14px',
               fontSize:10, fontWeight:700, color:'#6B7280', textTransform:'uppercase', letterSpacing:'0.05em',
               borderBottom:'1px solid #E5E7EB',
@@ -267,6 +270,7 @@ export default function AuthOverLimitPage() {
               <div>Overage</div>
               <div>Status</div>
               <div>Assignee</div>
+              <div></div>
             </div>
             {filtered.length === 0 && (
               <div style={{ padding:40, textAlign:'center', color:'#9CA3AF', fontSize:13 }}>
@@ -276,13 +280,19 @@ export default function AuthOverLimitPage() {
             {filtered.map((r, idx) => {
               const overage = (r.visits_used || 0) - (r.visits_authorized || 0);
               return (
-                <div key={r.id} style={{
+                <div key={r.id}
+                  onClick={() => setDrawer({ open: true, authId: r.id, patientName: r.patient_name })}
+                  title="Click to edit this authorization"
+                  style={{
                   display:'grid',
-                  gridTemplateColumns:'minmax(180px, 1.6fr) 50px 100px 90px 100px 90px 80px 80px 80px 1fr',
+                  gridTemplateColumns:'minmax(180px, 1.6fr) 50px 100px 90px 100px 90px 80px 80px 80px 1fr 40px',
                   gap:0, padding:'10px 14px', fontSize:12, color:'#1F2937',
                   borderBottom: idx < filtered.length - 1 ? '1px solid #F3F4F6' : 'none',
                   background: idx % 2 === 0 ? '#fff' : '#FAFAFA',
-                }}>
+                  cursor: 'pointer',
+                }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = idx % 2 === 0 ? '#fff' : '#FAFAFA'; }}>
                   <div style={{ fontWeight:600 }}>{r.patient_name}</div>
                   <div style={{ fontFamily:'DM Mono, monospace', fontWeight:700 }}>{r.region || '-'}</div>
                   <div style={{ color:'#6B7280' }}>{r.insurance || '-'}</div>
@@ -312,12 +322,22 @@ export default function AuthOverLimitPage() {
                     </span>
                   </div>
                   <div style={{ color:'#6B7280', fontSize:11 }}>{r.assigned_to || '-'}</div>
+                  <div style={{ textAlign: 'right', color: '#9CA3AF', fontSize: 14 }} aria-hidden>
+                    {String.fromCodePoint(0x270F)}
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
       </div>
+      <PatientAuthDrawer
+        isOpen={drawer.open}
+        authId={drawer.authId}
+        patientName={drawer.patientName}
+        listLabel="Compliance: Over Limit"
+        onClose={() => setDrawer({ open: false, authId: null, patientName: null })}
+        onActionTaken={() => { load(); }} />
     </div>
   );
 }

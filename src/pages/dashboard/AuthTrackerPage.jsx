@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TopBar from '../../components/TopBar';
 import PatientNotesPanel from '../../components/PatientNotesPanel';
+import PatientAuthDrawer from '../../components/PatientAuthDrawer';
 import { supabase, fetchAllPages, safeUpdate, logActivity } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import { useAuth } from '../../hooks/useAuth';
@@ -571,6 +572,10 @@ export default function AuthTrackerPage() {
   var [censusPatients, setCensusPatients] = useState([]);
   // 2026-05-17: inline status toggle (matches AuthCoord pattern — no modal for status changes)
   var [savingStatusId, setSavingStatusId] = useState(null);
+  // 2026-05-28: right-side drawer for click-to-quick-edit. Patient name click
+  // opens drawer; Edit button still opens the full AddEditModal (with PCP,
+  // CPT codes, etc.). The drawer covers ~95% of edits without leaving page.
+  var [drawer, setDrawer] = useState({ open: false, authId: null, patientName: null });
  
   var regionScope = useAssignedRegions();
 
@@ -881,11 +886,13 @@ export default function AuthTrackerPage() {
                     <div style={{ display: 'grid', gridTemplateColumns: GRID, padding: '11px 20px', alignItems: 'center', background: rowBg, cursor: 'pointer' }}
                       onClick={function() { setExpandedId(isExpanded ? null : r.id); }}>
  
-                      <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <div onClick={function(e) { e.stopPropagation(); setDrawer({ open: true, authId: r.id, patientName: r.patient_name }); }}
+                        title="Click to open quick-edit drawer"
+                        style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
                         <UrgencyDot urgency={urgency} />
                         <div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{r.patient_name}</div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)', textDecoration: 'underline', textDecorationStyle: 'dotted', textDecorationColor: '#9CA3AF' }}>{r.patient_name}</div>
                             {r.auth_sequence > 1 && (
                               <span style={{ fontSize: 9, fontWeight: 700, color: '#7C3AED', background: '#F5F3FF', padding: '1px 5px', borderRadius: 4, whiteSpace: 'nowrap' }}>
                                 Auth {r.auth_sequence} of {r.auth_sequence}
@@ -959,11 +966,15 @@ export default function AuthTrackerPage() {
                       </div>
 
                       <div style={{ display: 'flex', gap: 6 }} onClick={function(e) { e.stopPropagation(); }}>
+                        <button onClick={function() { setDrawer({ open: true, authId: r.id, patientName: r.patient_name }); }}
+                          title="Quick edit drawer (status, dates, visits)"
+                          style={{ padding: '4px 8px', background: '#EFF6FF', color: '#1E40AF', border: '1px solid #BFDBFE', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>{String.fromCodePoint(0x270F)}</button>
                         <button onClick={function() { setEditRecord(r); setShowModal(true); }}
+                          title="Full edit (PCP, CPT codes, intake fields)"
                           style={{ padding: '4px 10px', background: '#0F1117', color: '#fff', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                         <button onClick={function() { deleteRecord(r.id); }}
                           title="Delete record"
-                          style={{ padding: '4px 8px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--danger)', cursor: 'pointer' }}>✕</button>
+                          style={{ padding: '4px 8px', background: 'none', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--danger)', cursor: 'pointer' }}>{String.fromCodePoint(0x2715)}</button>
                       </div>
                     </div>
  
@@ -1050,6 +1061,15 @@ export default function AuthTrackerPage() {
           onExtracted={() => { setShowAIExtractor(false); fetchRecords(); }}
         />
       )}
+
+      {/* 2026-05-28: shared right-side drawer for click-to-quick-edit. */}
+      <PatientAuthDrawer
+        isOpen={drawer.open}
+        authId={drawer.authId}
+        patientName={drawer.patientName}
+        listLabel="All Authorizations"
+        onClose={() => setDrawer({ open: false, authId: null, patientName: null })}
+        onActionTaken={() => { fetchRecords(); }} />
     </div>
   );
 }

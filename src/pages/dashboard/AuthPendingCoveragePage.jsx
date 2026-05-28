@@ -20,6 +20,7 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import PatientAuthDrawer from '../../components/PatientAuthDrawer';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
@@ -64,6 +65,8 @@ export default function AuthPendingCoveragePage({ intent }) {
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [searchQ, setSearchQ] = useState('');
   const [sortKey, setSortKey] = useState('days_since_visit_asc');
+  // 2026-05-28: drawer for in-place auth creation/edit.
+  const [drawer, setDrawer] = useState({ open: false, authId: null, patientName: null });
 
   async function load() {
     setLoading(true);
@@ -206,7 +209,7 @@ export default function AuthPendingCoveragePage({ intent }) {
           <div style={{ background:'#fff', border:'1px solid #E5E7EB', borderRadius:10, overflow:'hidden' }}>
             <div style={{
               display:'grid',
-              gridTemplateColumns:'minmax(180px, 1.6fr) 50px 110px 170px 90px 100px 100px 1fr',
+              gridTemplateColumns:'minmax(180px, 1.6fr) 50px 110px 170px 90px 100px 100px 1fr 40px',
               gap:0, background:'#F9FAFB', padding:'10px 14px',
               fontSize:10, fontWeight:700, color:'#6B7280', textTransform:'uppercase', letterSpacing:'0.05em',
               borderBottom:'1px solid #E5E7EB',
@@ -219,6 +222,7 @@ export default function AuthPendingCoveragePage({ intent }) {
               <div>Last Visit</div>
               <div>Days Since</div>
               <div>Last Clinician</div>
+              <div></div>
             </div>
             {filtered.length === 0 && (
               <div style={{ padding:40, textAlign:'center', color:'#9CA3AF', fontSize:13 }}>
@@ -228,13 +232,19 @@ export default function AuthPendingCoveragePage({ intent }) {
             {filtered.map((r, idx) => {
               const s = tier(r.pending_state);
               return (
-                <div key={r.patient_name + (r.latest_auth_id || '')} style={{
+                <div key={r.patient_name + (r.latest_auth_id || '')}
+                  onClick={() => setDrawer({ open: true, authId: r.latest_auth_id || null, patientName: r.patient_name })}
+                  title={r.latest_auth_id ? 'Click to edit this authorization' : 'Click to create an authorization for this patient'}
+                  style={{
                   display:'grid',
-                  gridTemplateColumns:'minmax(180px, 1.6fr) 50px 110px 170px 90px 100px 100px 1fr',
+                  gridTemplateColumns:'minmax(180px, 1.6fr) 50px 110px 170px 90px 100px 100px 1fr 40px',
                   gap:0, padding:'10px 14px', fontSize:12, color:'#1F2937',
                   borderBottom: idx < filtered.length - 1 ? '1px solid #F3F4F6' : 'none',
                   background: idx % 2 === 0 ? '#fff' : '#FAFAFA',
-                }}>
+                  cursor: 'pointer',
+                }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#EFF6FF'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = idx % 2 === 0 ? '#fff' : '#FAFAFA'; }}>
                   <div style={{ fontWeight:600 }}>{r.patient_name}</div>
                   <div style={{ fontFamily:'DM Mono, monospace', fontWeight:700 }}>{r.region || '-'}</div>
                   <div style={{ color:'#6B7280' }}>{r.insurance || '-'}</div>
@@ -254,12 +264,22 @@ export default function AuthPendingCoveragePage({ intent }) {
                     {r.days_since_last_visit != null ? r.days_since_last_visit + 'd' : '-'}
                   </div>
                   <div style={{ color:'#6B7280', fontSize:11 }}>{r.last_visit_clinician || '-'}</div>
+                  <div style={{ textAlign: 'right', color: '#9CA3AF', fontSize: 14 }} aria-hidden>
+                    {String.fromCodePoint(0x270F)}
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
       </div>
+      <PatientAuthDrawer
+        isOpen={drawer.open}
+        authId={drawer.authId}
+        patientName={drawer.patientName}
+        listLabel="Auth Pending Coverage"
+        onClose={() => setDrawer({ open: false, authId: null, patientName: null })}
+        onActionTaken={() => { load(); }} />
     </div>
   );
 }
