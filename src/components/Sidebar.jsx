@@ -34,6 +34,10 @@ const PAGE_ICONS = {
   'ops-reports': '📊',
   'high-risk-patients': '⚠',
   'auth-over-limit': '🚨',
+  'auth-pending-coverage': '⏳',
+  'visit-runway': '🏃',
+  'auth-expiry-timeline': '📅',
+  'stuck-auths': '🐢',
   'my-day': '☀',
   users: '👥', uploads: '↑', settings: '⚙', 'insurance-settings': '🏥', 'audit-import': '📋', 'dept-reports': '📑',
 };

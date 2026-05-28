@@ -57,6 +57,10 @@ import OperationsManagerDashboard from './dashboard/OperationsManagerDashboard';
 import AuthAuditImportPage from './dashboard/AuthAuditImportPage';
 import HighRiskPatientsPage from './dashboard/HighRiskPatientsPage';
 import AuthOverLimitPage from './dashboard/AuthOverLimitPage';
+import AuthPendingCoveragePage from './dashboard/AuthPendingCoveragePage';
+import VisitRunwayPage from './dashboard/VisitRunwayPage';
+import AuthExpiryTimelinePage from './dashboard/AuthExpiryTimelinePage';
+import StuckAuthsPage from './dashboard/StuckAuthsPage';
 import MyDayPage from './dashboard/MyDayPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
@@ -114,6 +118,10 @@ const PAGE_COMPONENTS = {
   'audit-import':            AuthAuditImportPage,
   'high-risk-patients':      HighRiskPatientsPage,
   'auth-over-limit':         AuthOverLimitPage,
+  'auth-pending-coverage':   AuthPendingCoveragePage,
+  'visit-runway':            VisitRunwayPage,
+  'auth-expiry-timeline':    AuthExpiryTimelinePage,
+  'stuck-auths':             StuckAuthsPage,
   'my-day':                  MyDayPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
