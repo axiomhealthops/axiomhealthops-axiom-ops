@@ -101,6 +101,14 @@ export default function PatientAuthDrawer({
   const [dismissReason, setDismissReason] = useState('');
   const [contactNote, setContactNote] = useState('');
 
+  // Admin-only "manually override visits_used" controls. Coordinators see the
+  // field read-only and rely on the auto-sync. Admins can correct data-entry
+  // errors with a required reason; the row is flagged so future syncs don't
+  // blow away the correction.
+  const overrideRoles = ['admin', 'super_admin', 'director', 'ceo'];
+  const canOverrideVisits = overrideRoles.includes(profile?.role);
+  const [overrideReason, setOverrideReason] = useState('');
+
   // Escape key closes drawer (unless mid-save).
   useEffect(() => {
     if (!isOpen) return;
@@ -183,6 +191,7 @@ export default function PatientAuthDrawer({
     setDismissTargetId(null);
     setDismissReason('');
     setContactNote('');
+    setOverrideReason('');
     setLoading(false);
   }, [isOpen, authId, patientName, profileName]);
 
@@ -241,6 +250,18 @@ export default function PatientAuthDrawer({
       }
     }
 
+    // Detect a manual visits_used change. Only admins can change it; a reason
+    // is required so we can audit who "fixed" a count and why.
+    const priorVU       = auth && (auth.visits_used ?? null);
+    const vuChanged     = authId && vu !== null && vu !== priorVU;
+    const isOverride    = vuChanged && canOverrideVisits;
+    if (vuChanged && !canOverrideVisits) {
+      return failSave('Only admins can edit Visits Used directly. Coordinators - contact Carla if the auto-count is wrong.');
+    }
+    if (isOverride && !overrideReason.trim()) {
+      return failSave('Type a reason for the Visits Used override (data-entry error, payer correction, etc.) before saving.');
+    }
+
     const payload = {
       auth_status:         form.auth_status,
       auth_number:         form.auth_number || null,
@@ -256,6 +277,15 @@ export default function PatientAuthDrawer({
       updated_at:          new Date().toISOString(),
       updated_by:          profileName || null,
     };
+
+    if (isOverride) {
+      // Explicitly set the override columns so the BEFORE-UPDATE trigger
+      // doesn't double-write and so the badge has a reason + author to show.
+      payload.visits_used_manually_overridden = true;
+      payload.visits_used_override_reason     = overrideReason.trim().slice(0, 500);
+      payload.visits_used_override_by         = profileName || null;
+      payload.visits_used_override_at         = new Date().toISOString();
+    }
 
     if (authId) {
       const { error } = await safeUpdate('auth_tracker', payload, { id: authId });
@@ -274,9 +304,60 @@ export default function PatientAuthDrawer({
     }
 
     setSaving(false);
+
+    // Dedicated override audit row before the generic auth_edit row, so a
+    // search for action_type='visits_used_override' surfaces every manual fix.
+    if (isOverride) {
+      try {
+        await logActivity({
+          coordinatorId:   profile?.id,
+          coordinatorName: profileName,
+          coordinatorRole: profile?.role,
+          actionType:      'visits_used_override',
+          tableName:       'auth_tracker',
+          recordId:        authId,
+          actionDetail:    `visits_used ${priorVU ?? 0} -> ${vu} (Auth #${auth?.auth_number || '?'}). Reason: ${overrideReason.trim().slice(0, 400)}`,
+          metadata:        { patient_name: patientName, before: priorVU, after: vu, reason: overrideReason.trim() },
+        });
+      } catch (_) { /* non-blocking */ }
+      setOverrideReason('');
+    }
+
     await afterMutation(authId ? 'auth_edit' : 'auth_create',
       authId ? `Edit auth via drawer; status=${payload.auth_status}` : `Create auth via drawer; status=${payload.auth_status}`);
     // Reload to pick up DB-side computed fields.
+    await load();
+  }
+
+  // Re-enable auto-sync after a manual override. Clears the flag, logs the
+  // unlock, then re-runs the sync RPC so the row immediately gets the
+  // canonical computed value back.
+  async function clearOverride() {
+    if (!authId || !canOverrideVisits || saving) return;
+    if (!auth?.visits_used_manually_overridden) return;
+    setSaving(true);
+    const { error } = await supabase.from('auth_tracker').update({
+      visits_used_manually_overridden: false,
+      visits_used_override_reason:     null,
+      // keep override_by + override_at so the audit trail survives.
+      updated_at: new Date().toISOString(),
+      updated_by: profileName,
+    }).eq('id', authId);
+    setSaving(false);
+    if (error) return showToast(error.message, 'err');
+    try {
+      await logActivity({
+        coordinatorId:   profile?.id,
+        coordinatorName: profileName,
+        coordinatorRole: profile?.role,
+        actionType:      'visits_used_override_cleared',
+        tableName:       'auth_tracker',
+        recordId:        authId,
+        actionDetail:    `Re-enabled auto-sync on Auth #${auth?.auth_number || '?'}. Prior override: ${auth?.visits_used_override_reason || '(none)'}`,
+        metadata:        { patient_name: patientName },
+      });
+    } catch (_) { /* non-blocking */ }
+    await afterMutation('visits_used_override_cleared', 'Auto-sync re-enabled for visits_used.');
     await load();
   }
 
@@ -431,7 +512,10 @@ export default function PatientAuthDrawer({
           ) : section === 'edit' ? (
             <EditSection auth={auth} form={form} setForm={setForm}
               quickStatus={quickStatus} submitRenewal={submitRenewal}
-              authId={authId} saving={saving} allAuths={allAuthsForPatient} />
+              authId={authId} saving={saving} allAuths={allAuthsForPatient}
+              canOverrideVisits={canOverrideVisits}
+              overrideReason={overrideReason} setOverrideReason={setOverrideReason}
+              clearOverride={clearOverride} />
           ) : section === 'actions' ? (
             <ActionsSection alerts={alerts}
               dismissTargetId={dismissTargetId} setDismissTargetId={setDismissTargetId}
@@ -482,11 +566,18 @@ export default function PatientAuthDrawer({
 // Subcomponents - kept in-file so the drawer is one tidy import.
 // ============================================================================
 
-function EditSection({ auth, form, setForm, quickStatus, submitRenewal, authId, saving, allAuths }) {
+function EditSection({ auth, form, setForm, quickStatus, submitRenewal, authId, saving, allAuths,
+                       canOverrideVisits, overrideReason, setOverrideReason, clearOverride }) {
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
   const visitsRemaining = (form.visits_authorized !== '' && form.visits_authorized != null)
     ? Math.max(0, parseInt(form.visits_authorized || 0, 10) - parseInt(form.visits_used || 0, 10))
     : null;
+
+  // Has the admin actually changed visits_used away from the auto-computed value?
+  const priorVU = auth?.visits_used ?? null;
+  const formVUNum = (form.visits_used === '' || form.visits_used == null) ? null : parseInt(form.visits_used, 10);
+  const vuChanged = authId && formVUNum !== null && formVUNum !== priorVU;
+  const isOverridden = !!auth?.visits_used_manually_overridden;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -499,6 +590,34 @@ function EditSection({ auth, form, setForm, quickStatus, submitRenewal, authId, 
             color={visitsRemaining != null && visitsRemaining <= 4 ? '#DC2626' : visitsRemaining != null && visitsRemaining <= 8 ? '#D97706' : '#059669'} />
           <Tile label="Expires" value={fmtDate(form.auth_expiry_date)} />
           <Tile label="Status" value={(form.auth_status || '-').replace(/_/g, ' ')} />
+        </div>
+      )}
+
+      {/* Override badge - only shown when this auth has been manually corrected */}
+      {isOverridden && (
+        <div style={{
+          background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: '8px 10px',
+          display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap',
+        }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#92400E' }}>
+              [LOCKED] Visits Used manually overridden
+            </div>
+            <div style={{ fontSize: 10, color: '#92400E', marginTop: 3, lineHeight: 1.4 }}>
+              by {auth?.visits_used_override_by || '(unknown)'}
+              {auth?.visits_used_override_at ? ` on ${fmtDate(String(auth.visits_used_override_at).slice(0, 10))}` : ''}
+              {auth?.visits_used_override_reason ? ` - reason: ${auth.visits_used_override_reason}` : ''}
+            </div>
+            <div style={{ fontSize: 10, color: '#92400E', marginTop: 3 }}>
+              Auto-sync will not overwrite this value until re-enabled.
+            </div>
+          </div>
+          {canOverrideVisits && (
+            <button onClick={clearOverride} disabled={saving}
+              style={btn('#FEF3C7', '#92400E', '#D97706', saving)}>
+              Re-enable Auto-Sync
+            </button>
+          )}
         </div>
       )}
 
@@ -576,7 +695,8 @@ function EditSection({ auth, form, setForm, quickStatus, submitRenewal, authId, 
         )}
       </Field>
 
-      {/* Grid of plain fields */}
+      {/* Grid of plain fields (Visits Used is rendered separately below so we
+          can gate it on role and show the override-reason prompt inline). */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         {[
           { k: 'auth_number',         l: 'Auth Number',     t: 'text', ph: 'Auth #...' },
@@ -585,7 +705,6 @@ function EditSection({ auth, form, setForm, quickStatus, submitRenewal, authId, 
           { k: 'auth_approved_date',  l: 'Approved',        t: 'date' },
           { k: 'auth_expiry_date',    l: 'Expires',         t: 'date' },
           { k: 'visits_authorized',   l: 'Visits Auth.',    t: 'number' },
-          { k: 'visits_used',         l: 'Visits Used',     t: 'number' },
           { k: 'denial_reason',       l: 'Denial Reason',   t: 'text', ph: 'If denied...' },
         ].map(f => (
           <Field key={f.k} label={f.l}>
@@ -594,7 +713,49 @@ function EditSection({ auth, form, setForm, quickStatus, submitRenewal, authId, 
               style={inputStyle()} />
           </Field>
         ))}
+
+        {/* Visits Used - role-gated. Coordinators see read-only with a hint.
+            Admins can edit; the override-reason input appears the moment the
+            value diverges from the saved row. */}
+        <Field label={canOverrideVisits ? 'Visits Used (admin)' : 'Visits Used (auto)'}>
+          <input type="number"
+            value={form.visits_used ?? ''}
+            readOnly={!canOverrideVisits}
+            onChange={e => canOverrideVisits && set('visits_used', e.target.value)}
+            title={canOverrideVisits
+              ? 'Admin override - editing requires a reason and flags the row so auto-sync will not overwrite.'
+              : 'Auto-synced from completed visits in this auth window. Contact an admin if the count looks wrong.'}
+            style={{
+              ...inputStyle(),
+              background: canOverrideVisits ? 'var(--card-bg)' : '#F3F4F6',
+              cursor: canOverrideVisits ? 'text' : 'not-allowed',
+              color: canOverrideVisits ? 'var(--black)' : 'var(--gray)',
+            }} />
+          {!canOverrideVisits && (
+            <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 3 }}>
+              Read-only. Auto-synced from visit history.
+            </div>
+          )}
+        </Field>
       </div>
+
+      {/* Override-reason input - admin only, appears when the value diverges */}
+      {canOverrideVisits && vuChanged && (
+        <div style={{
+          background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '10px 12px',
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#1E40AF', marginBottom: 4 }}>
+            Why are you overriding Visits Used?
+          </div>
+          <div style={{ fontSize: 10, color: '#1E40AF', marginBottom: 6, lineHeight: 1.4 }}>
+            Required. Goes into the activity log and the override badge. Examples:
+            "Pariox missed 3 visits from 5/18 audit", "Insurance pre-paid 4 visits not in EMR".
+          </div>
+          <input value={overrideReason} onChange={e => setOverrideReason(e.target.value)}
+            placeholder="Reason for override..."
+            style={inputStyle()} />
+        </div>
+      )}
 
       {/* Notes */}
       <Field label="Internal Notes">
