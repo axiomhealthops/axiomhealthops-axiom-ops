@@ -152,7 +152,7 @@ export default function StuckAuthsPage({ intent }) {
         subtitle={`${stats.total} authorizations stalled mid-process ${'·'} sorted by days-stuck descending`} />
 
       <div style={{ padding:'10px 20px', background:'#FFFBEB', borderBottom:'1px solid #FDE68A', fontSize:12, color:'#92400E' }}>
-        Thresholds: pending status > 3 days (never sent to payer) or submitted > 7 days (no payer response). These are renewal requests the team started but didn't finish, or sent and forgot to follow up on.
+        Thresholds: pending status {'>'} 3 days (never sent to payer) or submitted {'>'} 7 days (no payer response). These are renewal requests the team started but didn't finish, or sent and forgot to follow up on.
       </div>
 
       <div style={{ flex:1, overflow:'auto' }}>

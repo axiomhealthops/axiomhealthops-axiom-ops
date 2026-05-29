@@ -57,27 +57,32 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
       .order('sort_order');
     if (!pages) return;
 
-    // Filter to what this user can access
-    const role = profile?.role;
-    const accessible = pages.filter(p => {
-      // 2026-05-18: 'director' role added — Director of Operations gets full
-      // visibility (mapped to super_admin permissions). Was previously falling
-      // through to return false because no handler existed for this role.
+    // 2026-05-29: pages can be granted via either the primary role OR any
+    // secondary role on coordinators.secondary_roles. Marketing-rep is the
+    // first secondary role in use. See useAuth.jsx for matching logic.
+    const primaryRole = profile?.role;
+    const secondary = Array.isArray(profile?.secondary_roles) ? profile.secondary_roles : [];
+    const allRoles = [primaryRole, ...secondary].filter(Boolean);
+
+    function pageAllowsRole(p, role) {
       if (role === 'super_admin') return p.super_admin;
       if (role === 'director')    return p.super_admin;
-      if (role === 'ceo')        return p.super_admin;
-      if (role === 'admin')      return p.admin;
+      if (role === 'ceo')         return p.super_admin;
+      if (role === 'admin')       return p.admin;
       if (role === 'auth_coordinator')   return p.auth_coordinator;
       if (role === 'intake_coordinator') return p.intake_coordinator;
       if (role === 'care_coordinator')   return p.care_coordinator;
       if (role === 'clinician')          return p.clinician;
-      if (role === 'regional_manager') return p.regional_manager; // RM has own restricted pages
-      if (role === 'assoc_director') return p.assoc_director;
-      if (role === 'telehealth')      return p.telehealth;
-      if (role === 'pod_leader')  return p.pod_leader;
-      if (role === 'team_member') return p.team_member;
+      if (role === 'regional_manager')   return p.regional_manager;
+      if (role === 'assoc_director')     return p.assoc_director;
+      if (role === 'telehealth')         return p.telehealth;
+      if (role === 'pod_leader')         return p.pod_leader;
+      if (role === 'team_member')        return p.team_member;
+      if (role === 'marketing_rep')      return p.marketing_rep;
       return false;
-    });
+    }
+
+    const accessible = pages.filter(p => allRoles.some(r => pageAllowsRole(p, r)));
 
     // Group by section
     const grouped = {};
@@ -106,6 +111,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
     intake_coordinator:  'Intake Coordinator',
     care_coordinator:    'Care Coordinator',
     clinician:           'Clinician',
+    marketing_rep:       'Marketing Rep',
   }[profile?.role] || '';
 
   return (

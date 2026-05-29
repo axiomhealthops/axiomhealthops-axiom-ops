@@ -87,28 +87,42 @@ export function AuthProvider({ children }) {
       const overrideMap = {};
       (overrides || []).forEach(o => { overrideMap[o.page_key] = o.granted; });
 
-      const role = prof.role;
+      // 2026-05-29: pages can now be granted via either the user's PRIMARY
+      // role OR any SECONDARY role they hold (coordinators.secondary_roles).
+      // This was added so the Director of Ops can stand up a `marketing_rep`
+      // role without stripping the existing operations role (regional_manager
+      // / assoc_director) from the 7 RMPs. A page is allowed if ANY role on
+      // the user — primary or secondary — passes the page_permissions check.
+      const primaryRole = prof.role;
+      const secondary = Array.isArray(prof.secondary_roles) ? prof.secondary_roles : [];
+      const allRoles = [primaryRole, ...secondary].filter(Boolean);
+
+      function pageAllowsRole(p, role) {
+        if (role === 'super_admin') return p.super_admin;
+        if (role === 'director')    return p.super_admin; // mapped to super_admin perms
+        if (role === 'ceo')         return p.super_admin; // legacy
+        if (role === 'admin')       return p.admin;
+        if (role === 'auth_coordinator')   return p.auth_coordinator;
+        if (role === 'intake_coordinator') return p.intake_coordinator;
+        if (role === 'care_coordinator')   return p.care_coordinator;
+        if (role === 'clinician')          return p.clinician;
+        if (role === 'regional_manager')   return p.regional_manager;
+        if (role === 'assoc_director')     return p.assoc_director;
+        if (role === 'telehealth')         return p.telehealth;
+        if (role === 'pod_leader')         return p.pod_leader;
+        if (role === 'team_member')        return p.team_member;
+        // 2026-05-29: marketing_rep — granted only on pages where the
+        // page_permissions row has marketing_rep=true (currently just
+        // marketing-crm).
+        if (role === 'marketing_rep')      return p.marketing_rep;
+        return false;
+      }
+
       const allowed = (pages || [])
         .filter(p => {
           if (overrideMap[p.page_key] === true) return true;
           if (overrideMap[p.page_key] === false) return false;
-          // 2026-05-18: 'director' role added — Director of Operations gets full
-          // visibility (mapped to super_admin perms). Was previously falling through
-          // to return false because no handler existed.
-          if (role === 'super_admin') return p.super_admin;
-          if (role === 'director')    return p.super_admin;
-          if (role === 'ceo')        return p.super_admin;  // legacy
-          if (role === 'admin')      return p.admin;
-          if (role === 'auth_coordinator')   return p.auth_coordinator;
-          if (role === 'intake_coordinator') return p.intake_coordinator;
-          if (role === 'care_coordinator')   return p.care_coordinator;
-          if (role === 'clinician')          return p.clinician;
-          if (role === 'regional_manager') return p.regional_manager; // RM has own restricted column
-          if (role === 'assoc_director') return p.assoc_director;
-          if (role === 'telehealth')      return p.telehealth;
-          if (role === 'pod_leader')  return p.pod_leader;   // legacy
-          if (role === 'team_member') return p.team_member;  // legacy
-          return false;
+          return allRoles.some(r => pageAllowsRole(p, r));
         })
         .map(p => p.page_key);
 
