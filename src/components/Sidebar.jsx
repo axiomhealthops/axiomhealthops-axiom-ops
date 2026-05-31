@@ -31,6 +31,7 @@ const PAGE_ICONS = {
   productivity: '📊', revenue: '💰', growth: '📈', scorecard: '🎯',
   staff: '👤', regions: '🗺', 'daily-reports': '📋', 'stale-frequency': '⏱', 'frequency-review': '⚖', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', 'ad-dashboard': '🎖', 'ops-dashboard': '🚦', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺', 'medicare-tracker': '🏥', 'marketing-crm': '📣', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'clinician-assignment': '↔', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'scheduling-alerts': '📅', 'swift-team': '🩹', 'auth-renewals': '🔄', 'discharges': '📤',
   'clinician-schedule': '📅',
+  'marketing-team-directory': '👥',
   'ops-reports': '📊',
   'high-risk-patients': '⚠',
   'auth-over-limit': '🚨',
@@ -79,6 +80,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
       if (role === 'pod_leader')         return p.pod_leader;
       if (role === 'team_member')        return p.team_member;
       if (role === 'marketing_rep')      return p.marketing_rep;
+      if (role === 'healthcare_account_executive') return p.healthcare_account_executive;
       return false;
     }
 
@@ -112,16 +114,17 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
     care_coordinator:    'Care Coordinator',
     clinician:           'Clinician',
     marketing_rep:       'Marketing Rep',
+    healthcare_account_executive: 'Healthcare Account Executive',
   }[profile?.role] || '';
 
   return (
     <div style={{ ...S.sidebar, width: collapsed ? 64 : 220 }}>
       {/* Logo */}
       <div style={S.header}>
-        <img src="/logo.png" alt="AHM" style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'contain', flexShrink: 0, background: 'transparent' }} />
+        <img src="/logo.png" alt="EdemaCare" style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'contain', flexShrink: 0, background: 'transparent' }} />
         {!collapsed && (
           <div style={S.logoText}>
-            <div style={S.logoTitle}>AxiomHealth</div>
+            <div style={S.logoTitle}>EdemaCare</div>
             <div style={S.logoSub}>Operations</div>
           </div>
         )}
@@ -167,6 +170,9 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
         )}
         <button onClick={signOut} title="Sign out" style={S.signOutBtn}>⎋</button>
       </div>
+      {!collapsed && (
+        <div style={S.legal}>EdemaCare is a service of AxiomHealth Management LLC</div>
+      )}
     </div>
   );
 }
@@ -191,4 +197,5 @@ const S = {
   userName: { fontSize: 12, fontWeight: 600, color: '#D1D5DB', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   userRole: { fontSize: 10, color: '#4B5563', marginTop: 1 },
   signOutBtn: { background: 'none', border: 'none', color: '#4B5563', fontSize: 16, cursor: 'pointer', padding: 4, flexShrink: 0 },
+  legal: { fontSize: 9, color: '#374151', textAlign: 'center', padding: '6px 10px 10px', lineHeight: 1.3 },
 };

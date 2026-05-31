@@ -3,11 +3,17 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
- 
-const ROLES = ['super_admin','admin','assoc_director','regional_manager','auth_coordinator','intake_coordinator','care_coordinator','telehealth','clinician'];
-const ROLE_LABELS = { super_admin:'Super Admin', admin:'Director / Admin', assoc_director:'Assoc. Director of Clinical Ops', regional_manager:'Regional Manager', telehealth:'Telehealth PT/OT', auth_coordinator:'Auth Coordinator', intake_coordinator:'Intake Coordinator', care_coordinator:'Care Coordinator', clinician:'Clinician' };
-const ROLE_COLORS = { super_admin:'#DC2626', admin:'#7C3AED', assoc_director:'#0369A1', regional_manager:'#0E7490', telehealth:'#0D9488', auth_coordinator:'#1565C0', intake_coordinator:'#065F46', care_coordinator:'#D97706', clinician:'#059669' };
-const ROLE_BGS   = { super_admin:'#FEF2F2', admin:'#F5F3FF', assoc_director:'#E0F2FE', regional_manager:'#ECFEFF', telehealth:'#F0FDFA', auth_coordinator:'#EFF6FF', intake_coordinator:'#ECFDF5', care_coordinator:'#FEF3C7', clinician:'#F0FFF4' };
+import {
+  USER_MANAGEMENT_ROLE_KEYS as ROLES,
+  ROLE_LABELS,
+  ROLE_COLORS,
+  ROLE_BGS,
+} from '../../lib/constants';
+
+// 2026-05-30: ROLES/ROLE_LABELS/ROLE_COLORS/ROLE_BGS now live in
+// src/lib/constants.js — single source of truth. To add a role, update
+// the constants file, NOT this page. (Prior drift caused HAE to be
+// missing from this dropdown after the role was added everywhere else.)
 const ALL_REGIONS = ['A','B','C','G','H','I','J','M','N','T','V'];
  
 function genPassword() {

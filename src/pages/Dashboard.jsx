@@ -34,6 +34,7 @@ import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
 import MyRegionPage from './dashboard/MyRegionPage';
 import MedicareTrackerPage from './dashboard/MedicareTrackerPage';
 import MarketingCRMPage from './dashboard/MarketingCRMPage';
+import MarketingTeamDirectoryPage from './dashboard/MarketingTeamDirectoryPage';
 import WaitlistPage from './dashboard/WaitlistPage';
 import AuthRenewalsPage from './dashboard/AuthRenewalsPage';
 import DirectorDashboard from './dashboard/DirectorDashboard';
@@ -95,6 +96,7 @@ const PAGE_COMPONENTS = {
   'my-region':              MyRegionPage,
   'medicare-tracker':       MedicareTrackerPage,
   'marketing-crm':          MarketingCRMPage,
+  'marketing-team-directory': MarketingTeamDirectoryPage,
   'waitlist':                WaitlistPage,
   'director':                DirectorDashboard,
   'clinician-accountability': ClinicianAccountabilityPage,

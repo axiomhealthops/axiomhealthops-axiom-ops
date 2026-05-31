@@ -122,6 +122,138 @@ export function isActingManager(regionLetter) {
 
 export const SETTINGS_PIN = '2208';
 
+// =====================================================================
+// Marketing surface — primary-role classification (v5 design, 2026-05-30)
+//
+// Liam's framing: "If there is a staff member who is a Regional Manager,
+// then they are a clinician first, marketing executive second. If they
+// are a HAE, their primary job is marketing not clinical work."
+//
+// Used by Marketing Team Directory and Marketing CRM scorecard rollups
+// to split "marketing-primary contribution" from "clinical-primary
+// secondary contribution". Same person can appear in both buckets
+// depending on the role they're playing for a given territory.
+// =====================================================================
+
+// Roles whose primary job is clinical. Their marketing contributions
+// count as SECONDARY on marketing scorecards (not held to HAE volume).
+export const CLINICAL_PRIMARY_ROLES = ['assoc_director', 'regional_manager'];
+
+// Roles whose primary job is marketing. Full marketing scorecard weight.
+export const MARKETING_PRIMARY_ROLES = ['healthcare_account_executive'];
+
+// Roles that have any marketing involvement (primary OR secondary).
+// Used to filter the Marketing Team Directory.
+export const MARKETING_TEAM_ROLES = [
+  ...MARKETING_PRIMARY_ROLES,
+  ...CLINICAL_PRIMARY_ROLES,
+];
+
+export function isMarketingPrimary(role) {
+  return MARKETING_PRIMARY_ROLES.includes(role);
+}
+
+export function isClinicalPrimaryWithMarketingSecondary(role, secondaryRoles) {
+  return CLINICAL_PRIMARY_ROLES.includes(role)
+      && Array.isArray(secondaryRoles)
+      && secondaryRoles.includes('marketing_rep');
+}
+
+// Standard duties for all marketing team members. Static reference for
+// the Marketing Team Directory page's right-rail panel.
+export const MARKETING_STANDARD_DUTIES = [
+  'Meet with healthcare providers, specialists, hospitals, physician practices, and healthcare facilities',
+  'Develop and maintain referral relationships',
+  'Conduct in-services, educational presentations, and community outreach events',
+  'Participate in networking and community engagement',
+  'Track outreach activities, referral opportunities, and provider feedback',
+  'Share market intelligence and field feedback with leadership',
+  'Hospital discharge relationship development and referral growth',
+  'School administration contacts, therapy program directors, career services contacts for recruiting and career fairs',
+  'Promote therapist recruitment and represent EdemaCare at educational/career events',
+  'Support strategic growth initiatives as assigned',
+];
+
+// Assignment-role display labels for the Marketing Team Directory.
+export const ASSIGNMENT_ROLE_LABELS = {
+  primary:    'Primary',
+  oversight:  'Oversight',
+  supervisor: 'Supervisor',
+  partner:    'Partner',
+};
+
+export const ASSIGNMENT_ROLE_COLORS = {
+  primary:    { fg: '#065F46', bg: '#ECFDF5', border: '#A7F3D0' },
+  oversight:  { fg: '#1565C0', bg: '#EFF6FF', border: '#BFDBFE' },
+  supervisor: { fg: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' },
+  partner:    { fg: '#374151', bg: '#F3F4F6', border: '#D1D5DB' },
+};
+
+// =====================================================================
+// Canonical role display map — single source of truth for the User
+// Management page and any future page that needs to render role pills.
+//
+// Order matters: USER_MANAGEMENT_ROLE_KEYS sets the dropdown order
+// shown to admins when creating/editing a user.
+//
+// To add a new role: add it to USER_MANAGEMENT_ROLE_KEYS + ROLE_LABELS
+// + ROLE_COLORS + ROLE_BGS in this file. Don't add it to local arrays
+// in individual pages — drift is how we end up with HAE missing from
+// the dropdown after the migration adds it everywhere else.
+// =====================================================================
+
+export const USER_MANAGEMENT_ROLE_KEYS = [
+  'super_admin',
+  'admin',
+  'assoc_director',
+  'regional_manager',
+  'healthcare_account_executive',
+  'auth_coordinator',
+  'intake_coordinator',
+  'care_coordinator',
+  'telehealth',
+  'clinician',
+];
+
+export const ROLE_LABELS = {
+  super_admin:                  'Super Admin',
+  admin:                        'Director / Admin',
+  assoc_director:               'Assoc. Director of Clinical Ops',
+  regional_manager:             'Regional Manager',
+  healthcare_account_executive: 'Healthcare Account Executive (HAE)',
+  auth_coordinator:             'Auth Coordinator',
+  intake_coordinator:           'Intake Coordinator',
+  care_coordinator:             'Care Coordinator',
+  telehealth:                   'Telehealth PT/OT',
+  clinician:                    'Clinician',
+};
+
+export const ROLE_COLORS = {
+  super_admin:                  '#DC2626',
+  admin:                        '#7C3AED',
+  assoc_director:               '#0369A1',
+  regional_manager:             '#0E7490',
+  healthcare_account_executive: '#9A3412',
+  auth_coordinator:             '#1565C0',
+  intake_coordinator:           '#065F46',
+  care_coordinator:             '#D97706',
+  telehealth:                   '#0D9488',
+  clinician:                    '#059669',
+};
+
+export const ROLE_BGS = {
+  super_admin:                  '#FEF2F2',
+  admin:                        '#F5F3FF',
+  assoc_director:               '#E0F2FE',
+  regional_manager:             '#ECFEFF',
+  healthcare_account_executive: '#FFF7ED',
+  auth_coordinator:             '#EFF6FF',
+  intake_coordinator:           '#ECFDF5',
+  care_coordinator:             '#FEF3C7',
+  telehealth:                   '#F0FDFA',
+  clinician:                    '#F0FFF4',
+};
+
 export const EXPANSION = [
   { state: 'Georgia', status: 'In Progress', credentialing: 60, staffHired: 2, target: 'May 2026' },
   { state: 'Texas', status: 'Planning', credentialing: 20, staffHired: 0, target: 'July 2026' },

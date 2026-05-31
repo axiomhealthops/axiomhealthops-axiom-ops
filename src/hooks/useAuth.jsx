@@ -115,6 +115,9 @@ export function AuthProvider({ children }) {
         // page_permissions row has marketing_rep=true (currently just
         // marketing-crm).
         if (role === 'marketing_rep')      return p.marketing_rep;
+        // 2026-05-30: HAE — marketing-primary role. Granted only on pages
+        // where page_permissions.healthcare_account_executive=true.
+        if (role === 'healthcare_account_executive') return p.healthcare_account_executive;
         return false;
       }
 
