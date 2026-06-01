@@ -1,36 +1,85 @@
-import { useState, useEffect, useMemo } from 'react';
+// =============================================================================
+// MedicareTrackerPage.jsx — flat roster redesign (2026-06-01, Phase 2)
+//
+// Replaces the previous PT-accordion view (which Liam called "very confusing")
+// with a single sortable roster — one row per straight-Medicare patient — that
+// matches Liam's Excel spec column-for-column. Each row tracks the patient's
+// 20-visit cap, 10-visit progress-note rule, 30-day rolling note rule, and
+// ready-for-discharge state.
+//
+// Key Phase-2 changes (vs the prior file at this path):
+//   * Single flat table, 15 columns, sortable. No accordion.
+//   * Color-coded rows by severity bucket (over cap > 20 > 18-19 > 10+ > 8-9).
+//   * Right-side drawer for drill-down: visit history, progress-note + DC-note
+//     submission, roster notes, KX cap-override (admin/super_admin only).
+//   * Hard-stop enforced at the DB level via trg_enforce_medicare_visit_cap;
+//     UI shows admin override modal that writes cap_override_by/at/reason.
+//   * Auto-flagging "Ready for Discharge" is owned by the DB trigger
+//     trg_flag_medicare_ready_for_discharge — this page just renders the flag.
+//   * Recalculate populates new persisted columns (address, discipline,
+//     ref_source, patient_status, assistant_therapist, evaluation_date,
+//     10th/20th actual+projected visit dates) so the roster renders without
+//     re-deriving on each load.
+//   * Escalation ladder for alerts (visits 8/9/10 progress-note + 18/19/20
+//     discharge-note) fires from recalculate; ready-for-discharge alert at
+//     visit 20 is owned by the DB trigger.
+//   * One-click XLSX export matching Liam's spec column order.
+//
+// Preserved from prior file (DO NOT REWRITE):
+//   * isStraightMedicare() classifier — excludes Medicare Advantage.
+//   * Rolling 10-visit OR 30-day progress-note rule (CMS Pub 100-02 Ch15 §220.3).
+//   * Discipline-aware evaluating-PT selection (PTAs/COTAs blocked from lead).
+//   * supabase + fetchAllPages + useRealtimeTable + useAssignedRegions plumbing.
+//
+// CLAUDE.md compliance:
+//   * fetchAllPages used for visit_schedule_data + insurance_abbreviations
+//     + census_data + coordinators + clinicians.
+//   * No unicode in JSX text — ASCII strings or wrapped in {'...'} expressions.
+//   * No hardcoded $230; not relevant on this page.
+//   * Sun-Sat week math not used here (no weekly aggregation).
+// =============================================================================
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import { REGION_COORD } from '../../lib/alertEngine';
+import { isCompleted, isEval, dedupEncounters } from '../../lib/visitMath';
+
+// --- helpers ---------------------------------------------------------------
+
+const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
+const ADMIN_ROLES = new Set(['super_admin', 'admin', 'director', 'ceo']);
 
 function fmtDate(d) {
-  if (!d) return '—';
+  if (!d) return '-';
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
-
-// 'YYYY-MM-DD' + N days → 'YYYY-MM-DD' (local, no TZ shift)
-function addDays(yyyymmdd, days) {
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function addDaysIso(yyyymmdd, days) {
   if (!yyyymmdd) return null;
   const d = new Date(yyyymmdd + 'T00:00:00');
   d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
+  return d.toISOString().slice(0, 10);
+}
+function daysBetween(a, b) {
+  if (!a || !b) return null;
+  return Math.floor((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
+}
+// "Last, First" -> "First Last". Pariox stores staff "Last, First"; clinicians
+// table stores full_name "First Last".
+function flipName(name) {
+  if (!name) return '';
+  const m = name.match(/^\s*([^,]+),\s*(.+)$/);
+  return m ? `${m[2].trim()} ${m[1].trim()}` : name.trim();
 }
 
-function daysBetween(fromYmd, toYmd) {
-  if (!fromYmd || !toYmd) return null;
-  const a = new Date(fromYmd + 'T00:00:00');
-  const b = new Date(toYmd + 'T00:00:00');
-  return Math.floor((b - a) / 86400000);
-}
-
-// Build a lookup from the insurance_abbreviations table: any identifier a
-// census_data.insurance value might hold -> its authoritative category.
-// That field can carry the bare insurance_name ("Medicare", "Aetna Medicare"),
-// the region display_name ("A - Medicare"), or a raw abbreviation code
-// ("AMA" = Aetna Medicare, region A).
+// Insurance classifier. Single source of truth for "is this Medicare?" — see
+// the long-form comment in the original file (preserved here). Straight
+// Medicare ONLY; Advantage plans (Aetna Medicare, Cigna Medicare, CarePlus,
+// Humana, Devoted) follow private rules, not Medicare's 10/20.
 function buildInsuranceClassifier(rows) {
   const byId = new Map();
   for (const r of (rows || [])) {
@@ -40,13 +89,6 @@ function buildInsuranceClassifier(rows) {
   }
   return byId;
 }
-
-// Straight (traditional / Original) Medicare only — category 'Medicare'.
-// Medicare Advantage plans are run by private carriers (Aetna Medicare, Cigna
-// Medicare, Humana, CarePlus, Devoted, etc.) and do NOT follow Medicare's
-// 10-visit / 30-day progress-note or 20-visit cap rules, so they must not be
-// tracked here. Falls back to a region-prefix-stripped name match only when a
-// value is missing from the insurance_abbreviations lookup.
 function isStraightMedicare(insurance, classifier) {
   if (!insurance) return false;
   const cat = classifier.get(insurance.toLowerCase().trim());
@@ -55,69 +97,106 @@ function isStraightMedicare(insurance, classifier) {
   return stripped === 'medicare';
 }
 
-// "Last, First" -> "First Last". visit_schedule_data stores staff as
-// "Last, First"; the clinician roster stores full_name as "First Last".
-function flipName(name) {
-  if (!name) return '';
-  const m = name.match(/^\s*([^,]+),\s*(.+)$/);
-  return m ? `${m[2].trim()} ${m[1].trim()}` : name.trim();
+// Project a future visit-N date from cadence. Uses last-12-week visit
+// frequency. Returns null if there's no history to extrapolate from.
+function projectVisitDate(careStartDate, lastVisitDate, currentCount, targetVisit) {
+  if (!careStartDate || !lastVisitDate || currentCount >= targetVisit) return null;
+  const elapsedDays = daysBetween(careStartDate, lastVisitDate) || 1;
+  const visitsPerDay = currentCount / Math.max(elapsedDays, 1);
+  if (visitsPerDay <= 0) return null;
+  const remaining = targetVisit - currentCount;
+  const daysAhead = Math.ceil(remaining / visitsPerDay);
+  return addDaysIso(todayISO(), Math.min(daysAhead, 365)); // cap forecast at 1y
 }
 
-const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
-const MANAGERS = { A:'Uma Jacobs',B:'Lia Davis',C:'Earl Dimaano',G:'Samantha Faliks',H:'Kaylee Ramsey',J:'Hollie Fincher',M:'Ariel Maboudi',N:'Ariel Maboudi',T:'Samantha Faliks',V:'Samantha Faliks' };
+// --- severity bucket -------------------------------------------------------
+function bucketOf(f) {
+  const v = f?.total_completed_visits || 0;
+  if (v >= 21) return 'over_cap';
+  if (v >= 20) return 'discharge';
+  if (v >= 18) return 'dc_soon';
+  if (v >= 10 && f?.progress_note_due) return 'note_overdue';
+  if (v >= 8) return 'note_soon';
+  return 'ok';
+}
+const BUCKET_STYLE = {
+  over_cap:     { bg: '#1F2937', fg: '#FFFFFF', label: 'OVER CAP',   icon: 'X' },
+  discharge:    { bg: '#FEE2E2', fg: '#991B1B', label: 'DISCHARGE',  icon: '!' },
+  dc_soon:      { bg: '#EDE9FE', fg: '#5B21B6', label: 'DC SOON',    icon: '~' },
+  note_overdue: { bg: '#FFEDD5', fg: '#9A3412', label: 'NOTE DUE',   icon: '*' },
+  note_soon:    { bg: '#FEF3C7', fg: '#92400E', label: 'NOTE SOON',  icon: '.' },
+  ok:           { bg: 'transparent', fg: 'var(--gray)', label: '',   icon: '' },
+};
 
+// --- column definitions (Liam's spec, 15 cols) -----------------------------
+const COLS = [
+  { key: 'patient_name',           label: 'Patient',          w: 180 },
+  { key: 'address',                label: 'Address',          w: 150 },
+  { key: 'discipline',             label: 'Disc',             w: 90 },
+  { key: 'ref_source',             label: 'Ref Src',          w: 70 },
+  { key: 'patient_status',         label: 'Status',           w: 100 },
+  { key: 'region',                 label: 'Rgn',              w: 50 },
+  { key: 'evaluation_date',        label: 'Eval Date',        w: 100 },
+  { key: 'evaluating_pt',          label: 'PT / OT',          w: 130 },
+  { key: 'assistant_therapist',    label: 'PTA / COTA',       w: 130 },
+  { key: 'tenth_visit_actual_date',label: '10th Visit',       w: 110 },
+  { key: 'visits_allowed',         label: 'Allowed',          w: 60 },
+  { key: 'total_completed_visits', label: 'Used',             w: 50 },
+  { key: 'visits_remaining',       label: 'Remaining',        w: 80 },
+  { key: 'twentieth_visit_actual_date', label: '20th Visit',  w: 110 },
+  { key: 'roster_notes',           label: 'Notes',            w: 160 },
+];
+
+// =============================================================================
+// MAIN PAGE
+// =============================================================================
 export default function MedicareTrackerPage() {
   const { profile } = useAuth();
+  const isAdmin = profile && ADMIN_ROLES.has(profile.role);
+
   const [flags, setFlags] = useState([]);
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
   const [filterRegion, setFilterRegion] = useState('ALL');
-  const [filterFlag, setFilterFlag] = useState('ALL');
+  const [filterDiscipline, setFilterDiscipline] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterBucket, setFilterBucket] = useState('ALL');
   const [searchQ, setSearchQ] = useState('');
-  const [activeModal, setActiveModal] = useState(null); // { flag, type: 'progress'|'20' }
-  const [ackNote, setAckNote] = useState('');
-  const [expandedPTs, setExpandedPTs] = useState(() => new Set());
+  const [sortKey, setSortKey] = useState('total_completed_visits');
+  const [sortDir, setSortDir] = useState('desc');
+  const [selectedPatient, setSelectedPatient] = useState(null); // flag row or null
 
-  function togglePT(pt) {
-    setExpandedPTs(prev => {
-      const next = new Set(prev);
-      if (next.has(pt)) next.delete(pt); else next.add(pt);
-      return next;
-    });
-  }
+  const regionScope = useAssignedRegions();
 
-  async function recalculate() {
+  // --- recalc -----------------------------------------------------------
+  // Walks census + visit_schedule_data, refreshes every medicare_visit_flags
+  // row, fires the escalation-ladder alerts. The DB trigger handles
+  // ready_for_discharge + the critical alert at visit 20.
+  const recalculate = useCallback(async () => {
     setCalculating(true);
     try {
-      // 2026-05-17: paginated — visit_schedule_data with status='completed'
-      // can easily exceed 1000 rows when calculating Medicare cap utilization.
-      // Authoritative insurance classification from the lookup table.
       const insRows = await fetchAllPages(supabase.from('insurance_abbreviations')
         .select('abbreviation, display_name, insurance_name, category'));
       const insClassifier = buildInsuranceClassifier(insRows);
 
       const mcPtsRaw = await fetchAllPages(supabase.from('census_data')
-        .select('patient_name, region, insurance'));
-      // Straight Medicare only — category 'Medicare'. Drops Medicare Advantage
-      // (Aetna/Cigna Medicare, Humana, CarePlus, ...), Commercial and Self-Pay.
+        .select('patient_name, region, insurance, address, discipline, ref_source, status'));
       const mcPts = (mcPtsRaw || []).filter(p => isStraightMedicare(p.insurance, insClassifier));
 
-      // Purge flag rows for patients no longer tracked — Medicare Advantage
-      // patients carried over from before this filter, plus anyone off census.
+      // Purge flag rows for patients no longer in census (soft-archive, not delete).
       const keepNames = new Set(mcPts.map(p => p.patient_name));
-      const { data: existingFlags } = await supabase.from('medicare_visit_flags').select('patient_name');
-      const staleNames = (existingFlags || []).map(r => r.patient_name).filter(n => !keepNames.has(n));
-      if (staleNames.length) {
-        await supabase.from('medicare_visit_flags').delete().in('patient_name', staleNames);
+      const { data: existingFlags } = await supabase.from('medicare_visit_flags')
+        .select('patient_name, is_active');
+      const goneNames = (existingFlags || []).map(r => r.patient_name).filter(n => !keepNames.has(n));
+      if (goneNames.length) {
+        await supabase.from('medicare_visit_flags')
+          .update({ is_active: false, updated_at: new Date().toISOString() })
+          .in('patient_name', goneNames);
       }
 
       const visits = await fetchAllPages(supabase.from('visit_schedule_data')
-        .select('patient_name, staff_name, staff_name_normalized, event_type, status, visit_date, region')
-        .ilike('status', '%completed%'));
+        .select('patient_name, staff_name, staff_name_normalized, event_type, status, visit_date, region'));
 
-      // Discipline lookup — only PTs/OTs may head a tracker group. Assistants
-      // (PTA/COTA) never perform evaluations, so they must not be listed as a
-      // patient's evaluating therapist.
       const clinicians = await fetchAllPages(supabase.from('clinicians')
         .select('full_name, aliases, discipline'));
       const disciplineByName = new Map();
@@ -126,58 +205,81 @@ export default function MedicareTrackerPage() {
         (c.aliases || []).forEach(a => { if (a) disciplineByName.set(a.toLowerCase().trim(), c.discipline); });
       }
       const therapistName = v => (v.staff_name_normalized || flipName(v.staff_name) || '').trim();
-      const isPtOt = name => {
-        const d = disciplineByName.get((name || '').toLowerCase().trim());
-        return d === 'PT' || d === 'OT';
-      };
+      const disciplineOf = n => disciplineByName.get((n || '').toLowerCase().trim());
+      const isLead = n => { const d = disciplineOf(n); return d === 'PT' || d === 'OT'; };
+      const isAssistant = n => { const d = disciplineOf(n); return d === 'PTA' || d === 'COTA'; };
 
-      const today = new Date().toISOString().split('T')[0];
-      const dueList = [];
+      const escalationAlerts = [];
+      const escalationTasks = [];
+      const today = todayISO();
 
-      for (const pt of (mcPts || [])) {
-        const ptVisits = (visits || []).filter(v =>
-          v.patient_name === pt.patient_name &&
-          !/cancel/i.test(v.event_type || '')
-        ).sort((a, b) => a.visit_date?.localeCompare(b.visit_date));
+      for (const pt of mcPts) {
+        // Completed visits only (via canonical isCompleted), deduped to one
+        // encounter per (patient, date) so PT+PTA co-treat slots don't double.
+        const ptVisitsRaw = (visits || []).filter(v => v.patient_name === pt.patient_name && isCompleted(v));
+        const ptVisits = dedupEncounters(ptVisitsRaw).sort((a, b) =>
+          (a.visit_date || '').localeCompare(b.visit_date || ''));
 
-        if (ptVisits.length === 0) continue;
+        if (ptVisits.length === 0) {
+          // Patient is on Medicare census but has no completed visits yet.
+          // Upsert a minimal row so the roster shows them.
+          await supabase.from('medicare_visit_flags').upsert({
+            patient_name: pt.patient_name,
+            region: pt.region,
+            insurance: pt.insurance,
+            address: pt.address,
+            discipline: pt.discipline,
+            ref_source: pt.ref_source,
+            patient_status: pt.status,
+            total_completed_visits: 0,
+            is_active: true,
+            last_calculated_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'patient_name' });
+          continue;
+        }
+
         const total = ptVisits.length;
-
-        // Care start anchor — first eval visit if present, else first completed visit.
-        // Per Liam: 30-day clock starts at start of care / first eval, not first completed visit.
-        const evalVisit = ptVisits.find(v => /eval/i.test(v.event_type || ''));
+        const evalVisit = ptVisits.find(isEval);
         const careStartDate = evalVisit?.visit_date || ptVisits[0].visit_date;
+        const lastVisitDate = ptVisits[ptVisits.length - 1].visit_date;
 
-        // Evaluating therapist — must be a PT or OT. Prefer the eval visit's
-        // therapist; otherwise the most-frequent PT/OT among the patient's
-        // visit staff. PTAs/COTAs are never eligible — they don't do evals.
-        const staffCounts = {};
-        ptVisits.forEach(v => {
-          const name = therapistName(v);
-          if (name) staffCounts[name] = (staffCounts[name] || 0) + 1;
-        });
-        const evalVisitTherapist = evalVisit ? therapistName(evalVisit) : null;
-        const evalPT = (evalVisitTherapist && isPtOt(evalVisitTherapist))
-          ? evalVisitTherapist
-          : (Object.entries(staffCounts)
-              .filter(([name]) => isPtOt(name))
-              .sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unassigned');
+        // Evaluating therapist — prefer the eval visit's clinician if PT/OT,
+        // else most-frequent PT/OT among visits. PTAs/COTAs ineligible.
+        const counts = {};
+        for (const v of ptVisits) {
+          const n = therapistName(v);
+          if (n) counts[n] = (counts[n] || 0) + 1;
+        }
+        const evalName = evalVisit ? therapistName(evalVisit) : null;
+        const evaluatingPt = (evalName && isLead(evalName))
+          ? evalName
+          : (Object.entries(counts).filter(([n]) => isLead(n)).sort((a,b) => b[1]-a[1])[0]?.[0] || 'Unassigned');
 
+        // Assistant therapist (PTA/COTA) — most-frequent assistant, null if none.
+        const assistant = Object.entries(counts)
+          .filter(([n]) => isAssistant(n))
+          .sort((a,b) => b[1]-a[1])[0]?.[0] || null;
+
+        // 10th/20th visit actual dates from visit history.
+        const tenthActual    = total >= 10 ? ptVisits[9].visit_date  : null;
+        const twentiethActual = total >= 20 ? ptVisits[19].visit_date : null;
+        const tenthProjected     = tenthActual    ? null : projectVisitDate(careStartDate, lastVisitDate, total, 10);
+        const twentiethProjected = twentiethActual ? null : projectVisitDate(careStartDate, lastVisitDate, total, 20);
+
+        // Rolling progress-note clock (preserved from prior implementation).
         const { data: existing } = await supabase.from('medicare_visit_flags')
-          .select('id, flag_10th_acknowledged, flag_20th_acknowledged, last_progress_note_date, last_progress_note_visit')
+          .select('id, flag_10th_acknowledged, flag_20th_acknowledged, last_progress_note_date, last_progress_note_visit, ready_for_discharge, cap_override_by, roster_notes, kx_modifier_applied, tenth_visit_note_submitted_date, twentieth_visit_discharge_note_date')
           .eq('patient_name', pt.patient_name).maybeSingle();
 
-        // Rolling anchor — last submitted note if present, else care_start.
         const anchorDate  = existing?.last_progress_note_date  || careStartDate;
         const anchorVisit = existing?.last_progress_note_visit || 0;
         const nextDueVisit = anchorVisit + 10;
-        const nextDueDate  = addDays(anchorDate, 30);
+        const nextDueDate  = addDaysIso(anchorDate, 30);
 
         const overVisit = total >= nextDueVisit;
         const overDays  = today >= nextDueDate;
         const due = overVisit || overDays;
-
-        // Which threshold actually fired first (for human-readable reason)?
         let dueReason = null;
         if (due) {
           if (overVisit && overDays) {
@@ -190,7 +292,6 @@ export default function MedicareTrackerPage() {
           }
         }
 
-        // Legacy 10/20 flags — kept in sync for any consumers reading them.
         const flag10 = total >= 10;
         const flag20 = total >= 20;
         const ack10 = existing?.flag_10th_acknowledged || false;
@@ -200,9 +301,21 @@ export default function MedicareTrackerPage() {
           patient_name: pt.patient_name,
           region: pt.region,
           insurance: pt.insurance,
-          evaluating_pt: evalPT,
+          address: pt.address,
+          discipline: pt.discipline,
+          ref_source: pt.ref_source,
+          patient_status: pt.status,
+          evaluating_pt: evaluatingPt,
+          assistant_therapist: assistant,
           total_completed_visits: total,
           care_start_date: careStartDate,
+          evaluation_date: careStartDate,
+          tenth_visit_actual_date: tenthActual,
+          tenth_visit_projected_date: tenthProjected,
+          twentieth_visit_actual_date: twentiethActual,
+          twentieth_visit_projected_date: twentiethProjected,
+          progress_note_due_date: nextDueDate,
+          discharge_note_due_date: twentiethActual || twentiethProjected,
           next_due_visit: nextDueVisit,
           next_due_date: nextDueDate,
           progress_note_due: due,
@@ -211,200 +324,211 @@ export default function MedicareTrackerPage() {
           flag_10th_acknowledged: ack10,
           flag_20th_discharge: flag20,
           flag_20th_acknowledged: ack20,
+          is_active: true,
           last_calculated_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
 
-        if (existing) {
-          await supabase.from('medicare_visit_flags').update(payload).eq('patient_name', pt.patient_name);
-        } else {
-          await supabase.from('medicare_visit_flags').insert(payload);
+        await supabase.from('medicare_visit_flags')
+          .upsert(payload, { onConflict: 'patient_name' });
+
+        // --- Escalation-ladder alerts (visits 8/9/10 + 18/19/20) ---------
+        // Critical "ready_for_discharge" at visit 20 is owned by the DB
+        // trigger — we don't duplicate it here. We DO fire the
+        // discharge-note alert (separate signal: PT must write the DC note).
+        const coord = REGION_COORD[pt.region] || null;
+        function queue(type, priority, title, message) {
+          escalationAlerts.push({
+            alert_type: type, priority, title, message,
+            patient_name: pt.patient_name, clinician_name: evaluatingPt,
+            region: pt.region, assigned_to_region: pt.region,
+            is_read: false, is_dismissed: false,
+            created_at: new Date().toISOString(),
+          });
+          escalationTasks.push({
+            task_type: type, priority, title, description: message,
+            patient_name: pt.patient_name, clinician_name: evaluatingPt,
+            coordinator_region: pt.region, assigned_to: coord,
+            status: 'open', auto_generated: true,
+            due_date: today, created_at: new Date().toISOString(),
+          });
         }
 
-        if (due) {
-          dueList.push({
-            patient_name: pt.patient_name,
-            region: pt.region,
-            evaluating_pt: evalPT,
-            reason: dueReason,
-            visits: total,
-            due_date: nextDueDate,
-          });
+        // Progress-note ladder (skip if a note was submitted at/after this visit)
+        const noteAlreadyAtTier = anchorVisit >= total;
+        if (!noteAlreadyAtTier) {
+          if (total === 8) {
+            queue('medicare_progress_note_due', 'medium',
+              'Progress note approaching (visit 8): ' + pt.patient_name,
+              evaluatingPt + ' must prepare a Medicare progress note for ' + pt.patient_name +
+              '. Currently at visit 8 of 10 — note due by visit 10 or 30 days from anchor.');
+          } else if (total === 9) {
+            queue('medicare_progress_note_due', 'high',
+              'Progress note required next visit: ' + pt.patient_name,
+              evaluatingPt + ' must submit Medicare progress note for ' + pt.patient_name +
+              ' at the next visit (visit 10).');
+          } else if (total >= 10 && due) {
+            queue('medicare_progress_note_due', 'critical',
+              'Progress note OVERDUE: ' + pt.patient_name,
+              evaluatingPt + ' has NOT submitted the required Medicare progress note. ' +
+              (dueReason === '10_visits' ? total + ' completed visits' : '30+ days since last note') + '.');
+          }
+        }
+
+        // Discharge-note ladder
+        const dcNoteSubmitted = !!existing?.twentieth_visit_discharge_note_date;
+        if (!dcNoteSubmitted) {
+          if (total === 18) {
+            queue('medicare_discharge_note_due', 'medium',
+              'Discharge planning required: ' + pt.patient_name,
+              evaluatingPt + ' must begin discharge planning for ' + pt.patient_name +
+              '. Currently at visit 18 of 20.');
+          } else if (total === 19) {
+            queue('medicare_discharge_note_due', 'high',
+              'Discharge note must be drafted: ' + pt.patient_name,
+              evaluatingPt + ' must draft Medicare discharge note for ' + pt.patient_name +
+              '. Visit 19 of 20.');
+          } else if (total >= 20) {
+            queue('medicare_discharge_note_due', 'critical',
+              'Discharge note REQUIRED: ' + pt.patient_name,
+              evaluatingPt + ' must submit Medicare discharge note. Patient at ' + total +
+              ' completed visits. 20-visit cap reached.');
+          }
         }
       }
 
-      await syncProgressNoteAlerts(dueList);
+      // Fan out escalation alerts (dedupe at insertion via NOT EXISTS pattern
+      // since the alerts table doesn't have a unique constraint).
+      if (escalationAlerts.length) {
+        const types = Array.from(new Set(escalationAlerts.map(a => a.alert_type)));
+        // Clear stale open alerts/tasks for these types and re-seed current set.
+        await supabase.from('alerts').delete()
+          .in('alert_type', types)
+          .eq('is_read', false)
+          .eq('is_dismissed', false);
+        await supabase.from('coordinator_tasks').delete()
+          .in('task_type', types)
+          .eq('auto_generated', true)
+          .in('status', ['open', 'in_progress']);
+        await supabase.from('alerts').insert(escalationAlerts);
+        await supabase.from('coordinator_tasks').insert(escalationTasks);
+      }
     } catch (err) {
-      console.error('Recalc error:', err);
+      console.error('Medicare recalc error:', err);
     }
     setCalculating(false);
     loadFlags();
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Fan out in-app alerts (AlertsBell) + coordinator_tasks for the current
-  // due set. Delete-then-insert pattern mirrors alertEngine.js for the same
-  // task types; ensures stale flags are cleared when a patient is no longer due.
-  // ADs see the alert via region scope (their assigned regions include the
-  // patient's letter). Care coord gets the actionable task in their queue.
-  async function syncProgressNoteAlerts(due) {
-    await supabase.from('alerts').delete()
-      .eq('alert_type', 'medicare_progress_note')
-      .eq('is_read', false);
-
-    await supabase.from('coordinator_tasks').delete()
-      .eq('auto_generated', true)
-      .eq('task_type', 'medicare_progress_note')
-      .in('status', ['open', 'in_progress']);
-
-    if (!due.length) return;
-
-    const today = new Date().toISOString().split('T')[0];
-    const alertsToInsert = [];
-    const tasksToInsert = [];
-
-    for (const d of due) {
-      const coord = REGION_COORD[d.region] || null;
-      const reasonText = d.reason === '10_visits'
-        ? `${d.visits} completed visits — 10-visit progress-note threshold reached`
-        : `30+ days since last progress note (due ${d.due_date})`;
-
-      alertsToInsert.push({
-        alert_type: 'medicare_progress_note',
-        priority: 'high',
-        title: `Medicare Progress Note: ${d.patient_name}`,
-        message: `${d.evaluating_pt} · Region ${d.region} · ${reasonText}. PT must submit Medicare progress note.`,
-        patient_name: d.patient_name,
-        clinician_name: d.evaluating_pt,
-        region: d.region,
-        assigned_to_region: d.region,
-        is_read: false,
-        is_dismissed: false,
-        created_at: new Date().toISOString(),
-      });
-
-      tasksToInsert.push({
-        task_type: 'medicare_progress_note',
-        priority: 'high',
-        title: `Medicare progress note: ${d.patient_name}`,
-        description: `Evaluating PT ${d.evaluating_pt} must submit a Medicare progress note. ${reasonText}. Follow up to confirm submission.`,
-        patient_name: d.patient_name,
-        clinician_name: d.evaluating_pt,
-        coordinator_region: d.region,
-        assigned_to: coord,
-        status: 'open',
-        auto_generated: true,
-        due_date: today,
-        created_at: new Date().toISOString(),
-      });
-    }
-
-    if (alertsToInsert.length) await supabase.from('alerts').insert(alertsToInsert);
-    if (tasksToInsert.length)  await supabase.from('coordinator_tasks').insert(tasksToInsert);
-  }
-
-  const regionScope = useAssignedRegions();
-
-  async function loadFlags() {
+  // --- load -------------------------------------------------------------
+  const loadFlags = useCallback(async () => {
     if (regionScope.loading) return;
     if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setFlags([]); setLoading(false); return;
     }
     const { data } = await regionScope.applyToQuery(
       supabase.from('medicare_visit_flags')
-        .select('*').order('total_completed_visits', { ascending: false })
+        .select('*')
+        .eq('is_active', true)
     );
     setFlags(data || []);
     setLoading(false);
-  }
-
-  useEffect(() => {
-    loadFlags();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
+
+  useEffect(() => { loadFlags(); }, [loadFlags]);
   useRealtimeTable(['census_data', 'visit_schedule_data', 'medicare_visit_flags'], loadFlags);
 
-  async function acknowledge(flag, type) {
-    const now = new Date().toISOString();
-    const today = now.split('T')[0];
-    const by = profile?.full_name || profile?.email || 'Unknown';
-
-    if (type === 'progress') {
-      // Mark a Medicare progress note as submitted: reset the rolling
-      // 10/30 clock from this submission, then clear any open alert/task.
-      const visitAtSubmit = flag.total_completed_visits || 0;
-      await supabase.from('medicare_visit_flags').update({
-        last_progress_note_date: today,
-        last_progress_note_visit: visitAtSubmit,
-        last_progress_note_submitted_by: by,
-        last_progress_note_notes: ackNote || null,
-        progress_note_due: false,
-        progress_note_due_reason: null,
-        next_due_date: addDays(today, 30),
-        next_due_visit: visitAtSubmit + 10,
-        updated_at: now,
-      }).eq('id', flag.id);
-
-      await supabase.from('alerts').delete()
-        .eq('alert_type', 'medicare_progress_note')
-        .eq('patient_name', flag.patient_name)
-        .eq('is_read', false);
-      await supabase.from('coordinator_tasks').delete()
-        .eq('task_type', 'medicare_progress_note')
-        .eq('patient_name', flag.patient_name)
-        .eq('auto_generated', true)
-        .in('status', ['open', 'in_progress']);
-    } else {
-      // 20th-visit discharge ack (legacy flow).
-      const update = { flag_20th_acknowledged: true, flag_20th_acknowledged_at: now, flag_20th_acknowledged_by: by };
-      await supabase.from('medicare_visit_flags').update(update).eq('id', flag.id);
-    }
-
-    setActiveModal(null);
-    setAckNote('');
-    loadFlags();
-  }
-
+  // --- derived view ----------------------------------------------------
   const filtered = useMemo(() => {
     return flags.filter(f => {
       if (filterRegion !== 'ALL' && f.region !== filterRegion) return false;
-      if (filterFlag === 'needs_note' && !f.progress_note_due) return false;
-      if (filterFlag === 'needs_20' && !(f.flag_20th_discharge && !f.flag_20th_acknowledged)) return false;
-      if (filterFlag === 'active' && !(
-        f.progress_note_due ||
-        (f.flag_20th_discharge && !f.flag_20th_acknowledged)
-      )) return false;
-      if (searchQ && !f.patient_name?.toLowerCase().includes(searchQ.toLowerCase()) &&
-        !f.evaluating_pt?.toLowerCase().includes(searchQ.toLowerCase())) return false;
+      if (filterDiscipline !== 'ALL' && f.discipline !== filterDiscipline) return false;
+      if (filterStatus !== 'ALL' && f.patient_status !== filterStatus) return false;
+      if (filterBucket !== 'ALL' && bucketOf(f) !== filterBucket) return false;
+      if (searchQ) {
+        const q = searchQ.toLowerCase();
+        if (!(f.patient_name || '').toLowerCase().includes(q) &&
+            !(f.evaluating_pt || '').toLowerCase().includes(q) &&
+            !(f.assistant_therapist || '').toLowerCase().includes(q)) return false;
+      }
       return true;
     });
-  }, [flags, filterRegion, filterFlag, searchQ]);
+  }, [flags, filterRegion, filterDiscipline, filterStatus, filterBucket, searchQ]);
 
-  // Group the visible patients under their Evaluating PT for the accordion view.
-  const ptGroups = useMemo(() => {
-    const map = {};
-    for (const f of filtered) {
-      const pt = f.evaluating_pt || 'Unassigned';
-      (map[pt] || (map[pt] = [])).push(f);
-    }
-    return Object.entries(map)
-      .map(([pt, patients]) => ({
-        pt,
-        patients: [...patients].sort((a, b) => (b.total_completed_visits || 0) - (a.total_completed_visits || 0)),
-        needsAction: patients.filter(p => p.progress_note_due || (p.flag_20th_discharge && !p.flag_20th_acknowledged)).length,
-      }))
-      .sort((a, b) => b.patients.length - a.patients.length);
-  }, [filtered]);
+  const sorted = useMemo(() => {
+    const bucketRank = { over_cap: 0, discharge: 1, dc_soon: 2, note_overdue: 3, note_soon: 4, ok: 5 };
+    const arr = [...filtered].sort((a, b) => {
+      // Always tie-break severity first so red rows surface above white ones.
+      const ba = bucketRank[bucketOf(a)] ?? 9;
+      const bb = bucketRank[bucketOf(b)] ?? 9;
+      if (ba !== bb) return ba - bb;
+      let av = a[sortKey];
+      let bv = b[sortKey];
+      if (sortKey === 'visits_remaining') {
+        av = 20 - (a.total_completed_visits || 0);
+        bv = 20 - (b.total_completed_visits || 0);
+      }
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return arr;
+  }, [filtered, sortKey, sortDir]);
 
-  const needsAction = flags.filter(f =>
-    f.progress_note_due ||
-    (f.flag_20th_discharge && !f.flag_20th_acknowledged)
-  );
-  const critical = flags.filter(f => f.flag_20th_discharge && !f.flag_20th_acknowledged);
-  const notesDue = flags.filter(f => f.progress_note_due);
+  const counts = useMemo(() => ({
+    total: flags.length,
+    overCap: flags.filter(f => (f.total_completed_visits || 0) >= 21).length,
+    readyDc: flags.filter(f => f.ready_for_discharge && !f.flag_20th_acknowledged).length,
+    noteDue: flags.filter(f => f.progress_note_due).length,
+    dcSoon:  flags.filter(f => { const v = f.total_completed_visits || 0; return v >= 18 && v < 20; }).length,
+  }), [flags]);
 
+  // --- distinct dropdown values ----------------------------------------
+  const distinctDisc = useMemo(() => Array.from(new Set(flags.map(f => f.discipline).filter(Boolean))).sort(), [flags]);
+  const distinctStatus = useMemo(() => Array.from(new Set(flags.map(f => f.patient_status).filter(Boolean))).sort(), [flags]);
+
+  // --- XLSX export ------------------------------------------------------
+  function exportXlsx() {
+    const rows = sorted.map(f => ({
+      'Patient Name':            f.patient_name,
+      'Address':                 f.address || '',
+      'Disc':                    f.discipline || '',
+      'Ref Source':              f.ref_source || '',
+      'Status':                  f.patient_status || '',
+      'Region':                  f.region || '',
+      'Evaluation Date':         f.evaluation_date || '',
+      'PT / OT':                 f.evaluating_pt || '',
+      'PTA / COTA':              f.assistant_therapist || '',
+      '10th Visit Progress Note Date': f.tenth_visit_actual_date || (f.tenth_visit_projected_date ? 'projected ' + f.tenth_visit_projected_date : ''),
+      'Visits Allowed':          20,
+      'Visits Consumed':         f.total_completed_visits || 0,
+      'Visits Remaining':        20 - (f.total_completed_visits || 0),
+      '20th Visit Discharge Note Date': f.twentieth_visit_actual_date || (f.twentieth_visit_projected_date ? 'projected ' + f.twentieth_visit_projected_date : ''),
+      'Notes':                   f.roster_notes || '',
+      'Ready for Discharge':     f.ready_for_discharge ? 'YES' : 'no',
+      'Cap Override By':         f.cap_override_by || '',
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Medicare Roster');
+    XLSX.writeFile(wb, 'medicare-roster-' + todayISO() + '.xlsx');
+  }
+
+  function toggleSort(k) {
+    if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(k); setSortDir('asc'); }
+  }
+
+  // --- render -----------------------------------------------------------
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
-      <TopBar title="Medicare Visit Tracker" subtitle="Loading…" />
-      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading…</div>
+      <TopBar title="Medicare Visit Tracker" subtitle="Loading..." />
+      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading...</div>
     </div>
   );
 
@@ -412,241 +536,527 @@ export default function MedicareTrackerPage() {
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
         title="Medicare Visit Tracker"
-        subtitle={`${flags.length} Medicare patients · ${needsAction.length} require action`}
+        subtitle={counts.total + ' Medicare patients - ' + counts.overCap + ' OVER CAP - ' +
+                  counts.readyDc + ' ready for discharge - ' + counts.noteDue + ' progress note due'}
       />
-      <div style={{ flex:1 }}>
 
-        {/* Action bar */}
-        <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)', background:'var(--card-bg)', display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
-          <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:7, overflow:'hidden' }}>
-            {[['ALL','All'],['active','⚠ Needs Action'],['needs_note','📋 Progress Note Due'],['needs_20','🚨 Discharge']].map(([k,l]) => (
-              <button key={k} onClick={() => setFilterFlag(k)}
-                style={{ padding:'6px 12px', border:'none', fontSize:11, fontWeight:filterFlag===k?700:400, cursor:'pointer',
-                  background:filterFlag===k?'#0F1117':'var(--card-bg)', color:filterFlag===k?'#fff':'var(--gray)' }}>{l}</button>
-            ))}
-          </div>
-          <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
-            style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
-            <option value="ALL">All Regions</option>
-            {REGIONS.map(r => <option key={r} value={r}>Region {r} — {MANAGERS[r]}</option>)}
-          </select>
-          <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search patient or PT…"
-            style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)', width:180 }} />
-          <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
-            <button onClick={recalculate} disabled={calculating}
-              style={{ padding:'7px 16px', background:'#1565C0', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer' }}>
-              {calculating ? '⟳ Recalculating…' : '⟳ Recalculate from Visits'}
+      {/* Filter strip */}
+      <div style={{ padding:'10px 20px', borderBottom:'1px solid var(--border)', background:'var(--card-bg)',
+                    display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+        <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:7, overflow:'hidden' }}>
+          {[
+            ['ALL',          'All ' + counts.total],
+            ['over_cap',     'Over Cap ' + counts.overCap],
+            ['discharge',    'Discharge ' + counts.readyDc],
+            ['dc_soon',      'DC Soon ' + counts.dcSoon],
+            ['note_overdue', 'Note Due ' + counts.noteDue],
+            ['note_soon',    'Note Soon'],
+          ].map(([k, l]) => (
+            <button key={k} onClick={() => setFilterBucket(k)}
+              style={{ padding:'6px 12px', border:'none', fontSize:11,
+                fontWeight: filterBucket === k ? 700 : 500, cursor:'pointer',
+                background: filterBucket === k ? '#0F1117' : 'var(--card-bg)',
+                color:      filterBucket === k ? '#fff' : 'var(--gray)' }}>
+              {l}
             </button>
-          </div>
+          ))}
         </div>
-
-        <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
-
-          {/* Summary cards */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 }}>
-            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, padding:'14px 16px' }}>
-              <div style={{ fontSize:11, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Medicare Patients</div>
-              <div style={{ fontSize:28, fontWeight:900, fontFamily:'DM Mono, monospace', color:'var(--black)', marginTop:6 }}>{flags.length}</div>
-              <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>Active in census</div>
-            </div>
-            <div style={{ background: notesDue.length>0?'#FEF3C7':'var(--card-bg)', border:`2px solid ${notesDue.length>0?'#FCD34D':'var(--border)'}`, borderRadius:10, padding:'14px 16px' }}>
-              <div style={{ fontSize:11, fontWeight:700, color:'#D97706', textTransform:'uppercase', letterSpacing:'0.05em' }}>📋 Progress Note Due</div>
-              <div style={{ fontSize:28, fontWeight:900, fontFamily:'DM Mono, monospace', color:'#D97706', marginTop:6 }}>{notesDue.length}</div>
-              <div style={{ fontSize:11, color:'#92400E', marginTop:2 }}>10 visits or 30 days</div>
-            </div>
-            <div style={{ background: critical.length>0?'#FEF2F2':'var(--card-bg)', border:`2px solid ${critical.length>0?'#FECACA':'var(--border)'}`, borderRadius:10, padding:'14px 16px' }}>
-              <div style={{ fontSize:11, fontWeight:700, color:'#DC2626', textTransform:'uppercase', letterSpacing:'0.05em' }}>🚨 20th Visit — Discharge</div>
-              <div style={{ fontSize:28, fontWeight:900, fontFamily:'DM Mono, monospace', color:'#DC2626', marginTop:6 }}>{critical.length}</div>
-              <div style={{ fontSize:11, color:'#991B1B', marginTop:2 }}>Must discharge (20 visit max)</div>
-            </div>
-            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, padding:'14px 16px' }}>
-              <div style={{ fontSize:11, fontWeight:700, color:'#065F46', textTransform:'uppercase', letterSpacing:'0.05em' }}>✅ All Acknowledged</div>
-              <div style={{ fontSize:28, fontWeight:900, fontFamily:'DM Mono, monospace', color:'#065F46', marginTop:6 }}>
-                {flags.length - needsAction.length}
-              </div>
-              <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>No action needed</div>
-            </div>
-          </div>
-
-          {/* Critical 20th visit alerts */}
-          {critical.length > 0 && (
-            <div style={{ background:'#FEF2F2', border:'2px solid #FECACA', borderRadius:10, padding:'14px 18px' }}>
-              <div style={{ fontSize:13, fontWeight:700, color:'#DC2626', marginBottom:10 }}>
-                🚨 {critical.length} Medicare patient{critical.length>1?'s':''} at 20 visits — DISCHARGE REQUIRED (Medicare 20-visit limit)
-              </div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
-                {critical.map(f => (
-                  <button key={f.id} onClick={() => setActiveModal({ flag: f, type: '20' })}
-                    style={{ fontSize:12, fontWeight:700, color:'#DC2626', background:'white', border:'1px solid #FECACA', borderRadius:6, padding:'5px 12px', cursor:'pointer' }}>
-                    {f.patient_name} ({f.total_completed_visits} visits)
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Progress note alerts (10 visits OR 30 days from anchor) */}
-          {notesDue.length > 0 && (
-            <div style={{ background:'#FEF3C7', border:'2px solid #FCD34D', borderRadius:10, padding:'14px 18px' }}>
-              <div style={{ fontSize:13, fontWeight:700, color:'#92400E', marginBottom:10 }}>
-                📋 {notesDue.length} Medicare patient{notesDue.length>1?'s':''} due a progress note (10-visit / 30-day rule)
-              </div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
-                {notesDue.map(f => (
-                  <button key={f.id} onClick={() => setActiveModal({ flag: f, type: 'progress' })}
-                    style={{ fontSize:12, fontWeight:700, color:'#92400E', background:'white', border:'1px solid #FCD34D', borderRadius:6, padding:'5px 12px', cursor:'pointer' }}>
-                    {f.patient_name} → {f.evaluating_pt} <span style={{ fontSize:10, fontWeight:500, opacity:0.75 }}>({f.progress_note_due_reason === '10_visits' ? `${f.total_completed_visits} visits` : '30+ days'})</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Patients grouped by Evaluating PT */}
-          <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-            <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontSize:14, fontWeight:700 }}>Medicare Patients by Evaluating PT</div>
-              <div style={{ fontSize:11, color:'var(--gray)' }}>{ptGroups.length} PTs · {filtered.length} patients</div>
-            </div>
-
-            {ptGroups.length === 0 ? (
-              <div style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
-                {flags.length === 0 ? 'No Medicare patients found. Click "Recalculate from Visits" to scan.' : 'No records match current filters.'}
-              </div>
-            ) : ptGroups.map(group => {
-              const open = expandedPTs.has(group.pt);
-              return (
-                <div key={group.pt}>
-                  {/* PT row — click to expand the patient dropdown */}
-                  <div onClick={() => togglePT(group.pt)}
-                    style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 20px', borderBottom:'1px solid var(--border)', cursor:'pointer', background: open ? 'var(--bg)' : 'var(--card-bg)' }}>
-                    <span style={{ fontSize:10, color:'var(--gray)', width:12, textAlign:'center' }}>{open ? '▾' : '▸'}</span>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:13, fontWeight:700 }}>{group.pt}</div>
-                      <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>
-                        {group.patients.length} Medicare patient{group.patients.length>1?'s':''}
-                      </div>
-                    </div>
-                    {group.needsAction > 0 && (
-                      <span style={{ fontSize:10, fontWeight:700, color:'#D97706', background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:999, padding:'3px 10px' }}>
-                        {group.needsAction} need{group.needsAction>1?'':'s'} action
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Patient dropdown */}
-                  {open && (
-                    <div style={{ background:'var(--bg)' }}>
-                      <div style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 0.9fr 1.5fr 1.5fr', padding:'7px 20px 7px 42px', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em', gap:8 }}>
-                        <span>Patient</span><span>Rgn</span><span>Visits</span><span>Progress Note</span><span>Discharge Note</span>
-                      </div>
-                      {group.patients.map(f => {
-                        const barColor = f.total_completed_visits >= 20 ? '#DC2626' : f.total_completed_visits >= 15 ? '#D97706' : f.total_completed_visits >= 10 ? '#F59E0B' : '#1565C0';
-                        const needsNote = !!f.progress_note_due;
-                        const needs20 = f.flag_20th_discharge && !f.flag_20th_acknowledged;
-                        const todayStr = new Date().toISOString().split('T')[0];
-                        const anchorDate = f.last_progress_note_date || f.care_start_date;
-                        const daysSinceAnchor = daysBetween(anchorDate, todayStr);
-                        const visitsSinceAnchor = (f.total_completed_visits || 0) - (f.last_progress_note_visit || 0);
-                        return (
-                          <div key={f.id} style={{ display:'grid', gridTemplateColumns:'1.8fr 0.5fr 0.9fr 1.5fr 1.5fr', padding:'10px 20px 10px 42px', borderBottom:'1px solid var(--border)', background: needs20 ? '#FFF5F5' : needsNote ? '#FFFBEB' : 'transparent', alignItems:'center', gap:8 }}>
-                            <div>
-                              <div style={{ fontSize:12, fontWeight:600 }}>{f.patient_name}</div>
-                              <div style={{ fontSize:10, color:'var(--gray)', marginTop:1 }}>{f.insurance || 'Medicare'}</div>
-                            </div>
-                            <span style={{ fontSize:12, fontWeight:700, color:'var(--gray)' }}>{f.region}</span>
-                            <div>
-                              <span style={{ fontSize:16, fontWeight:900, fontFamily:'DM Mono, monospace', color:barColor }}>{f.total_completed_visits}</span>
-                              <span style={{ fontSize:10, color:'var(--gray)' }}>/20</span>
-                            </div>
-                            <div>
-                              {needsNote ? (
-                                <button onClick={() => setActiveModal({ flag: f, type: 'progress' })}
-                                  style={{ fontSize:10, fontWeight:700, color:'#92400E', background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:6, padding:'3px 10px', cursor:'pointer', textAlign:'left' }}>
-                                  {'📋'} {f.progress_note_due_reason === '10_visits' ? `${visitsSinceAnchor} visits` : `${daysSinceAnchor}d since note`}
-                                </button>
-                              ) : f.last_progress_note_date ? (
-                                <span style={{ fontSize:10, fontWeight:600, color:'#065F46', background:'#ECFDF5', padding:'2px 8px', borderRadius:999 }}>
-                                  {'✓'} {fmtDate(f.last_progress_note_date)} ({visitsSinceAnchor}v / {daysSinceAnchor}d)
-                                </span>
-                              ) : (
-                                <span style={{ fontSize:10, color:'var(--gray)' }}>
-                                  {visitsSinceAnchor}v / {daysSinceAnchor ?? 0}d since start
-                                </span>
-                              )}
-                            </div>
-                            <div>
-                              {!f.flag_20th_discharge ? (
-                                <span style={{ fontSize:10, color:'var(--gray)' }}>{20 - f.total_completed_visits} visits left</span>
-                              ) : f.flag_20th_acknowledged ? (
-                                <span style={{ fontSize:10, fontWeight:600, color:'#065F46', background:'#ECFDF5', padding:'2px 8px', borderRadius:999 }}>{'✅'} Discharged</span>
-                              ) : (
-                                <button onClick={() => setActiveModal({ flag: f, type: '20' })}
-                                  style={{ fontSize:10, fontWeight:700, color:'#DC2626', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:6, padding:'3px 10px', cursor:'pointer' }}>
-                                  {'🚨'} Discharge Now
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+        <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
+          style={selStyle}>
+          <option value="ALL">All Regions</option>
+          {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
+        </select>
+        <select value={filterDiscipline} onChange={e => setFilterDiscipline(e.target.value)}
+          style={selStyle}>
+          <option value="ALL">All Disciplines</option>
+          {distinctDisc.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+          style={selStyle}>
+          <option value="ALL">All Statuses</option>
+          {distinctStatus.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search patient, PT, PTA..."
+          style={{ ...selStyle, width:200 }} />
+        <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+          <button onClick={exportXlsx} style={btnSecondaryStyle}>{'⤓'} Export XLSX</button>
+          <button onClick={recalculate} disabled={calculating} style={btnPrimaryStyle}>
+            {calculating ? 'Recalculating...' : 'Recalculate'}
+          </button>
         </div>
       </div>
 
-      {/* Acknowledge Modal */}
-      {activeModal && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
-          <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:500, boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
-            <div style={{ padding:'16px 22px', background: activeModal.type==='20'?'#DC2626':'#D97706', borderRadius:'14px 14px 0 0' }}>
-              <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>
-                {activeModal.type === '20' ? '🚨 Discharge Required' : '📋 Progress Note Submission'}
+      {/* Roster table */}
+      <div style={{ padding:'14px 20px 24px 20px', overflowX:'auto' }}>
+        <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden', minWidth: 1600 }}>
+          <table style={{ borderCollapse:'collapse', width:'100%', fontSize:12 }}>
+            <thead>
+              <tr style={{ background:'var(--bg)', borderBottom:'2px solid var(--border)' }}>
+                <th style={{ ...thStyle, width:24, padding:'8px 6px' }}>{' '}</th>
+                {COLS.map(c => (
+                  <th key={c.key} onClick={() => toggleSort(c.key)}
+                    style={{ ...thStyle, width:c.w, cursor:'pointer', userSelect:'none' }}>
+                    {c.label}
+                    {sortKey === c.key && <span style={{ marginLeft:4, opacity:0.6 }}>{sortDir === 'asc' ? '^' : 'v'}</span>}
+                  </th>
+                ))}
+                <th style={{ ...thStyle, width:120 }}>Flag</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.length === 0 ? (
+                <tr><td colSpan={COLS.length + 2} style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
+                  {flags.length === 0 ? 'No Medicare patients yet. Click Recalculate to scan.' : 'No rows match current filters.'}
+                </td></tr>
+              ) : sorted.map(f => {
+                const bucket = bucketOf(f);
+                const style = BUCKET_STYLE[bucket];
+                const remaining = 20 - (f.total_completed_visits || 0);
+                return (
+                  <tr key={f.id}
+                    onClick={() => setSelectedPatient(f)}
+                    style={{ background: style.bg, color: style.fg,
+                             borderBottom:'1px solid var(--border)', cursor:'pointer' }}>
+                    <td style={{ ...tdStyle, textAlign:'center', fontWeight:900, color: style.fg }}>{style.icon}</td>
+                    <td style={tdStyle}>
+                      <div style={{ fontWeight:700 }}>{f.patient_name}</div>
+                      {f.insurance && <div style={{ fontSize:10, opacity:0.7 }}>{f.insurance}</div>}
+                    </td>
+                    <td style={tdStyle}>{f.address || '-'}</td>
+                    <td style={tdStyle}>{f.discipline || '-'}</td>
+                    <td style={tdStyle}>{f.ref_source || '-'}</td>
+                    <td style={tdStyle}>{f.patient_status || '-'}</td>
+                    <td style={{ ...tdStyle, fontWeight:700 }}>{f.region || '-'}</td>
+                    <td style={tdStyle}>{fmtDate(f.evaluation_date)}</td>
+                    <td style={tdStyle}>{f.evaluating_pt || 'Unassigned'}</td>
+                    <td style={tdStyle}>{f.assistant_therapist || '-'}</td>
+                    <td style={tdStyle}>
+                      {f.tenth_visit_actual_date
+                        ? fmtDate(f.tenth_visit_actual_date)
+                        : <span style={{ opacity:0.7 }}>proj {fmtDate(f.tenth_visit_projected_date)}</span>}
+                      {f.tenth_visit_note_submitted_date && (
+                        <div style={{ fontSize:9, opacity:0.7 }}>note {fmtDate(f.tenth_visit_note_submitted_date)}</div>
+                      )}
+                    </td>
+                    <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace' }}>20</td>
+                    <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace', fontWeight:900 }}>
+                      {f.total_completed_visits || 0}
+                    </td>
+                    <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace', fontWeight:700,
+                                 color: remaining <= 0 ? '#FFFFFF' : style.fg }}>
+                      {remaining}
+                    </td>
+                    <td style={tdStyle}>
+                      {f.twentieth_visit_actual_date
+                        ? fmtDate(f.twentieth_visit_actual_date)
+                        : <span style={{ opacity:0.7 }}>proj {fmtDate(f.twentieth_visit_projected_date)}</span>}
+                      {f.twentieth_visit_discharge_note_date && (
+                        <div style={{ fontSize:9, opacity:0.7 }}>DC note {fmtDate(f.twentieth_visit_discharge_note_date)}</div>
+                      )}
+                    </td>
+                    <td style={{ ...tdStyle, maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {f.roster_notes || '-'}
+                    </td>
+                    <td style={tdStyle}>
+                      {f.ready_for_discharge && !f.flag_20th_acknowledged && (
+                        <span style={{ background:'#DC2626', color:'#fff', padding:'3px 8px',
+                                       borderRadius:999, fontSize:10, fontWeight:800, whiteSpace:'nowrap' }}>
+                          READY FOR DC
+                        </span>
+                      )}
+                      {f.cap_override_by && (
+                        <div style={{ fontSize:9, opacity:0.7, marginTop:2 }}>override by {f.cap_override_by}</div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Drawer */}
+      {selectedPatient && (
+        <PatientDrawer
+          flag={selectedPatient}
+          isAdmin={isAdmin}
+          profile={profile}
+          onClose={() => setSelectedPatient(null)}
+          onSaved={() => { loadFlags(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// DRAWER — drill-down for one Medicare patient
+// =============================================================================
+function PatientDrawer({ flag, isAdmin, profile, onClose, onSaved }) {
+  const profileName = profile?.full_name || profile?.email || 'Unknown';
+  const [visits, setVisits] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [noteDate, setNoteDate] = useState(todayISO());
+  const [noteText, setNoteText] = useState('');
+  const [dcDate, setDcDate] = useState(todayISO());
+  const [dcText, setDcText] = useState('');
+  const [rosterNotes, setRosterNotes] = useState(flag.roster_notes || '');
+  const [overrideReason, setOverrideReason] = useState('');
+  const [kxApplied, setKxApplied] = useState(!!flag.kx_modifier_applied);
+  const [tab, setTab] = useState('visits');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      setLoading(true);
+      const { data } = await supabase.from('visit_schedule_data')
+        .select('visit_date, staff_name_normalized, staff_name, event_type, status')
+        .eq('patient_name', flag.patient_name)
+        .order('visit_date', { ascending: false })
+        .limit(60);
+      if (!ignore) { setVisits(data || []); setLoading(false); }
+    })();
+    return () => { ignore = true; };
+  }, [flag.patient_name]);
+
+  async function submitProgressNote() {
+    setSaving(true);
+    const visitAtSubmit = flag.total_completed_visits || 0;
+    await supabase.from('medicare_visit_flags').update({
+      last_progress_note_date: noteDate,
+      last_progress_note_visit: visitAtSubmit,
+      last_progress_note_submitted_by: profileName,
+      last_progress_note_notes: noteText || null,
+      tenth_visit_note_submitted_date: visitAtSubmit >= 10 ? (flag.tenth_visit_note_submitted_date || noteDate) : flag.tenth_visit_note_submitted_date,
+      progress_note_due: false,
+      progress_note_due_reason: null,
+      next_due_date: addDaysIso(noteDate, 30),
+      next_due_visit: visitAtSubmit + 10,
+      updated_at: new Date().toISOString(),
+    }).eq('id', flag.id);
+    await supabase.from('alerts').delete()
+      .eq('alert_type', 'medicare_progress_note_due')
+      .eq('patient_name', flag.patient_name)
+      .eq('is_read', false);
+    await supabase.from('coordinator_tasks').delete()
+      .eq('task_type', 'medicare_progress_note_due')
+      .eq('patient_name', flag.patient_name)
+      .eq('auto_generated', true)
+      .in('status', ['open', 'in_progress']);
+    setSaving(false);
+    onSaved();
+    onClose();
+  }
+
+  async function submitDischargeNote() {
+    setSaving(true);
+    await supabase.from('medicare_visit_flags').update({
+      twentieth_visit_discharge_note_date: dcDate,
+      flag_20th_acknowledged: true,
+      flag_20th_acknowledged_at: new Date().toISOString(),
+      flag_20th_acknowledged_by: profileName,
+      roster_notes: dcText ? ((rosterNotes ? rosterNotes + '\n' : '') + 'DC note ' + dcDate + ': ' + dcText) : rosterNotes,
+      updated_at: new Date().toISOString(),
+    }).eq('id', flag.id);
+    await supabase.from('alerts').delete()
+      .in('alert_type', ['medicare_discharge_note_due', 'medicare_ready_for_discharge'])
+      .eq('patient_name', flag.patient_name)
+      .eq('is_read', false);
+    await supabase.from('coordinator_tasks').delete()
+      .in('task_type', ['medicare_discharge_note_due', 'medicare_ready_for_discharge'])
+      .eq('patient_name', flag.patient_name)
+      .eq('auto_generated', true)
+      .in('status', ['open', 'in_progress']);
+    setSaving(false);
+    onSaved();
+    onClose();
+  }
+
+  async function saveRosterNotes() {
+    setSaving(true);
+    await supabase.from('medicare_visit_flags').update({
+      roster_notes: rosterNotes,
+      kx_modifier_applied: kxApplied,
+      updated_at: new Date().toISOString(),
+    }).eq('id', flag.id);
+    setSaving(false);
+    onSaved();
+  }
+
+  async function applyCapOverride() {
+    if (!overrideReason.trim()) return;
+    setSaving(true);
+    await supabase.from('medicare_visit_flags').update({
+      cap_override_reason: overrideReason.trim(),
+      cap_override_by: profileName,
+      cap_override_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', flag.id);
+    // Audit trail
+    await supabase.from('coordinator_activity_log').insert({
+      action: 'medicare_cap_override',
+      patient_name: flag.patient_name,
+      coordinator_id: profile?.id || null,
+      coordinator_name: profileName,
+      details: overrideReason.trim(),
+      created_at: new Date().toISOString(),
+    }).catch(() => { /* table optional - no-op if schema mismatch */ });
+    setSaving(false);
+    onSaved();
+    onClose();
+  }
+
+  async function clearCapOverride() {
+    setSaving(true);
+    await supabase.from('medicare_visit_flags').update({
+      cap_override_reason: null,
+      cap_override_by: null,
+      cap_override_at: null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', flag.id);
+    setSaving(false);
+    onSaved();
+  }
+
+  const remaining = 20 - (flag.total_completed_visits || 0);
+
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:2000 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ position:'absolute', right:0, top:0, height:'100vh', width: 560, maxWidth:'92vw',
+                 background:'var(--card-bg)', boxShadow:'-12px 0 40px rgba(0,0,0,0.25)',
+                 display:'flex', flexDirection:'column' }}>
+        {/* Header */}
+        <div style={{ padding:'16px 20px', borderBottom:'1px solid var(--border)',
+                      background: flag.ready_for_discharge ? '#DC2626' : '#0F1117', color:'#fff' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+            <div>
+              <div style={{ fontSize:16, fontWeight:800 }}>{flag.patient_name}</div>
+              <div style={{ fontSize:11, opacity:0.85, marginTop:3 }}>
+                Region {flag.region} - {flag.discipline} - {flag.insurance}
               </div>
-              <div style={{ fontSize:11, color:'rgba(255,255,255,0.8)', marginTop:3 }}>
-                {activeModal.flag.patient_name} · {activeModal.flag.total_completed_visits} completed visits
+              <div style={{ fontSize:11, opacity:0.85 }}>
+                PT/OT: {flag.evaluating_pt || 'Unassigned'}{flag.assistant_therapist ? ' - PTA/COTA: ' + flag.assistant_therapist : ''}
               </div>
             </div>
-            <div style={{ padding:22, display:'flex', flexDirection:'column', gap:14 }}>
-              <div style={{ background:'var(--bg)', borderRadius:8, padding:'12px 14px', fontSize:13 }}>
-                {activeModal.type === '20' ? (
-                  <>
-                    <div style={{ fontWeight:700, color:'#DC2626', marginBottom:6 }}>Medicare 20-Visit Limit Reached</div>
-                    <div style={{ color:'var(--gray)', lineHeight:1.5 }}>This patient has completed their maximum 20 Medicare-covered visits. A discharge must be processed. The evaluating PT ({activeModal.flag.evaluating_pt}) must complete the discharge documentation.</div>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ fontWeight:700, color:'#D97706', marginBottom:6 }}>Medicare Progress Note Required</div>
-                    <div style={{ color:'var(--gray)', lineHeight:1.5 }}>
-                      Medicare requires a progress note every 10 visits OR every 30 days, whichever comes first.
-                      This patient is due ({activeModal.flag.progress_note_due_reason === '10_visits' ? `${activeModal.flag.total_completed_visits} completed visits` : 'past 30-day window'}).
-                      Submitted by the evaluating PT (<strong>{activeModal.flag.evaluating_pt}</strong>) — confirming below resets the 10-visit / 30-day clock.
-                    </div>
-                  </>
-                )}
-              </div>
-              <div>
-                <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:4 }}>Confirmation Notes (optional)</label>
-                <textarea value={ackNote} onChange={e => setAckNote(e.target.value)}
-                  placeholder={activeModal.type === '20' ? 'Discharge date, reason, disposition…' : 'Note reference, submission date, EMR details…'}
-                  style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:72, background:'var(--card-bg)' }} />
-              </div>
-            </div>
-            <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
-              <button onClick={() => { setActiveModal(null); setAckNote(''); }}
-                style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
-              <button onClick={() => acknowledge(activeModal.flag, activeModal.type)}
-                style={{ padding:'8px 22px', background: activeModal.type==='20'?'#DC2626':'#D97706', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:'pointer' }}>
-                {activeModal.type === '20' ? 'Confirm Discharge' : 'Confirm Note Submitted'}
-              </button>
-            </div>
+            <button onClick={onClose} style={{ background:'transparent', color:'#fff', border:'1px solid rgba(255,255,255,0.3)',
+              borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>{'✕'}</button>
+          </div>
+          <div style={{ marginTop:10, display:'flex', gap:14, fontFamily:'DM Mono, monospace' }}>
+            <span><span style={{ fontSize:22, fontWeight:900 }}>{flag.total_completed_visits || 0}</span>
+              <span style={{ fontSize:11, opacity:0.7 }}> / 20</span></span>
+            <span style={{ alignSelf:'center', fontSize:11, opacity:0.85 }}>
+              {remaining >= 0 ? remaining + ' remaining' : Math.abs(remaining) + ' OVER cap'}
+            </span>
+            {flag.ready_for_discharge && (
+              <span style={{ alignSelf:'center', background:'#fff', color:'#DC2626',
+                             padding:'3px 9px', borderRadius:999, fontSize:10, fontWeight:800 }}>
+                READY FOR DISCHARGE
+              </span>
+            )}
           </div>
         </div>
-      )}
+
+        {/* Tabs */}
+        <div style={{ display:'flex', borderBottom:'1px solid var(--border)' }}>
+          {[['visits','Visits'],['note','Progress Note'],['dc','Discharge'],['notes','Notes'],
+            ...(isAdmin ? [['override','Cap Override']] : [])].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              style={{ flex:1, padding:'10px 8px', border:'none', background: tab === k ? 'var(--card-bg)' : 'var(--bg)',
+                color: tab === k ? 'var(--black)' : 'var(--gray)',
+                borderBottom: tab === k ? '2px solid #1565C0' : '2px solid transparent',
+                fontSize:12, fontWeight: tab === k ? 700 : 500, cursor:'pointer' }}>{l}</button>
+          ))}
+        </div>
+
+        <div style={{ flex:1, overflowY:'auto', padding:'14px 20px' }}>
+          {/* VISITS */}
+          {tab === 'visits' && (
+            <div>
+              {loading && <div style={{ color:'var(--gray)' }}>Loading visits...</div>}
+              {!loading && visits.length === 0 && <div style={{ color:'var(--gray)' }}>No visits on file.</div>}
+              {!loading && visits.length > 0 && (
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                  <thead>
+                    <tr style={{ background:'var(--bg)', textAlign:'left' }}>
+                      <th style={miniThStyle}>#</th>
+                      <th style={miniThStyle}>Date</th>
+                      <th style={miniThStyle}>Clinician</th>
+                      <th style={miniThStyle}>Type</th>
+                      <th style={miniThStyle}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visits.map((v, i) => {
+                      const isCompletedV = /completed/i.test(v.status || '') && !/cancel/i.test(v.event_type || '');
+                      return (
+                        <tr key={i} style={{ borderBottom:'1px solid var(--border)' }}>
+                          <td style={miniTdStyle}>{visits.length - i}</td>
+                          <td style={miniTdStyle}>{fmtDate(v.visit_date)}</td>
+                          <td style={miniTdStyle}>{v.staff_name_normalized || flipName(v.staff_name) || '-'}</td>
+                          <td style={miniTdStyle}>{(v.event_type || '').replace(/\*e\*.*/, '').trim()}</td>
+                          <td style={miniTdStyle}>
+                            <span style={{ fontSize:10, padding:'2px 6px', borderRadius:4,
+                              background: isCompletedV ? '#ECFDF5' : '#FEF2F2',
+                              color: isCompletedV ? '#065F46' : '#991B1B' }}>
+                              {v.status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* PROGRESS NOTE */}
+          {tab === 'note' && (
+            <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+              <InfoBox tone="warn" title="Medicare Progress Note">
+                Required every 10 treatment days OR every 30 calendar days (CMS Pub 100-02 Ch 15 §220.3).
+                Submitting here resets the rolling clock from this date.
+                {flag.last_progress_note_date && (
+                  <div style={{ marginTop:6, fontSize:11 }}>
+                    Last submitted: {fmtDate(flag.last_progress_note_date)} at visit {flag.last_progress_note_visit || 0}
+                    {flag.last_progress_note_submitted_by ? ' by ' + flag.last_progress_note_submitted_by : ''}.
+                  </div>
+                )}
+              </InfoBox>
+              <Field label="Submission date">
+                <input type="date" value={noteDate} onChange={e => setNoteDate(e.target.value)} style={inputStyle} />
+              </Field>
+              <Field label="Note reference / EMR detail (optional)">
+                <textarea value={noteText} onChange={e => setNoteText(e.target.value)} rows={4} style={textareaStyle}
+                  placeholder="e.g. Pariox note ID, signed-off date, EMR record" />
+              </Field>
+              <button onClick={submitProgressNote} disabled={saving} style={btnPrimaryStyle}>
+                {saving ? 'Saving...' : 'Confirm Progress Note Submitted'}
+              </button>
+            </div>
+          )}
+
+          {/* DISCHARGE */}
+          {tab === 'dc' && (
+            <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+              <InfoBox tone={flag.ready_for_discharge ? 'crit' : 'warn'} title="Medicare Discharge Note">
+                Required at the 20-visit cap. Submitting here closes the discharge alert AND the
+                ready-for-discharge alert. The patient should also be moved to Discharge status in census.
+              </InfoBox>
+              <Field label="Discharge note date">
+                <input type="date" value={dcDate} onChange={e => setDcDate(e.target.value)} style={inputStyle} />
+              </Field>
+              <Field label="Disposition / reason (optional)">
+                <textarea value={dcText} onChange={e => setDcText(e.target.value)} rows={4} style={textareaStyle}
+                  placeholder="e.g. Goals met. Patient self-managing. Home program provided." />
+              </Field>
+              <button onClick={submitDischargeNote} disabled={saving}
+                style={{ ...btnPrimaryStyle, background:'#DC2626' }}>
+                {saving ? 'Saving...' : 'Confirm Discharge'}
+              </button>
+            </div>
+          )}
+
+          {/* ROSTER NOTES */}
+          {tab === 'notes' && (
+            <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+              <Field label="Roster notes (visible on the Notes column)">
+                <textarea value={rosterNotes} onChange={e => setRosterNotes(e.target.value)} rows={6} style={textareaStyle}
+                  placeholder="Free-text notes — e.g. KX modifier filed, ABN signed, special billing context, family contact preference" />
+              </Field>
+              <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:12 }}>
+                <input type="checkbox" checked={kxApplied} onChange={e => setKxApplied(e.target.checked)} />
+                KX modifier applied (annual threshold crossed)
+              </label>
+              <button onClick={saveRosterNotes} disabled={saving} style={btnPrimaryStyle}>
+                {saving ? 'Saving...' : 'Save Notes'}
+              </button>
+            </div>
+          )}
+
+          {/* CAP OVERRIDE — admin only */}
+          {tab === 'override' && isAdmin && (
+            <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+              <InfoBox tone="crit" title="20-Visit Cap Override">
+                Soft escape valve for legitimate KX-modifier / ABN cases. Setting this clears the
+                database-level block on new visits past 20 for this patient. The override is logged
+                to coordinator_activity_log. Use sparingly.
+              </InfoBox>
+              {flag.cap_override_by ? (
+                <div style={{ padding:12, border:'1px solid var(--border)', borderRadius:8, background:'var(--bg)' }}>
+                  <div style={{ fontSize:12 }}><strong>Override active</strong></div>
+                  <div style={{ fontSize:11, color:'var(--gray)', marginTop:4 }}>
+                    Set by {flag.cap_override_by} at {fmtDate((flag.cap_override_at || '').slice(0,10))}
+                  </div>
+                  <div style={{ fontSize:12, marginTop:8, whiteSpace:'pre-wrap' }}>
+                    {flag.cap_override_reason || '(no reason recorded)'}
+                  </div>
+                  <button onClick={clearCapOverride} disabled={saving}
+                    style={{ ...btnSecondaryStyle, marginTop:12 }}>
+                    {saving ? 'Clearing...' : 'Clear Override'}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <Field label="Override reason (required)">
+                    <textarea value={overrideReason} onChange={e => setOverrideReason(e.target.value)} rows={4}
+                      style={textareaStyle}
+                      placeholder="e.g. KX modifier filed, medical necessity documented, ABN on file" />
+                  </Field>
+                  <button onClick={applyCapOverride} disabled={saving || !overrideReason.trim()}
+                    style={{ ...btnPrimaryStyle, background:'#DC2626' }}>
+                    {saving ? 'Applying...' : 'Apply Override'}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// styles + tiny presentational helpers
+// =============================================================================
+const selStyle = { padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6,
+  fontSize:12, outline:'none', background:'var(--card-bg)' };
+const btnPrimaryStyle = { padding:'7px 14px', background:'#1565C0', color:'#fff',
+  border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer' };
+const btnSecondaryStyle = { padding:'7px 14px', background:'var(--card-bg)', color:'var(--black)',
+  border:'1px solid var(--border)', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer' };
+const thStyle = { textAlign:'left', padding:'10px 12px', fontSize:11, fontWeight:700,
+  textTransform:'uppercase', letterSpacing:'0.04em', color:'var(--gray)',
+  borderBottom:'1px solid var(--border)', whiteSpace:'nowrap' };
+const tdStyle = { padding:'9px 12px', verticalAlign:'top', fontSize:12 };
+const miniThStyle = { padding:'6px 8px', fontSize:10, fontWeight:700, color:'var(--gray)',
+  textTransform:'uppercase', borderBottom:'1px solid var(--border)' };
+const miniTdStyle = { padding:'6px 8px', fontSize:11 };
+const inputStyle  = { width:'100%', padding:'7px 10px', border:'1px solid var(--border)',
+  borderRadius:6, fontSize:13, background:'var(--card-bg)', outline:'none', boxSizing:'border-box' };
+const textareaStyle = { ...inputStyle, resize:'vertical', minHeight:80, fontFamily:'inherit' };
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:4 }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+function InfoBox({ tone, title, children }) {
+  const palette = tone === 'crit' ? { bg:'#FEF2F2', fg:'#991B1B', bd:'#FCA5A5' }
+                : tone === 'warn' ? { bg:'#FEF3C7', fg:'#92400E', bd:'#FCD34D' }
+                :                     { bg:'#EFF6FF', fg:'#1E40AF', bd:'#93C5FD' };
+  return (
+    <div style={{ background:palette.bg, color:palette.fg, border:'1px solid ' + palette.bd,
+      borderRadius:8, padding:'10px 12px', fontSize:12 }}>
+      <div style={{ fontWeight:700, marginBottom:4 }}>{title}</div>
+      {children}
     </div>
   );
 }

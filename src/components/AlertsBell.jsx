@@ -20,6 +20,15 @@ var TYPE_ICONS = {
   productivity_low: '\uD83D\uDCC9',
   auth_activated: '\u2705',
   patient_discharged_hospital: '\uD83C\uDFE0',
+  // Medicare tracker (Phase 2, 2026-06-01). Three operational signals so the
+  // bell badge tells the coordinator which workflow fired without expanding
+  // the panel. Legacy `medicare_progress_note` retained for the 119 alerts
+  // already in the alerts table on the day this shipped.
+  medicare_progress_note:          '\uD83D\uDCCB', // clipboard (legacy)
+  medicare_progress_note_due:      '\uD83D\uDCCB', // clipboard
+  medicare_discharge_note_due:     '\uD83D\uDCC4', // page with curl
+  medicare_ready_for_discharge:    '\uD83D\uDED1', // stop sign
+  medicare_over_cap:               '\u26D4',       // no-entry
 };
  
 export default function AlertsBell() {
