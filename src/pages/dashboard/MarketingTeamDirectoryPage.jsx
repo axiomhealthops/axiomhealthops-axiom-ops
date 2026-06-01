@@ -238,17 +238,22 @@ export default function MarketingTeamDirectoryPage({ onNavigate }) {
     let mounted = true;
     async function load() {
       setLoading(true);
-      const { data, error } = await fetchAllPages(
-        supabase.from('v_marketing_team_directory').select('*')
-      );
-      if (!mounted) return;
-      if (error) {
-        console.error('Marketing Team Directory load error:', error);
-        setRows([]);
-      } else {
-        setRows(data || []);
+      try {
+        // fetchAllPages returns the rows array directly (Promise<any[]>),
+        // NOT a { data, error } object. Bug-fix 2026-05-30: prior version
+        // destructured as { data, error } which silently set data=undefined
+        // and rendered "0 team members" even though the DB had all 16 rows.
+        const rowsArr = await fetchAllPages(
+          supabase.from('v_marketing_team_directory').select('*')
+        );
+        if (!mounted) return;
+        setRows(Array.isArray(rowsArr) ? rowsArr : []);
+      } catch (err) {
+        console.error('Marketing Team Directory load error:', err);
+        if (mounted) setRows([]);
+      } finally {
+        if (mounted) setLoading(false);
       }
-      setLoading(false);
     }
     load();
     return () => { mounted = false; };
