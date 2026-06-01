@@ -33,7 +33,7 @@ export function getWeekDays(anchor) {
 
 // =====================================================================
 // Canonical week-range helpers — added 2026-05-17 per Liam.
-// AxiomHealth's work week is SUNDAY → SATURDAY (NOT Mon-Sun).
+// EdemaCare's work week is SUNDAY → SATURDAY (NOT Mon-Sun).
 // Always use these helpers in dashboards/reports so weeks stay aligned
 // across the whole system. Never hand-roll the day-of-week math again.
 // =====================================================================

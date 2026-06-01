@@ -4,8 +4,9 @@ import { supabase, fetchAllPages } from '../../lib/supabase';
 import { getWeekRange } from '../../lib/dateUtils';
 import { useAuth } from '../../hooks/useAuth.jsx';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-
-const BLENDED_RATE = 230;
+// 2026-05-31: Even when the local value matches canonical, import from visitMath
+// so a future rate change in one place updates every page.
+import { BLENDED_RATE } from '../../lib/visitMath';
 
 function fmt$(n) { return '$' + Math.round(n).toLocaleString(); }
 function daysAgo(d) {

@@ -1,10 +1,15 @@
 # Marketing CRM Outreach Tracker — Phase 1 Audit + Phase 2 Design
 
+> **Naming note (2026-06-01):** "EdemaCare" is the public-facing brand. "AxiomHealth
+> Management" remains the legal entity. Employee email addresses on
+> `@axiomhealthmanagement.com` (listed below) stay on that domain — the email migration
+> is a Phase 3 IT project. EdemaCare is a service of AxiomHealth Management LLC.
+
 **Author:** Claude (top-0.1% business-advisor mode, per Liam's instruction)
 **Date:** 2026-05-29 (updated same day after roster cleanup pass)
 **Status:** PROPOSAL — no code written. Blocker #1 (roster) resolved. 5 blockers remain.
 **Repo:** `~/Documents/GitHub/edemacare-ops`
-**Supabase project:** `axiom-ops` (`kndiyailsqrialgbozac`)
+**Supabase project:** `axiom-ops` (`kndiyailsqrialgbozac`) — internal code-level identifier; the public-facing brand is EdemaCare.
 
 ---
 

@@ -58,21 +58,10 @@ import {
   FL_PARENT_REGIONS,
   isActingManager,
 } from '../../lib/constants';
-
-// ---- date helpers (Sun-Sat work week, ET) ---------------------------------
-function getWeekStart(date) {
-  const d = new Date(date);
-  const day = d.getDay();
-  d.setDate(d.getDate() - day); // back up to Sunday
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-function getWeekEnd(weekStart) {
-  const d = new Date(weekStart);
-  d.setDate(d.getDate() + 6);
-  d.setHours(23, 59, 59, 999);
-  return d;
-}
+// 2026-05-31: consolidated hand-rolled getWeekStart/getWeekEnd to the canonical
+// Sun-Sat helpers from dateUtils. Math was already Sun-Sat — this just kills the
+// drift surface so a future change in one place updates every dashboard.
+import { getWeekStart, getWeekEnd } from '../../lib/dateUtils';
 function fmtDate(d) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }

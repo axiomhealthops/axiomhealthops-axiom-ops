@@ -1070,9 +1070,9 @@ export default function CoordinatorPage(props) {
       {/* Header */}
       <div style={{ background: '#0F1117', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 8, background: '#D94F2B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: '#fff' }}>A</div>
+          <div style={{ width: 36, height: 36, borderRadius: 8, background: '#D94F2B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: '#fff' }}>E</div>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>AxiomHealth</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>EdemaCare</div>
             <div style={{ fontSize: 11, color: '#6B7280' }}>Care Coordinator</div>
           </div>
         </div>

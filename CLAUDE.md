@@ -1,7 +1,30 @@
 # EdemaCare Operations System
 
-React + Vite + Supabase healthcare operations dashboard for AxiomHealth (rebranding to EdemaCare).
+React + Vite + Supabase healthcare operations dashboard for **EdemaCare** (the public-facing
+brand / d/b/a as of 2026-06-01). The underlying legal entity is **AxiomHealth Management LLC**.
 Deploys to Vercel automatically from the `main` branch within ~60 seconds of a push.
+
+---
+
+## Brand naming conventions — read before renaming anything
+
+The 2026-06-01 rebrand was a **DBA only** — AxiomHealth Management LLC remains the legal
+entity. That means there are three distinct ways the old name still appears in this
+codebase, and they have different rules:
+
+| What | Status | Example | Rule |
+|---|---|---|---|
+| **Public brand (user-visible)** | Renamed to EdemaCare | UI strings, page titles, email subjects, PDF/XLSX headers, sidebar logo | If a user reads it, it says "EdemaCare". |
+| **Legal entity (footer fine print)** | Stays "AxiomHealth Management LLC" | Login footer, sidebar footer, edge-function email footers, invoices, contracts, 1099s | Single legal-line disclosure: "EdemaCare is a service of AxiomHealth Management LLC". |
+| **Code-internal identifiers** | Stays AHM / axiomhealth | `package.json` name "axiomhealth-ops", Vercel project `axiomhealthops-axiom-ops`, GitHub org/repo, Supabase project `axiom-ops`, `axiomhealthops-axiom-ops.vercel.app` URL hardcoded in 3 places, Resend FROM mailboxes `@axiomhealthmanagement.com`, employee email addresses, historical DB rows | Do NOT rename. These are infrastructure / identifier-level and renaming them cascades into broken URLs, broken auth, and broken email delivery. Phase 3 cleanup. |
+
+**Out-of-scope for any "rebrand cleanup" task without explicit Liam sign-off:**
+- The 22 `coordinators.email` rows on `@axiomhealthmanagement.com`
+- The Vercel canonical URL `axiomhealthops-axiom-ops.vercel.app`
+- The Resend sender domain `axiomhealthmanagement.com` (DKIM/SPF is verified there, not on edemacare.com)
+- Historical `daily_ops_reports.report_html` (114 rows) and `patient_notes.note_text` (58 rows) that contain "AxiomHealth" — these are audit trail and rewriting them is falsification.
+- Database table / column / function / enum / view names
+- Git history
 
 ---
 

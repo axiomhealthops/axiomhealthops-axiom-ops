@@ -3,8 +3,12 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-
-const RATE = 230;
+// 2026-05-31: consolidated hand-rolled getWeekStart to the canonical Sun-Sat
+// helper from dateUtils, and imported BLENDED_RATE from visitMath instead of
+// a local RATE=230 constant. Math was already correct — this kills the drift
+// surface.
+import { getWeekStart as canonicalGetWeekStart } from '../../lib/dateUtils';
+import { BLENDED_RATE as RATE } from '../../lib/visitMath';
 const VALID_REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
 const REGIONAL_MANAGERS = {
@@ -24,20 +28,10 @@ function isCompleted(s) { return /completed/i.test(s||''); }
 function isMissed(s,e) { return /missed/i.test(s||'') && !isCancelled(e,s); }
 function isEval(e) { return /eval/i.test(e||''); }
 
+// 2026-05-31: thin wrapper preserves the original call sites while delegating
+// to dateUtils. Previously hand-rolled here — see commit history if needed.
 function getWeekStart(date) {
-  // Accepts either a "YYYY-MM-DD" string or a Date object. Previously this
-  // assumed string input and crashed with `RangeError: Invalid time value`
-  // when called as `getWeekStart(new Date())` — concatenating a Date with
-  // 'T00:00:00' produces a garbage string like "Thu May 15 2026 ...T00:00:00"
-  // which parses to Invalid Date. Fixed 2026-05-15 when the AD dashboard's
-  // drill-down forced rm-dashboard to render for the first time in production.
-  // 2026-05-17: Sun-Sat work week per Liam (was Mon-Sun)
-  const d = date instanceof Date
-    ? new Date(date.getTime())
-    : new Date(date + 'T00:00:00');
-  d.setDate(d.getDate() - d.getDay()); // back to Sunday
-  d.setHours(0,0,0,0);
-  return d;
+  return canonicalGetWeekStart(date);
 }
 
 function getQuarter(date) {

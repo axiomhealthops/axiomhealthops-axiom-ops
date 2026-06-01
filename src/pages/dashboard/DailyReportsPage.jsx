@@ -3,8 +3,9 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-
-const BLENDED_RATE = 185;
+// 2026-05-31: Replaced local $185 hardcode with canonical $230 from visitMath.
+// Drift had been silently undercounting revenue ~24% across daily reports.
+import { BLENDED_RATE } from '../../lib/visitMath';
 
 function fmtDate(d) {
   if (!d) return '—';

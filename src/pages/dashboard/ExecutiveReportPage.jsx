@@ -188,7 +188,7 @@ export default function ExecutiveReportPage() {
   function handlePrint() {
     const win = window.open('', '_blank');
     const html = printRef.current.innerHTML;
-    win.document.write(`<html><head><title>AxiomHealth Weekly Report — ${week.label}</title>
+    win.document.write(`<html><head><title>EdemaCare Weekly Report — ${week.label}</title>
       <style>
         body { font-family: 'DM Sans', -apple-system, sans-serif; margin: 0; padding: 24px; color: #0F1117; }
         * { box-sizing: border-box; }
@@ -227,7 +227,7 @@ export default function ExecutiveReportPage() {
           {/* Report Header */}
           <div style={{ background: '#0F1117', borderRadius: 12, padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ fontSize: 20, fontWeight: 900, color: '#fff', letterSpacing: '-0.02em' }}>AxiomHealth Weekly Operations Report</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: '#fff', letterSpacing: '-0.02em' }}>EdemaCare Weekly Operations Report</div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 4 }}>{week.label} · Generated {generatedTime}</div>
             </div>
             <div style={{ textAlign: 'right' }}>
@@ -388,7 +388,8 @@ export default function ExecutiveReportPage() {
 
           {/* Footer */}
           <div style={{ textAlign: 'center', fontSize: 10, color: 'var(--gray)', paddingBottom: 8 }}>
-            AxiomHealth Operations Platform · {generatedTime} · Rates based on ${BLENDED_RATE} blended per visit
+            EdemaCare Operations Platform · {generatedTime} · Rates based on ${BLENDED_RATE} blended per visit
+            <div style={{ fontSize: 9, color: 'var(--gray)', marginTop: 4, opacity: 0.7 }}>EdemaCare is a service of AxiomHealth Management LLC</div>
           </div>
         </div>
       </div>

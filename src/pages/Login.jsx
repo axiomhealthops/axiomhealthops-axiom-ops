@@ -36,9 +36,9 @@ export default function Login() {
     <div style={S.outer}>
       <div style={S.card}>
         <div style={S.brand}>
-          <div style={S.logoMark}>A</div>
+          <div style={S.logoMark}>E</div>
           <div>
-            <div style={S.logoTitle}>AxiomHealth</div>
+            <div style={S.logoTitle}>EdemaCare</div>
             <div style={S.logoSub}>Operations Platform</div>
           </div>
         </div>
@@ -89,9 +89,9 @@ export default function Login() {
     <div style={S.outer}>
       <div style={S.card}>
         <div style={S.brand}>
-          <div style={S.logoMark}>A</div>
+          <div style={S.logoMark}>E</div>
           <div>
-            <div style={S.logoTitle}>AxiomHealth</div>
+            <div style={S.logoTitle}>EdemaCare</div>
             <div style={S.logoSub}>Operations Platform</div>
           </div>
         </div>
@@ -122,6 +122,7 @@ export default function Login() {
           </button>
         </form>
         <p style={S.footer}>Contact your administrator if you need access.</p>
+        <p style={S.legal}>EdemaCare is a service of AxiomHealth Management LLC</p>
       </div>
     </div>
   );
@@ -144,4 +145,5 @@ const styles = {
   button: { padding: '12px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', marginTop: '4px', cursor: 'pointer', width: '100%' },
   linkBtn: { background: 'none', border: 'none', color: 'var(--red)', fontSize: '13px', fontWeight: '500', cursor: 'pointer', padding: 0, textDecoration: 'none' },
   footer: { marginTop: '24px', textAlign: 'center', fontSize: '13px', color: 'var(--gray)' },
+  legal: { marginTop: '8px', textAlign: 'center', fontSize: '11px', color: 'var(--gray)', opacity: 0.7 },
 };

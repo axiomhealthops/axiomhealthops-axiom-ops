@@ -4,8 +4,9 @@ import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import { useRiskMap } from '../../hooks/useRiskMap';
 import RiskBadge from '../../components/RiskBadge';
-
-const BLENDED_RATE = 185;
+// 2026-05-31: Replaced local $185 hardcode with canonical $230 from visitMath.
+// Drift had been silently undercounting revenue ~24% on clinician scorecards.
+import { BLENDED_RATE } from '../../lib/visitMath';
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
 function fmtDate(d) {

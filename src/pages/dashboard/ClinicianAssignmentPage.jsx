@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-
-const BLENDED_RATE = 185;
+// 2026-05-31: Replaced local $185 hardcode with canonical $230 from visitMath.
+// Drift had been silently undercounting assignment revenue ~24%.
+import { BLENDED_RATE } from '../../lib/visitMath';
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
 function fmtDate(d) {

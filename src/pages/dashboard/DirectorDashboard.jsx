@@ -4,6 +4,14 @@ import TopBar from '../../components/TopBar';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import ManagerScorecards from '../../components/director/ManagerScorecards';
 import ExceptionFeed from '../../components/director/ExceptionFeed';
+import WeekSelector, { readPersistedWeekOffset } from '../../components/WeekSelector';
+// 2026-05-31 CEO redesign — subtractive layout per docs/CEO_Dashboard_Design.md.
+// StateToggle auto-hides until GA has ≥10 active patients; mapping helper
+// folds in marketing_territories so the toggle reflects live data the
+// moment ops adds region letters to Georgia Territory.
+import StateToggle from '../../components/StateToggle';
+import { useStateMapping, getRegionsForState, readPersistedState } from '../../lib/stateMapping';
+import { EXPANSION } from '../../lib/constants';
 // LieutenantSnapshots removed in v2.1 rework — redundant with Manager Scorecards.
 // Carla's scorecard IS her snapshot; Hervylie's scorecard IS his. One source of truth.
 // Visit math from shared module (2026-05-17 refactor)
@@ -136,7 +144,9 @@ function RegionRow({ region, active, inactiveActive, onHold, pending, completedV
 //   "Are we hitting revenue this week?" is THE question this page must answer.
 // So we lead with a massive revenue number, the ops score beside it, and one
 // declarative summary sentence with the today's-action counts baked in.
-function HeroBand({ weeklyRevenue, target, score, scoreColor, p1Count, redManagerCount, daysLeftInWeek, pathTiles }) {
+//
+// 2026-05-31: added wow prop for week-over-week delta indicator.
+function HeroBand({ weeklyRevenue, target, score, scoreColor, p1Count, redManagerCount, daysLeftInWeek, pathTiles, wow, isPastWeek }) {
   const pct = Math.min(100, Math.round((weeklyRevenue / target) * 100));
   const gap = Math.max(0, target - weeklyRevenue);
   const paceColor = pct >= 80 ? '#34D399' : pct >= 60 ? '#FBBF24' : '#F87171';
@@ -162,6 +172,21 @@ function HeroBand({ weeklyRevenue, target, score, scoreColor, p1Count, redManage
             }}>
               {pct}%
             </div>
+            {/* Week-over-week revenue delta — added 2026-05-31. Hidden if no prior data. */}
+            {wow && wow.revenue > 0 && (() => {
+              const delta = weeklyRevenue - wow.revenue;
+              const pctDelta = wow.revenue > 0 ? Math.round((delta / wow.revenue) * 100) : 0;
+              const up = delta >= 0;
+              const dColor = up ? '#34D399' : '#F87171';
+              return (
+                <div title={'vs ' + wow.label + ': ' + fmt$(wow.revenue)} style={{
+                  padding: '4px 10px', background: dColor + '22', color: dColor,
+                  borderRadius: 6, fontSize: 13, fontWeight: 800, fontFamily: 'DM Mono, monospace',
+                }}>
+                  {up ? '▲' : '▼'} {fmt$(Math.abs(delta))} ({up ? '+' : ''}{pctDelta}%) vs prior
+                </div>
+              );
+            })()}
           </div>
           {/* Progress bar */}
           <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 999, height: 10, marginTop: 14, overflow: 'hidden' }}>
@@ -186,15 +211,27 @@ function HeroBand({ weeklyRevenue, target, score, scoreColor, p1Count, redManage
         </div>
       </div>
 
-      {/* Headline summary sentence — Liam's 5-second read */}
+      {/* Headline summary sentence — Liam's 5-second read.
+          2026-05-31: when viewing a past week, swap "on pace for" / "days left
+          in week" framing to a final-result framing — those phrases imply a
+          live week and would mislead on historical reads. */}
       <div style={{
         padding: '12px 16px', background: 'rgba(255,255,255,0.04)', borderRadius: 8,
         fontSize: 13, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5, marginBottom: 16,
         border: '1px solid rgba(255,255,255,0.06)',
       }}>
         {pct >= 80 ? '✓ ' : pct >= 60 ? '⚠ ' : '✗ '}
-        <strong style={{ color: paceColor }}>On pace for {fmt$(weeklyRevenue)}</strong> of {fmt$(target)} this week
-        {gap > 0 && <span style={{ color: 'rgba(255,255,255,0.55)' }}> (gap {fmt$(gap)})</span>}
+        {isPastWeek ? (
+          <>
+            <strong style={{ color: paceColor }}>Finished at {fmt$(weeklyRevenue)}</strong> of {fmt$(target)} target
+            {gap > 0 && <span style={{ color: 'rgba(255,255,255,0.55)' }}> (gap {fmt$(gap)})</span>}
+          </>
+        ) : (
+          <>
+            <strong style={{ color: paceColor }}>On pace for {fmt$(weeklyRevenue)}</strong> of {fmt$(target)} this week
+            {gap > 0 && <span style={{ color: 'rgba(255,255,255,0.55)' }}> (gap {fmt$(gap)})</span>}
+          </>
+        )}
         {' · '}
         {p1Count > 0 ? (
           <><strong style={{ color: '#F87171' }}>{p1Count} P1 {p1Count === 1 ? 'issue' : 'issues'}</strong> need your eyes</>
@@ -207,8 +244,12 @@ function HeroBand({ weeklyRevenue, target, score, scoreColor, p1Count, redManage
         ) : (
           <span style={{ color: '#34D399' }}>all managers green/amber</span>
         )}
-        {' · '}
-        <span style={{ color: 'rgba(255,255,255,0.5)' }}>{daysLeftInWeek} days left in week</span>
+        {!isPastWeek && (
+          <>
+            {' · '}
+            <span style={{ color: 'rgba(255,255,255,0.5)' }}>{daysLeftInWeek} days left in week</span>
+          </>
+        )}
       </div>
 
       {/* Path to $200K — supporting context for the headline */}
@@ -238,12 +279,227 @@ function HeroBand({ weeklyRevenue, target, score, scoreColor, p1Count, redManage
   );
 }
 
+// ── CEO KPI Strip (2026-05-31 redesign) ──────────────────────────────────────
+// Five tiles below the hero. Every tile is clickable and shows a WoW delta
+// where the data honestly supports one. Where it doesn't (point-in-time
+// snapshots like census, no historical version of derived stalled counts),
+// we show contextual info instead of fabricating a delta.
+function CeoKpiTile({ label, value, sub, deltaText, deltaDirection, onClick, color = '#0F1117', accent }) {
+  const clickable = typeof onClick === 'function';
+  return (
+    <div
+      onClick={clickable ? onClick : undefined}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+      onMouseEnter={clickable ? (e) => { e.currentTarget.style.boxShadow = '0 4px 14px rgba(0,0,0,0.10)'; e.currentTarget.style.transform = 'translateY(-1px)'; } : undefined}
+      onMouseLeave={clickable ? (e) => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'translateY(0)'; } : undefined}
+      style={{
+        background: 'var(--card-bg)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        padding: '14px 16px',
+        cursor: clickable ? 'pointer' : 'default',
+        transition: 'transform 0.1s ease, box-shadow 0.15s ease',
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+    >
+      {accent && (
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: accent }} />
+      )}
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 30, fontWeight: 900, fontFamily: 'DM Mono, monospace', color, lineHeight: 1 }}>
+          {value}
+        </div>
+        {deltaText && (
+          <div style={{
+            padding: '2px 8px',
+            background: deltaDirection === 'up' ? '#ECFDF5' : deltaDirection === 'down' ? '#FEF2F2' : '#F3F4F6',
+            color: deltaDirection === 'up' ? '#059669' : deltaDirection === 'down' ? '#DC2626' : '#6B7280',
+            borderRadius: 5,
+            fontSize: 11,
+            fontWeight: 800,
+            fontFamily: 'DM Mono, monospace',
+          }}>
+            {deltaDirection === 'up' ? '▲ ' : deltaDirection === 'down' ? '▼ ' : ''}{deltaText}
+          </div>
+        )}
+      </div>
+      {sub && (
+        <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 6 }}>{sub}</div>
+      )}
+      {clickable && (
+        <div style={{ fontSize: 10, color: color, marginTop: 8, fontWeight: 600, opacity: 0.7 }}>open →</div>
+      )}
+    </div>
+  );
+}
+
+// ── Needs You Today (2026-05-31) ─────────────────────────────────────────────
+// Top 5 ranked action items — replaces the "scroll-and-hunt" exception feed
+// at the top-of-page. Each row: 1 line, 1 action button. Hard-capped at 5.
+function NeedsYouToday({ items, onAction }) {
+  const top5 = (items || []).slice(0, 5);
+  return (
+    <div style={{
+      background: 'var(--card-bg)',
+      border: '1px solid var(--border)',
+      borderRadius: 12,
+      overflow: 'hidden',
+    }}>
+      <div style={{
+        padding: '12px 16px',
+        borderBottom: '1px solid var(--border)',
+        background: '#FFF5F0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            background: '#DC2626', color: '#fff', borderRadius: 5,
+            padding: '2px 8px', fontSize: 10, fontWeight: 800, letterSpacing: '0.05em',
+          }}>FOCUS</span>
+          <span style={{ fontSize: 13, fontWeight: 800, color: '#0F1117' }}>Needs you today</span>
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--gray)' }}>
+          {top5.length === 0 ? 'nothing critical — green across the board' : `top ${top5.length} of ${items.length} open`}
+        </span>
+      </div>
+      {top5.length === 0 ? (
+        <div style={{ padding: '20px 16px', textAlign: 'center', color: '#059669', fontSize: 13, fontWeight: 600 }}>
+          ✓ No critical issues. Spend the morning on growth, not triage.
+        </div>
+      ) : (
+        <div>
+          {top5.map(function (it, i) {
+            const sev = it.severity || 'medium';
+            const sevColor = sev === 'p1' ? '#DC2626' : sev === 'high' ? '#D97706' : '#1565C0';
+            const sevBg = sev === 'p1' ? '#FEF2F2' : sev === 'high' ? '#FEF3C7' : '#EFF6FF';
+            return (
+              <div key={i} style={{
+                display: 'grid',
+                gridTemplateColumns: 'auto 1fr auto',
+                gap: 12,
+                padding: '11px 16px',
+                borderBottom: i < top5.length - 1 ? '1px solid var(--border)' : 'none',
+                alignItems: 'center',
+              }}>
+                <span style={{
+                  background: sevBg, color: sevColor,
+                  padding: '3px 8px', borderRadius: 999,
+                  fontSize: 10, fontWeight: 800, letterSpacing: '0.05em',
+                  textTransform: 'uppercase', minWidth: 30, textAlign: 'center',
+                }}>
+                  {sev}
+                </span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#0F1117', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {it.title}
+                  </div>
+                  {it.detail && (
+                    <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 1 }}>{it.detail}</div>
+                  )}
+                </div>
+                {it.actionLabel && (
+                  <button
+                    type="button"
+                    onClick={function () { if (typeof onAction === 'function') onAction(it); }}
+                    style={{
+                      padding: '6px 12px',
+                      background: '#0F1117', color: '#fff',
+                      border: 'none', borderRadius: 6,
+                      fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {it.actionLabel}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Expansion Status tile (2026-05-31) ───────────────────────────────────────
+// Shows Georgia (and any future state) credentialing/staffing progress as
+// executive context. Lives in the Detail block so the CEO sees expansion
+// momentum without an empty toggle tab. Source: src/lib/constants.js EXPANSION.
+function ExpansionStatus({ territories }) {
+  // Group: how many territories per state? GA might have multiple over time.
+  const territoryByState = useMemo(function () {
+    const out = {};
+    (territories || []).forEach(function (t) {
+      if (!out[t.state]) out[t.state] = [];
+      out[t.state].push(t);
+    });
+    return out;
+  }, [territories]);
+  return (
+    <div style={{
+      background: 'var(--card-bg)',
+      border: '1px solid var(--border)',
+      borderRadius: 12,
+      overflow: 'hidden',
+    }}>
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>📍 Expansion Status</div>
+        <div style={{ fontSize: 11, color: 'var(--gray)' }}>credentialing · staffing · first-patient target</div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', padding: 16, gap: 12 }}>
+        {EXPANSION.map(function (e) {
+          const ts = territoryByState[e.state === 'Georgia' ? 'GA' : e.state.slice(0,2).toUpperCase()] || [];
+          const credColor = e.credentialing >= 80 ? '#059669' : e.credentialing >= 50 ? '#D97706' : '#DC2626';
+          return (
+            <div key={e.state} style={{ background: 'var(--bg)', borderRadius: 10, padding: '12px 14px', border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#0F1117' }}>{e.state}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase' }}>{e.status}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 8 }}>
+                <div style={{ fontSize: 22, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: credColor, lineHeight: 1 }}>
+                  {e.credentialing}%
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--gray)' }}>credentialed</div>
+              </div>
+              <div style={{ background: 'var(--border)', borderRadius: 999, height: 5, marginBottom: 8 }}>
+                <div style={{ width: `${e.credentialing}%`, height: '100%', background: credColor, borderRadius: 999 }} />
+              </div>
+              <div style={{ fontSize: 11, color: '#0F1117' }}>
+                <span style={{ fontWeight: 700 }}>{e.staffHired}</span> staff hired
+                {' · '}
+                <span style={{ color: 'var(--gray)' }}>target {e.target}</span>
+              </div>
+              {ts.length > 0 && (
+                <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 6 }}>
+                  {ts.length} territor{ts.length === 1 ? 'y' : 'ies'}: {ts.map(function (t) { return t.name; }).join(', ')}
+                  {' · '}
+                  {ts.reduce(function (s, t) { return s + ((t.legacy_region_letters || []).length); }, 0)} region letters mapped
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function DirectorDashboard({ onNavigate }) {
   const go = (page, intent) => { if (typeof onNavigate === 'function') onNavigate(page, intent); };
   const [loading, setLoading] = useState(true);
   const [census, setCensus] = useState([]);
   const [visits, setVisits] = useState([]);
+  const [prevVisits, setPrevVisits] = useState([]); // 2026-05-31: prior-week visits for WoW deltas
   const [authRenewals, setAuthRenewals] = useState([]);
   const [onHold, setOnHold] = useState([]);
   const [waitlist, setWaitlist] = useState([]);
@@ -262,12 +518,44 @@ export default function DirectorDashboard({ onNavigate }) {
   const [auths, setAuths] = useState([]);
   const [lastRefresh, setLastRefresh] = useState(null);
 
+  // 2026-05-31: week-toggle state. Lazy init reads localStorage so refreshing
+  // the page doesn't reset to "this week" if Liam was investigating a past week.
+  const [weekOffset, setWeekOffset] = useState(function() {
+    return readPersistedWeekOffset('directorCommand');
+  });
+
+  // 2026-05-31 CEO redesign: state filter (ALL/FL/GA). The toggle UI
+  // auto-hides until GA has ≥10 active patients (see StateToggle), but the
+  // filter value is wired through every query unconditionally so the
+  // plumbing is in place. Default 'ALL' matches the pre-redesign behavior.
+  const [stateFilter, setStateFilter] = useState(function() {
+    return readPersistedState('directorCommand', 'ALL');
+  });
+
+  // marketing_territories → region letter mapping. Live, with a static fallback
+  // so the page never blocks on this fetch. See src/lib/stateMapping.js.
+  const mapping = useStateMapping();
+
+  // Active region letters for the current state filter. When ALL, this is the
+  // full canonical region set. When FL/GA, it's the per-state list pulled from
+  // marketing_territories. We thread this list into every server query that
+  // supports a region filter, narrowing the result set at the database edge
+  // instead of fetching all rows and discarding them client-side.
+  const activeRegions = useMemo(function() {
+    return getRegionsForState(stateFilter, mapping.stateToRegions);
+  }, [stateFilter, mapping.stateToRegions]);
+
   const load = useCallback(async () => {
     // 2026-05-17: Work week is SUN-SAT per Liam. Uses canonical getWeekRange
     // helper so this never drifts from other dashboards.
-    const wk = getWeekRange(new Date());
+    // 2026-05-31: now driven by weekOffset so the page reactively re-queries
+    // when Liam toggles weeks. Prior-week range pulled in parallel for WoW deltas.
+    const wk = getWeekRange(new Date(), weekOffset);
     const weekStartStr = wk.startStr;
     const weekEndStr = wk.endStr;
+    const prevWk = getWeekRange(new Date(), weekOffset + 1);
+    const prevWeekStartStr = prevWk.startStr;
+    const prevWeekEndStr = prevWk.endStr;
 
     // 30-day window for status_log (powers sparkline trend math without
     // pulling all 4K+ historical transitions).
@@ -277,26 +565,49 @@ export default function DirectorDashboard({ onNavigate }) {
     const sevenDaysAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
     const thirtyDaysAgoDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 
+    // 2026-05-31 CEO redesign: wire state filter to every region-keyed query.
+    // applyRegion narrows the .in('region', activeRegions) clause when a
+    // state is selected; for 'ALL' it returns the unmodified query so the
+    // pre-redesign behavior is preserved exactly.
+    const isFiltered = stateFilter && stateFilter !== 'ALL' && activeRegions && activeRegions.length > 0;
+    const applyRegion = function (q) { return isFiltered ? q.in('region', activeRegions) : q; };
+    // patient_discharges has no region column today — left unfiltered. If a
+    // future migration adds region, wrap this query too.
+    // coordinators is filtered by overlap (any of their assigned regions
+    // intersects the active state's letters). For ALL we keep everyone.
+    const applyCoords = function (q) {
+      if (!isFiltered) return q;
+      // Postgres array-overlap operator '&&' via .overlaps()
+      return q.overlaps('regions', activeRegions);
+    };
+
     // All paginated — census (750+), visits this week (800+), and auth
     // tables are each capable of exceeding the 1000-row PostgREST cap.
-    const [c, v, ar, oh, wl, cl, dc, co, sl, al, ir, au] = await Promise.all([
-      fetchAllPages(supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date,inferred_frequency,overdue_threshold_days,days_overdue,status_changed_at,pipeline_assigned_to')),
-      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr)),
-      fetchAllPages(supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")')),
-      fetchAllPages(supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold')),
-      fetchAllPages(supabase.from('waitlist_assignments').select('patient_name,region,assignment_status,assigned_clinician,waitlisted_since,priority')),
-      fetchAllPages(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active').eq('is_active', true)),
+    const [c, v, pv, ar, oh, wl, cl, dc, co, sl, al, ir, au] = await Promise.all([
+      fetchAllPages(applyRegion(supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date,inferred_frequency,overdue_threshold_days,days_overdue,status_changed_at,pipeline_assigned_to'))),
+      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr))),
+      // Prior-week visits — for week-over-week delta indicators on KPI tiles.
+      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', prevWeekStartStr).lte('visit_date', prevWeekEndStr))),
+      fetchAllPages(applyRegion(supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")'))),
+      fetchAllPages(applyRegion(supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold'))),
+      fetchAllPages(applyRegion(supabase.from('waitlist_assignments').select('patient_name,region,assignment_status,assigned_clinician,waitlisted_since,priority'))),
+      fetchAllPages(applyRegion(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active').eq('is_active', true))),
+      // patient_discharges: no region column — load unfiltered. If a future
+      // migration adds region, wrap with applyRegion.
       fetchAllPages(supabase.from('patient_discharges').select('patient_name,discharge_date,followup_30day_required,followup_30day_completed')),
       // Director Command v2 — manager accountability layer:
-      fetchAllPages(supabase.from('coordinators').select('id,full_name,role,job_title,team,regions,is_active').eq('is_active', true)),
-      fetchAllPages(supabase.from('census_status_log').select('patient_name,region,old_status,new_status,changed_at').gte('changed_at', thirtyDaysAgoIso)),
+      fetchAllPages(applyCoords(supabase.from('coordinators').select('id,full_name,role,job_title,team,regions,is_active').eq('is_active', true))),
+      fetchAllPages(applyRegion(supabase.from('census_status_log').select('patient_name,region,old_status,new_status,changed_at').gte('changed_at', thirtyDaysAgoIso))),
+      // activity_log has no region column — power-of-the-team metric reads
+      // unfiltered so quiet-coordinator detection stays accurate.
       fetchAllPages(supabase.from('coordinator_activity_log').select('coordinator_name,coordinator_role,action_type,created_at').gte('created_at', sevenDaysAgoIso)),
-      fetchAllPages(supabase.from('intake_referrals').select('patient_name,region,insurance,referral_status,date_received,welcome_call').gte('date_received', thirtyDaysAgoDate)),
-      fetchAllPages(supabase.from('auth_tracker').select('patient_name,region,auth_status,auth_submitted_date,auth_approved_date,is_currently_active,assigned_to').eq('is_currently_active', true)),
+      fetchAllPages(applyRegion(supabase.from('intake_referrals').select('patient_name,region,insurance,referral_status,date_received,welcome_call').gte('date_received', thirtyDaysAgoDate))),
+      fetchAllPages(applyRegion(supabase.from('auth_tracker').select('patient_name,region,auth_status,auth_submitted_date,auth_approved_date,is_currently_active,assigned_to').eq('is_currently_active', true))),
     ]);
 
     setCensus(c);
     setVisits(v);
+    setPrevVisits(pv);
     setAuthRenewals(ar);
     setOnHold(oh);
     setWaitlist(wl);
@@ -309,10 +620,24 @@ export default function DirectorDashboard({ onNavigate }) {
     setAuths(au);
     setLastRefresh(new Date());
     setLoading(false);
-  }, []);
+  }, [weekOffset, stateFilter, activeRegions]);
 
   useEffect(() => { load(); }, [load]);
   useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_renewal_tasks', 'on_hold_recovery', 'patient_discharges', 'clinicians', 'waitlist_assignments', 'coordinators', 'census_status_log', 'coordinator_activity_log', 'intake_referrals', 'auth_tracker'], load);
+
+  // ── Week-over-week deltas (added 2026-05-31) ─────────────────────────
+  // Computed independently of the main `metrics` memo so they update as soon
+  // as prevVisits changes, and so we don't bloat the main memo.
+  const wow = useMemo(function() {
+    if (!prevVisits || prevVisits.length === 0) return null;
+    const prevCompleted = dedupEncounters(prevVisits.filter(isCompleted));
+    const prevRevenue = prevCompleted.length * BLENDED_RATE;
+    return {
+      completed: prevCompleted.length,
+      revenue: prevRevenue,
+      label: getWeekRange(new Date(), weekOffset + 1).label,
+    };
+  }, [prevVisits, weekOffset]);
 
   const metrics = useMemo(() => {
     if (!census.length) return null;
@@ -386,6 +711,66 @@ export default function DirectorDashboard({ onNavigate }) {
       };
     }).filter(r => r.active > 0 || r.onHold > 0 || r.pending > 0);
 
+    // 2026-05-31 CEO redesign: census WoW proxy using statusLog. Honest
+    // "delta" since census is point-in-time, not a snapshot — we count
+    // transitions INTO 'active' this week vs the prior week. Imperfect but
+    // directional (and clearly labeled in the UI).
+    const wk = getWeekRange(new Date(), weekOffset);
+    const prevWk = getWeekRange(new Date(), weekOffset + 1);
+    const wkStartMs = wk.start.getTime();
+    const wkEndMs = wk.end.getTime();
+    const prevStartMs = prevWk.start.getTime();
+    const prevEndMs = prevWk.end.getTime();
+    const newActiveThisWk = statusLog.filter(function (e) {
+      if (!/active/i.test(e.new_status || '')) return false;
+      if (/active/i.test(e.old_status || '')) return false; // exclude sub-active churn
+      const t = e.changed_at ? new Date(e.changed_at).getTime() : 0;
+      return t >= wkStartMs && t <= wkEndMs;
+    }).length;
+    const newActivePrevWk = statusLog.filter(function (e) {
+      if (!/active/i.test(e.new_status || '')) return false;
+      if (/active/i.test(e.old_status || '')) return false;
+      const t = e.changed_at ? new Date(e.changed_at).getTime() : 0;
+      return t >= prevStartMs && t <= prevEndMs;
+    }).length;
+
+    // Team engagement: of the coordinators on staff, how many have at least
+    // one mutation in the last 2 business days? Quiet = no mutation in 2+ days.
+    // Uses the already-loaded 7-day activity_log slice so no extra query.
+    const twoDaysAgoMs = Date.now() - 2 * 86400000;
+    const recentlyActiveNames = new Set();
+    activityLog.forEach(function (a) {
+      if (!a.coordinator_name) return;
+      const t = a.created_at ? new Date(a.created_at).getTime() : 0;
+      if (t >= twoDaysAgoMs) recentlyActiveNames.add(a.coordinator_name);
+    });
+    const teamSize = coordinators.length;
+    const teamActive = coordinators.filter(function (c) { return recentlyActiveNames.has(c.full_name); }).length;
+    const teamQuiet = Math.max(0, teamSize - teamActive);
+
+    // Prior-week team engagement proxy: coords active in 7-day window minus
+    // those active in last 2 days. Imperfect (overlapping windows), but
+    // gives a sense of whether more or fewer people are showing up this week.
+    const sevenDaysAgoMs = Date.now() - 7 * 86400000;
+    const last7Names = new Set();
+    activityLog.forEach(function (a) {
+      if (!a.coordinator_name) return;
+      const t = a.created_at ? new Date(a.created_at).getTime() : 0;
+      if (t >= sevenDaysAgoMs && t < twoDaysAgoMs) last7Names.add(a.coordinator_name);
+    });
+    const teamActivePrev5d = coordinators.filter(function (c) { return last7Names.has(c.full_name); }).length;
+
+    // Pipeline stalled count + "newly stalled this week" proxy from status_log
+    const stuck = census.filter(function (p) {
+      const s = p.status || '';
+      const d = p.status_changed_at ? Math.ceil((Date.now() - new Date(p.status_changed_at).getTime()) / 86400000) : null;
+      if (d === null) return false;
+      if (/soc.*pending/i.test(s)) return d > 3;
+      if (/auth.*pending/i.test(s) && !/active/i.test(s)) return d > 5;
+      if (/eval.*pending/i.test(s)) return d > 2;
+      return false;
+    });
+
     return {
       active: active.length, inactiveActive, onHoldPts, pendingStart,
       completedThisWeek, cancelledThisWeek, missedThisWeek, rawCompleted,
@@ -394,8 +779,12 @@ export default function DirectorDashboard({ onNavigate }) {
       dischargeOverdue, waitlistUnassigned, regionData,
       clinicianCapacity: clinicians.reduce((s, c) => s + (c.weekly_visit_target || 0), 0),
       cancelRate: completedThisWeek.length > 0 ? Math.round((cancelledThisWeek.length / (completedThisWeek.length + cancelledThisWeek.length + missedThisWeek.length)) * 100) : 0,
+      // CEO-strip additions
+      newActiveThisWk, newActivePrevWk,
+      teamSize, teamActive, teamQuiet, teamActivePrev5d,
+      stuck,
     };
-  }, [census, visits, authRenewals, onHold, waitlist, clinicians, discharges]);
+  }, [census, visits, authRenewals, onHold, waitlist, clinicians, discharges, statusLog, activityLog, coordinators, weekOffset]);
 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
@@ -521,13 +910,108 @@ export default function DirectorDashboard({ onNavigate }) {
   );
   const scoreColor = score >= 80 ? '#059669' : score >= 60 ? '#D97706' : '#DC2626';
 
+  // ── "Needs You Today" — unified, ranked top 5 ───────────────────────────
+  // Pull from every alert source the dashboard already loads, score each by
+  // severity + dollar impact, take the top 5. Hard cap = 5. The point is a
+  // CEO who can act on the morning's 5 most important calls in 60 seconds —
+  // not scroll a 50-item queue.
+  const needsYouToday = (function () {
+    const items = [];
+    // P1: urgent auth renewals (≤7d expiry or ≤4 visits remaining)
+    m.urgentAuths.slice(0, 5).forEach(function (a) {
+      items.push({
+        severity: 'p1',
+        score: 100 - (a.days_until_expiry || 0),
+        title: `Auth renewal expires in ${a.days_until_expiry}d — ${a.patient_name}`,
+        detail: `${a.visits_remaining} visits left · Rgn ${a.region} · est $${(a.visits_remaining * BLENDED_RATE).toLocaleString()} at risk`,
+        actionLabel: 'Open auth',
+        target: 'auth-renewals',
+      });
+    });
+    // P1: red manager region (median stuck >7d in a parent region)
+    if (headlineRedManagerCount > 0) {
+      items.push({
+        severity: 'p1',
+        score: 95,
+        title: `${headlineRedManagerCount} manager${headlineRedManagerCount === 1 ? '' : 's'} in red`,
+        detail: 'Parent region with median patient stuck >7 days. Review scorecards.',
+        actionLabel: 'Scorecards',
+        target: 'ops-dashboard',
+      });
+    }
+    // HIGH: inactive actives generating $0 (top 1 line aggregating, plus 1 patient-detail row if egregious)
+    if (m.inactiveActive.length > 0) {
+      items.push({
+        severity: 'high',
+        score: 80 + Math.min(15, Math.floor(m.inactiveActive.length / 10)),
+        title: `${m.inactiveActive.length} active patients not seen past their frequency`,
+        detail: `${fmt$(totalInactiveGap)}/wk revenue idle · sort census by Last Seen`,
+        actionLabel: 'Open census',
+        target: 'census',
+      });
+    }
+    // HIGH: on-hold overdue (>21d on hold — need recovery call)
+    if (m.onHoldOverdue.length > 0) {
+      items.push({
+        severity: 'high',
+        score: 70 + Math.min(15, m.onHoldOverdue.length),
+        title: `${m.onHoldOverdue.length} patients on hold >21 days`,
+        detail: 'Recovery calls needed to convert back to active or discharge.',
+        actionLabel: 'On-hold',
+        target: 'on-hold',
+      });
+    }
+    // MEDIUM: pipeline stalled (SOC/Auth/Eval Pending past threshold)
+    if (m.stuck && m.stuck.length > 0) {
+      items.push({
+        severity: 'medium',
+        score: 50 + Math.min(20, m.stuck.length),
+        title: `${m.stuck.length} pipeline patients stalled`,
+        detail: `Won't bill until first visit · est $${(m.pendingStart.length * BLENDED_RATE * 2).toLocaleString()}/wk if converted`,
+        actionLabel: 'Pipeline',
+        target: 'pipeline',
+      });
+    }
+    // MEDIUM: team engagement — coordinators quiet >2 days
+    if (m.teamQuiet >= 3) {
+      items.push({
+        severity: 'medium',
+        score: 45 + m.teamQuiet,
+        title: `${m.teamQuiet} of ${m.teamSize} coordinators quiet >2 days`,
+        detail: 'No mutations logged. Spot-check before standup.',
+        actionLabel: 'Engagement',
+        target: 'ops-dashboard',
+      });
+    }
+    // Sort by score desc, take top 5
+    return items.sort(function (a, b) { return b.score - a.score; }).slice(0, 5);
+  })();
+
   return (
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%', background:'var(--bg)' }}>
       <TopBar
         title="Director Command"
         subtitle={today}
         actions={
-          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+            {/* 2026-05-31 CEO redesign: state toggle auto-hides until Georgia
+                has ≥10 active patients (see StateToggle). Until then, the
+                page reads exactly as it always has — no visible control,
+                queries unfiltered. Wiring is in place; rendering is gated. */}
+            <StateToggle
+              value={stateFilter}
+              onChange={setStateFilter}
+              storageKey="directorCommand"
+              stateToRegions={mapping.stateToRegions}
+            />
+            {/* Week toggle — 2026-05-31. Persists last-viewed week so a
+                refresh mid-investigation doesn't snap back to this week. */}
+            <WeekSelector
+              value={weekOffset}
+              onChange={setWeekOffset}
+              storageKey="directorCommand"
+              allowFuture={false}
+            />
             {lastRefresh && <span style={{ fontSize:10, color:'var(--gray)' }}>Updated {lastRefresh.toLocaleTimeString()}</span>}
             <button onClick={load} style={{ padding:'6px 14px', background:'#0F1117', color:'#fff', border:'none', borderRadius:7, fontSize:11, fontWeight:700, cursor:'pointer' }}>
               ↻ Refresh
@@ -539,17 +1023,20 @@ export default function DirectorDashboard({ onNavigate }) {
       <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:20 }}>
 
         {/* ═══════════════════════════════════════════════════════════════
-            DIRECTOR COMMAND v2.1 — Vertical Newsfeed, Revenue Hero
-            Per Liam 2026-05-16: usage = daily standup (3-5 min), hero question
-            = "are we hitting revenue?", density = fewer/bigger/clearer.
-            Order matches the standup walkthrough:
-              1. HERO     → revenue + ops score + headline + path to target
-              2. FIRE     → exception feed (only what's broken today)
-              3. PEOPLE   → manager scorecards (T1+T2 visible, T3 collapsed)
-              4. PULSE    → weekly visit tiles
-              5. DETAIL   → collapsed by default — region/auth/clinician deep dive
-            Killed: TRIAGE cards (folded into Detail), LieutenantSnapshots
-            (redundant with scorecards), separate Revenue+Score row (now hero).
+            DIRECTOR COMMAND v3 — CEO Subtractive Layout (2026-05-31)
+            Design doc: docs/CEO_Dashboard_Design.md §3
+            Liam's directive: "CEO-level means LESS on screen, not more."
+            Visible-above-fold:
+              1. HERO          → revenue mega + ops score + WoW + summary
+              2. CEO KPI STRIP → 5 tiles, all clickable, all with deltas
+              3. NEEDS YOU TODAY → top 5 ranked, 1-line each, max 5
+              4. DETAIL (collapsed) → everything else, one click away:
+                 ExceptionFeed, ManagerScorecards, Visit Pulse,
+                 ExpansionStatus, Triage 5, Region Health, Auth, Clinician,
+                 Path-to-$200K
+            Underlying components (ExceptionFeed, ManagerScorecards) are
+            NOT modified — they're wrapped inside the collapse so other
+            pages that import them keep working unchanged.
             ═══════════════════════════════════════════════════════════════ */}
 
         {/* ─── 1. HERO BAND ──────────────────────────────────────────── */}
@@ -562,17 +1049,93 @@ export default function DirectorDashboard({ onNavigate }) {
           redManagerCount={headlineRedManagerCount}
           daysLeftInWeek={daysLeftInWeek}
           pathTiles={pathTiles}
+          wow={wow}
+          isPastWeek={weekOffset > 0}
         />
 
-        {/* ─── 2. FIRE — Exception Feed (today's action layer) ───────── */}
-        <ExceptionFeed
-          census={census}
-          activityLog={activityLog}
-          coordinators={coordinators}
-          onJumpTo={(target, intent) => go(target, intent)}
+        {/* ─── 2. CEO KPI STRIP — 5 tiles, all clickable, all delta'd ─── */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+          {/* Visits — clean WoW from prevVisits */}
+          <CeoKpiTile
+            label="Visits This Week"
+            value={m.completedThisWeek.length.toLocaleString()}
+            sub={`of ${WEEKLY_TARGET} target · ${Math.round((m.completedThisWeek.length/WEEKLY_TARGET)*100)}%`}
+            deltaText={wow && wow.completed > 0 ? `${Math.abs(m.completedThisWeek.length - wow.completed)} vs prior` : null}
+            deltaDirection={wow && wow.completed > 0 ? (m.completedThisWeek.length >= wow.completed ? 'up' : 'down') : null}
+            color={m.completedThisWeek.length >= WEEKLY_TARGET ? '#059669' : '#0F1117'}
+            accent="#059669"
+            onClick={() => go('visits')}
+          />
+          {/* Active Census — delta from status_log transitions into 'active' */}
+          <CeoKpiTile
+            label="Active Census"
+            value={m.active.toLocaleString()}
+            sub={`+${m.newActiveThisWk} new this wk · vs ${m.newActivePrevWk} prior`}
+            deltaText={m.newActivePrevWk > 0 || m.newActiveThisWk > 0 ? `${Math.abs(m.newActiveThisWk - m.newActivePrevWk)} new vs prior` : null}
+            deltaDirection={m.newActiveThisWk === m.newActivePrevWk ? 'flat' : (m.newActiveThisWk > m.newActivePrevWk ? 'up' : 'down')}
+            accent="#1565C0"
+            onClick={() => go('census')}
+          />
+          {/* Pipeline Stalled — count + qualified note */}
+          <CeoKpiTile
+            label="Pipeline Stalled"
+            value={(m.stuck ? m.stuck.length : 0).toLocaleString()}
+            sub={`SOC/Auth/Eval pending past threshold · ${fmt$(m.pendingStart.length * BLENDED_RATE * 2)}/wk if converted`}
+            deltaText={(m.stuck && m.stuck.length > 0) ? `${m.stuck.length} open` : null}
+            deltaDirection={(m.stuck && m.stuck.length > 5) ? 'down' : 'flat'}
+            color={(m.stuck && m.stuck.length > 5) ? '#D97706' : '#0F1117'}
+            accent="#D97706"
+            onClick={() => go('pipeline')}
+          />
+          {/* Auth Renewals Urgent */}
+          <CeoKpiTile
+            label="Auth Urgent"
+            value={m.urgentAuths.length.toLocaleString()}
+            sub={`${m.highAuths.length} high priority also open · expiring ≤7d or ≤4 visits`}
+            deltaText={m.urgentAuths.length > 0 ? `${m.urgentAuths.length} ≤7d` : null}
+            deltaDirection={m.urgentAuths.length > 3 ? 'down' : (m.urgentAuths.length === 0 ? 'up' : 'flat')}
+            color={m.urgentAuths.length > 3 ? '#DC2626' : '#0F1117'}
+            accent="#DC2626"
+            onClick={() => go('auth-renewals')}
+          />
+          {/* Team Engagement — active coords vs quiet, WoW from activity_log */}
+          <CeoKpiTile
+            label="Team Active"
+            value={`${m.teamActive}/${m.teamSize}`}
+            sub={`${m.teamQuiet} quiet >2d · ${m.teamActivePrev5d} active in prior 5d window`}
+            deltaText={m.teamActive !== m.teamActivePrev5d ? `${Math.abs(m.teamActive - m.teamActivePrev5d)} vs prior` : null}
+            deltaDirection={m.teamActive === m.teamActivePrev5d ? 'flat' : (m.teamActive > m.teamActivePrev5d ? 'up' : 'down')}
+            color={m.teamQuiet > 3 ? '#D97706' : '#0F1117'}
+            accent="#7C3AED"
+            onClick={() => go('ops-dashboard')}
+          />
+        </div>
+
+        {/* ─── 3. NEEDS YOU TODAY — top 5 ranked actions ────────────── */}
+        <NeedsYouToday
+          items={needsYouToday}
+          onAction={(it) => { if (it && it.target) go(it.target); }}
         />
 
-        {/* ─── 3. PEOPLE — Manager Scorecards ────────────────────────── */}
+        {/* ─── 4. DETAIL — Collapsed by default. Everything below is one click. */}
+        <details style={{ background: 'white', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+          <summary style={{
+            padding: '12px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: '#111827',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              🔎 Detail — Scorecards · Exceptions · Visit Pulse · Region Health · Auth · Clinician · Expansion
+              <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
+                Folded by default · open for weekly review
+              </span>
+            </span>
+            <span style={{ fontSize: 10, color: '#6B7280' }}>click to expand ▾</span>
+          </summary>
+          <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 16, borderTop: '1px solid var(--border)' }}>
+
+        {/* MOVED INSIDE DETAIL — Manager Scorecards (formerly above-fold).
+            Underlying component unchanged. Other pages that import it keep
+            working. CEO sees it via the Detail expand. */}
         <ManagerScorecards
           census={census}
           statusLog={statusLog}
@@ -589,24 +1152,39 @@ export default function DirectorDashboard({ onNavigate }) {
           }}
         />
 
-        {/* ─── 4. PULSE — Today's Visit Numbers (compact strip) ──────── */}
+        {/* MOVED INSIDE DETAIL — Exception Feed (formerly above-fold). */}
+        <ExceptionFeed
+          census={census}
+          activityLog={activityLog}
+          coordinators={coordinators}
+          onJumpTo={(target, intent) => go(target, intent)}
+        />
+
+        {/* MOVED INSIDE DETAIL — Visit Pulse strip (formerly above-fold).
+            Kept as a deeper view; the CEO strip above is the at-a-glance. */}
         <div>
           <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-            📊 This Week's Pulse
+            📊 {weekOffset === 0 ? "This Week's Pulse" : (weekOffset === 1 ? "Last Week's Pulse" : `Pulse — ${getWeekRange(new Date(), weekOffset).label}`)}
             <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
               Visit numbers · click any tile to drill in
+              {wow && wow.completed > 0 && (() => {
+                const d = m.completedThisWeek.length - wow.completed;
+                const up = d >= 0;
+                return (
+                  <span style={{ marginLeft: 8, color: up ? '#059669' : '#DC2626', fontWeight: 700 }}>
+                    {up ? '▲' : '▼'} {Math.abs(d)} visits vs prior week
+                  </span>
+                );
+              })()}
             </span>
           </div>
-
-          {/* Visit pulse strip — five clickable tiles. Tighter padding than the
-              originally-duplicated dark Revenue/Score row (now in HeroBand).   */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
             {[
               { label:'Completed', val:m.completedThisWeek.length, color:'#059669', sub:`of ${WEEKLY_TARGET} target`, bg:'#F0FFF4', target:'visits', hint:'visit schedule' },
               { label:'Cancelled', val:m.cancelledThisWeek.length, color:'#DC2626', sub:`${m.cancelRate}% cancel rate`, bg:m.cancelRate>10?'#FEF2F2':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
               { label:'Missed', val:m.missedThisWeek.length, color:'#D97706', sub:'this week', bg:m.missedThisWeek.length>30?'#FEF3C7':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
               { label:'Clinician Cap.', val:m.clinicianCapacity, color:'#1565C0', sub:'max visits/week', bg:'#EFF6FF', target:'staff', hint:'staff directory' },
-              { label:'Utilization', val:Math.round((m.completedThisWeek.length/m.clinicianCapacity)*100)+'%', color:m.completedThisWeek.length/m.clinicianCapacity>0.75?'#059669':'#D97706', sub:`${m.completedThisWeek.length}/${m.clinicianCapacity} capacity`, bg:'var(--card-bg)', target:'clinician-accountability', hint:'by clinician' },
+              { label:'Utilization', val:m.clinicianCapacity > 0 ? Math.round((m.completedThisWeek.length/m.clinicianCapacity)*100)+'%' : '—', color:(m.clinicianCapacity>0 && m.completedThisWeek.length/m.clinicianCapacity>0.75)?'#059669':'#D97706', sub:`${m.completedThisWeek.length}/${m.clinicianCapacity} capacity`, bg:'var(--card-bg)', target:'clinician-accountability', hint:'by clinician' },
             ].map(c => {
               const clickable = !!c.target;
               return (
@@ -630,21 +1208,10 @@ export default function DirectorDashboard({ onNavigate }) {
           </div>
         </div>
 
-        {/* ─── 5. DETAIL — Collapsed by default (deep ops view) ──────── */}
-        <details style={{ background: 'white', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-          <summary style={{
-            padding: '12px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: '#111827',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              🔎 Detail View — Revenue Recovery / Region Health / Auth / Clinician
-              <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
-                Folded by default · open for weekly review
-              </span>
-            </span>
-            <span style={{ fontSize: 10, color: '#6B7280' }}>click to expand ▾</span>
-          </summary>
-          <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 16, borderTop: '1px solid var(--border)' }}>
+        {/* INSIDE DETAIL — Expansion Status (Georgia + future states).
+            Lives in Detail so the CEO has context on expansion momentum
+            without the FL/GA toggle ever showing an empty GA tab.        */}
+        <ExpansionStatus territories={mapping.territories} />
 
         {/* TRIAGE — 5 Priority Actions */}
         <div>

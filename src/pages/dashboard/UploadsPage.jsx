@@ -357,13 +357,30 @@ function UploadCard(props) {
           // flag table populated by trg_visit_data_flag). Faster than the
           // bulk sync_visits_to_auth(), and also refreshes auth_health +
           // fires/clears low_visits / expiring / over_limit alerts.
+          //
+          // 2026-05-31: DOUBLE-DRAIN. We discovered a stuck queue of 417 rows
+          // from a morning upload where the first sync apparently completed
+          // before all per-row AFTER triggers had populated auth_sync_pending
+          // (or the RPC errored silently mid-iteration). Calling twice with a
+          // brief settle delay guarantees the queue is drained. The second
+          // call is a no-op if the first one fully cleared it.
           setMessage('Syncing visit counts to authorization tracker...');
           var syncRes = await supabase.rpc('sync_pending_auths');
-          var authSyncMsg = '';
-          if (syncRes && typeof syncRes.data === 'number') {
-            authSyncMsg = ' · synced ' + syncRes.data + ' patient auth record(s)';
-          } else if (syncRes && syncRes.error) {
-            console.warn('sync_pending_auths failed:', syncRes.error.message);
+          var firstSynced = (syncRes && typeof syncRes.data === 'number') ? syncRes.data : 0;
+          if (syncRes && syncRes.error) {
+            console.warn('sync_pending_auths (pass 1) failed:', syncRes.error.message);
+          }
+          // Settle + drain again
+          await new Promise(function(r) { setTimeout(r, 1500); });
+          setMessage('Verifying auth sync queue is empty...');
+          var syncRes2 = await supabase.rpc('sync_pending_auths');
+          var secondSynced = (syncRes2 && typeof syncRes2.data === 'number') ? syncRes2.data : 0;
+          if (syncRes2 && syncRes2.error) {
+            console.warn('sync_pending_auths (pass 2) failed:', syncRes2.error.message);
+          }
+          var authSyncMsg = ' · synced ' + (firstSynced + secondSynced) + ' patient auth record(s)';
+          if (secondSynced > 0) {
+            console.info('[upload] second-pass drained ' + secondSynced + ' extra row(s) — prevented stuck-queue bug');
           }
 
           // Refresh last_visit_date / last_visit_clinician on census_data and

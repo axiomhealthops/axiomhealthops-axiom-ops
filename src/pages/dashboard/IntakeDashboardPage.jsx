@@ -1193,7 +1193,7 @@ export default function IntakeDashboardPage() {
                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7, marginBottom: 6 }}>Out of Area — Expansion Pipeline</div>
                 <div style={{ fontSize: 26, fontWeight: 700, fontFamily: 'DM Mono, monospace', marginBottom: 8 }}>{stats.ooa.length} Referrals Outside Service Area</div>
                 <div style={{ fontSize: 13, opacity: 0.85, maxWidth: 700, lineHeight: 1.6 }}>
-                  These are patients who needed our services but were outside the areas we cover. Each one represents demand for AxiomHealth in new geographies. Use this data to prioritize expansion areas by volume and insurance type.
+                  These are patients who needed our services but were outside the areas we cover. Each one represents demand for EdemaCare in new geographies. Use this data to prioritize expansion areas by volume and insurance type.
                 </div>
                 <div style={{ display: 'flex', gap: 20, marginTop: 16 }}>
                   {[

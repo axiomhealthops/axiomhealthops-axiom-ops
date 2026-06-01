@@ -667,7 +667,7 @@ export default function ReportsExportPage() {
           });
           const driftRows = rows.filter(r => r['Master Status'] && (r.Status||'').toLowerCase() !== (r['Master Status']||'').toLowerCase());
           const summary = [
-            ['AxiomHealth Patient Census Export'],
+            ['EdemaCare Patient Census Export'],
             ['Generated', new Date().toLocaleString()],
             ['Source', 'census_data (latest snapshot) joined to patient_master'],
             ['Region Filter', regionFilter],

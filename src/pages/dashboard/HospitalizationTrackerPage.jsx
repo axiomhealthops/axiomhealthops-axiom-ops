@@ -214,7 +214,7 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames }) {
           <div style={{ fontSize:12, fontWeight:700, color:'var(--black)', marginBottom:12, marginTop:16, paddingBottom:6, borderBottom:'1px solid var(--border)' }}>📋 Outcome & Return to Care</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
             <F label="Outcome">{sel('outcome', OUTCOMES)}</F>
-            <F label="Returned to AxiomHealth Service">
+            <F label="Returned to EdemaCare Service">
               <select value={form.returned_to_service ? 'yes' : 'no'} onChange={e => set('returned_to_service', e.target.value === 'yes')}
                 style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
                 <option value="no">No</option>

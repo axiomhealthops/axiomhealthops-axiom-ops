@@ -68,9 +68,9 @@ export default function ResetPassword() {
     <div style={S.outer}>
       <div style={S.card}>
         <div style={S.brand}>
-          <div style={S.logoMark}>A</div>
+          <div style={S.logoMark}>E</div>
           <div>
-            <div style={S.logoTitle}>AxiomHealth</div>
+            <div style={S.logoTitle}>EdemaCare</div>
             <div style={S.logoSub}>Operations Platform</div>
           </div>
         </div>
@@ -93,9 +93,9 @@ export default function ResetPassword() {
     <div style={S.outer}>
       <div style={S.card}>
         <div style={S.brand}>
-          <div style={S.logoMark}>A</div>
+          <div style={S.logoMark}>E</div>
           <div>
-            <div style={S.logoTitle}>AxiomHealth</div>
+            <div style={S.logoTitle}>EdemaCare</div>
             <div style={S.logoSub}>Operations Platform</div>
           </div>
         </div>
@@ -119,9 +119,9 @@ export default function ResetPassword() {
     <div style={S.outer}>
       <div style={S.card}>
         <div style={S.brand}>
-          <div style={S.logoMark}>A</div>
+          <div style={S.logoMark}>E</div>
           <div>
-            <div style={S.logoTitle}>AxiomHealth</div>
+            <div style={S.logoTitle}>EdemaCare</div>
             <div style={S.logoSub}>Operations Platform</div>
           </div>
         </div>

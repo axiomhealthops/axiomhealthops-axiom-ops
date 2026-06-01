@@ -1,9 +1,15 @@
-# AHM Workflow System Audit
+# EdemaCare Operations Workflow System Audit
+
+> **Naming note (2026-06-01):** "EdemaCare" is the public-facing brand as of June 1, 2026.
+> "AxiomHealth Management" / "AHM" remains the legal entity name and is preserved here in
+> the original file name and in references to the canonical training guide
+> (`AHM_Authorization_Training_Guide_v2.docx`) to keep links stable and historical context
+> intact. EdemaCare is a service of AxiomHealth Management LLC.
 
 **Date:** 2026-05-28
 **Auditor:** Claude (commissioned by Liam O'Brien, Director of Operations)
-**Scope:** EdemaCare / AHM Operations Dashboard codebase + Supabase schema
-**Reference workflow:** the 9-step canonical workflow ratified 2026-05-28, codified in *AHM_Authorization_Training_Guide_v2.docx* §1
+**Scope:** EdemaCare Operations Dashboard codebase + Supabase schema
+**Reference workflow:** the 9-step canonical workflow ratified 2026-05-28, codified in *AHM_Authorization_Training_Guide_v2.docx* §1 (file name preserved; content reissued as EdemaCare-branded training material)
 
 ---
 
