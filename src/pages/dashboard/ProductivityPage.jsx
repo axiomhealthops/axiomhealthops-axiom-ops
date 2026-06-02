@@ -122,12 +122,23 @@ export default function ProductivityPage() {
       .order('region')
       .order('full_name');
 
+    // 2026-06-02 BUG FIX (Liam, productivity over-count):
+    // Pariox uploads APPEND rows to visit_schedule_data. The upsert key is
+    // (patient,date,event_type,staff) — so when a visit changes event_type
+    // (e.g. "Level 3 *e*" → "Maintenance *e*") OR is cancelled in Pariox between
+    // uploads, the OLD row from yesterday's batch stays as a ghost row and
+    // inflates "Sched" counts. Example seen 6/2: Crystal Alviedo page=36,
+    // truth=26 (11 ghosts from 5/31 + 6/1 batches). 35 of 46 clinicians affected.
+    //
+    // Fix: for each visit_date, only honor rows from the LATEST batch_id that
+    // has any row for that date. That mirrors Pariox's "current schedule view"
+    // — older uploads are superseded for the dates they overlap with.
     var fetchVisits = function() {
       var all = [];
       var PAGE = 1000;
       var pull = function(from) {
         return supabase.from('visit_schedule_data')
-          .select('staff_name_normalized,visit_date,status,event_type,patient_name')
+          .select('staff_name_normalized,visit_date,status,event_type,patient_name,batch_id,uploaded_at')
           .gte('visit_date', weekStart).lte('visit_date', weekEnd)
           .not('event_type', 'ilike', '%(PDF)%')
           .range(from, from + PAGE - 1)
@@ -138,7 +149,27 @@ export default function ProductivityPage() {
             return pull(from + PAGE);
           });
       };
-      return pull(0);
+      return pull(0).then(function(rows) {
+        // Step 1: pick the latest uploaded_at per visit_date
+        var latestUpByDate = {};
+        rows.forEach(function(r) {
+          var d = (r.visit_date + '').slice(0, 10);
+          var up = r.uploaded_at || '';
+          if (!latestUpByDate[d] || up > latestUpByDate[d]) latestUpByDate[d] = up;
+        });
+        // Step 2: derive the batch_id that owns the latest upload for each date
+        //         (a single batch can span multiple dates; we lock by date).
+        var latestBatchByDate = {};
+        rows.forEach(function(r) {
+          var d = (r.visit_date + '').slice(0, 10);
+          if ((r.uploaded_at || '') === latestUpByDate[d]) latestBatchByDate[d] = r.batch_id;
+        });
+        // Step 3: keep only rows whose batch matches the latest batch for their date
+        return rows.filter(function(r) {
+          var d = (r.visit_date + '').slice(0, 10);
+          return r.batch_id === latestBatchByDate[d];
+        });
+      });
     };
 
     Promise.all([clinPromise, fetchVisits()]).then(function(results) {
