@@ -1,348 +1,207 @@
-# Payroll Review & Audit — Phase 1 Design
+# Payroll Review & Audit — Phase 1 Design (REV 2)
 
-**Status:** Design proposal, not built. Awaiting Liam sign-off before any code or schema change.
-**Author:** Claude (top-0.1% advisor mode), 2026-06-01
+**Status:** Re-scoped after discovery of existing axiom-payroll portal. Awaiting Liam sign-off before any code or schema change.
+**Author:** Claude (top-0.1% advisor mode), 2026-06-01, revised 2026-06-02 after Liam's Q&A
 **Owner:** Liam O'Brien, Director of Operations
-**Scope target:** New "PAYROLL & FINANCE" section in EdemaCare Ops, gated to super_admin / admin (Liam + Carla initially)
+**Revision:** v2 — original v1 underestimated what was already built. The CEO's "mileage portal" is in fact a near-complete payroll system. This rev is a corrective course change.
 
 ---
 
-## 0. TL;DR for Liam
+## 0. TL;DR — read this first, the situation has changed
 
-You want one weekly screen that says *"these clinicians' paychecks look wrong — go look."* That requires reconciling three independent sources you don't currently have a join key for:
+When you said "mileage portal," I assumed a single-purpose mileage logger. **It isn't.** `axiom-payroll.web.app` is a near-complete payroll system your CEO has already built. It already does the import work I was proposing to build. Specifically, the portal already has:
 
-1. **Paylocity** — clock hours, PTO, OT, training (no Cowork connector exists; we'd build a direct Edge Function calling the Paylocity REST API after you provision access)
-2. **A mileage app** — *you haven't told me which one yet*, and that single answer changes the effort estimate by ~1-2 weeks
-3. **Pariox visits** — already in `visit_schedule_data`, but **visits have no stored duration**. ~58% of recent rows have a parseable time range ("0700 - 0815"); the other ~42% are a single time like "8:00". We'll need an event_type → assumed-duration lookup table, which is an editable config not a one-time choice.
+- **Paylocity PDF import** — both Pre-Process Payroll Register and per-day Time Card PDFs are parsed into a hours table with categories (Regular, OT, PTO, Training, Documentation, Meaningful Work, Meetings, Level Pay, Bonus)
+- **Mileage submissions** with MileIQ / Stride / Everlance / screenshot upload OR manual entry, weekly, with a review queue
+- **Visit data upload** (CSV/XLSX/PDF with column mapping) and a visits table with patient, discipline, miles, rate, verified flag
+- **Hours & Approvals workflow** — pending/approved/denied per category
+- **Mileage Review queue** — pending/approved/rejected per submission
+- **Pay Per Visit Report**, **Mileage Reimbursement Report**, **Payroll Report** with CSV + Paylocity CSV + 1099 CSV export
+- **Bonus & Retainer logic** — preceptor retainers, productivity bonuses with calculate-and-approve workflow
+- **LS Level Pay Rates** (LS 1-5, PT/OT, PTA/OTA, Assessment, Hourly), **Rate Matrix (Role × Visit Type)**, **Virtual Visit hourly rates**, **PTO/Vacation rate**, **FLSA blended-rate OT logic**
+- **Pay Periods History** with auto-tagging from Paylocity/1099 export
+- **Analytics & Trends**, **Per-Clinician Metrics**, **Productivity vs Weekly Goal**
+- **Firebase Auth** with owner/admin/pending approval gating
 
-I am recommending we **not** try to integrate Paylocity in v1. Instead, do v1 as a manual weekly XLSX import (same pattern as `AuthAuditImportPage.jsx`) and prove the reconciliation logic catches real fraud/error before we spend 1-2 weeks building the API integration. **Reverse the order from the original ask** — that's the most defensible posture and gets you a working tool in days instead of weeks.
+**This means 80% of what I scoped in rev 1 is already done.** What is missing — and what you actually need — is the **variance/audit flagging layer**. The portal collects all three data streams but doesn't compare them to flag clinicians whose clock hours don't match their visit volume. That is the gap.
 
-Below: the questions you need to answer before any build, the recommended scope, the schema, the flag rules, the UI, and the effort estimates. Time to read end-to-end: ~12 minutes.
+**Hard recommendation:** do **not** rebuild Paylocity import or mileage import or visits import inside EdemaCare Ops. That work is done. Instead, pick one of the three options below and execute. My strong recommendation is **Option A (build the variance layer inside the portal, with your CEO)** — it's the cheapest, fastest, and avoids data duplication.
+
+**Action you should take this hour:** message your CEO with this doc. He built the portal — he needs to be in the conversation before any code is written, period.
 
 ---
 
-## 1. Open questions — answer these before any build
+## 1. Three options for where the audit layer lives
 
-I'm including my recommended default in bold. If you don't answer, I'll proceed with the default.
+| | A. Add to axiom-payroll portal | B. Mirror into EdemaCare Ops | C. Hybrid (portal pushes, ops consumes) |
+|---|---|---|---|
+| Where the new "Payroll Review" screen lives | Inside the portal (new tab) | Inside `edemacare-ops` (new section) | Inside `edemacare-ops` (read-only mirror) |
+| Who builds it | CEO (in Claude, same as the rest of the portal) | You / me, in this repo | Both — CEO writes the push, I write the consumer |
+| Data flow | All three sources already in Firestore; just read + flag | Pull Firestore → Supabase nightly via Edge Function (Firebase Admin SDK) | Cloud Function in portal POSTs weekly snapshot to an Edge Function in this repo |
+| Pariox join | Portal needs a Pariox import OR a Firestore sync from `visit_schedule_data` | Already in Supabase | Already in Supabase |
+| Duplication | None | Yes (portal data mirrored to Supabase) | Snapshot-only (lighter) |
+| Auth | Firebase Auth (already gated) | Existing EdemaCare Ops `page_permissions` | Existing EdemaCare Ops `page_permissions` |
+| Effort | **~2 days** of CEO time | **~5-7 dev days** (Firebase Admin SDK + reconciliation engine + UI) | **~3-4 days** split between CEO and me |
+| Pros | Cheapest. No duplication. Tool lives where the data already lives. CEO is already in this codebase daily. | Audit lives in your ops dashboard alongside everything else you already use. | Decouples portal from ops repo. Good if CEO's involvement is uncertain. |
+| Cons | Requires CEO bandwidth. You'd be navigating to a separate URL to run the audit. | Two copies of payroll data — a real liability if they drift. Firebase Admin SDK key handling. | Most moving pieces. Two teams have to ship together. |
 
-| # | Question | My recommended default |
+**My recommendation: A.** It's the cleanest. The data already lives there. Your CEO already maintains it. Adding a "Variance Audit" tab is a 1-2 day exercise.
+
+**Pick B only if** you've decided the portal is not the long-term home for payroll and you want EdemaCare Ops to gradually absorb its functionality. That's a real strategic decision, not a tactical one.
+
+**Pick C if** CEO can give you a Cloud Function trigger but not a full audit UI build.
+
+---
+
+## 2. Liam's answers to v1 questions, with my response
+
+| Q | Your answer | What it means |
 |---|---|---|
-| 1 | Which mileage tracker app does the staff currently use? | **Tell me** — this is a hard blocker for any live integration. If it's a custom Google Form or spreadsheet, v1 is an XLSX import; if it's MileIQ/TripLog/Everlance, v1 is still an XLSX import (they all support weekly CSV/XLSX export) and v2 considers API access. |
-| 2 | Do you have Paylocity admin rights to submit a Web Services Access Request? | **Submit it now, in parallel.** It typically takes 2-4 weeks to enable. Phase 1 doesn't need it, but starting the clock is free. Reference: [Paylocity Web Services Access Request](https://docs.paylocity.com/Knowledge/Partner%20Integration/Paylocity_Web_Services_Access_Request.pdf). |
-| 3 | What hours/visit assumption should we use? Is duration uniform by visit type? | **Default: Maintenance = 45 min, Level 2/3/4/5 + Evaluation = 60 min, Cancelled/Attempted = 0 min.** Made editable in `payroll_flag_rules` config table so you can tune without a code change. Drive time/charting/documentation between visits — add a fixed 15 min/visit "overhead" allowance separately. |
-| 4 | Should a flag block payroll, or just notify? | **Notify only in v1.** Hard-blocking creates pressure on you to clear flags before Paylocity's processing deadline, and v1 is a learning phase. v2 can add a "hold payroll" workflow once you trust the rules. |
-| 5 | Who reviews — just you, or Carla / HR too? | **You + Carla.** Carla = `admin` (already has access to Audit Import). Page gated to `super_admin` (Liam) and `admin` (Carla). RLS not needed yet; both can see all rows. |
-| 6 | Is there an existing review workflow today? | **Tell me.** If yes, v1 must mirror it (don't ask Carla to learn a new tool). If no, the design below is greenfield. |
-| 7 | What's the pay cadence — weekly, bi-weekly, semi-monthly? | **Assuming bi-weekly** (Paylocity default for healthcare ops). The page should support a "pay period" selector that defaults to the most recent closed period but can also show a single Sun-Sat week for early detection. |
-| 8 | Do clinicians submit timesheets only, or do they self-attest visit completion in Paylocity? | **Tell me.** If Paylocity time = clock hours only (no per-visit attestation), Pariox is the ground truth for visit volume. If Paylocity has per-visit codes, we have a richer reconciliation. |
-| 9 | Are training hours and PTO already in Paylocity, or in a separate LMS / HR system? | **Default: in Paylocity** (Paylocity has Learning module and PTO module). If LMS is separate, training reconciliation is v3. |
-| 10 | Mileage rate paid — IRS standard ($0.67/mi for 2026, or whatever your reimbursement policy uses)? | **$0.67/mi default**, configurable. Dollar-at-risk calculations need this. |
-
-**If I were you, I'd batch-answer 1, 6, 8, 9 by Slack reply and consider 2 actioned today.** The rest I can run with defaults.
+| Q1 — mileage app | "Not an app, portal built by CEO in Claude — axiom-payroll.web.app" | **This reframes everything** (see §0). Not a mileage tracker — a payroll system. |
+| Q2 — Paylocity API access | (no answer) | I'll assume you have not yet provisioned API credentials. The portal already imports Paylocity via PDF upload, so API access is **no longer on the critical path**. Defer it. |
+| Q3 — visit duration assumption | "Minimum 60 minutes per visit" | Locked. Reconciliation = (completed visits × 60 min) = minimum expected clinical-time hours. Real clock hours that fall below this are fine; clock hours **above** by N% are the flag. (Plus mileage/no-visits and PTO/visits-same-day flags from §5.) |
+| Q6 — existing workflow | "Paylocity report → compare to Pariox Activity report (clinician completed visits) → once approved, mileage is added on" | Sequential, two-stage approval. Hours approve first, mileage approves after. The portal's existing screens already separate Hours & Approvals from Review Mileage, which matches this. The audit layer should sit **between Paylocity import and Hours approval** — flag suspicious rows before you approve them. |
 
 ---
 
-## 2. Scope I am recommending (counter-proposal)
+## 3. What the variance/audit layer actually needs to do
 
-The original ask is "weekly flagging across three sources." I'm pushing back on doing all three integrations at once. Here's the staged scope:
+(Same logic whether it lives in the portal, in EdemaCare Ops, or in a hybrid.)
 
-### Stage 1 — Manual XLSX import + reconciliation (2-3 days, ~$0 vendor cost)
-- Liam (or Carla) exports the weekly Paylocity time-summary report as XLSX.
-- Exports mileage from whatever app the staff uses (or paste from form).
-- Uploads both into `PayrollReviewPage` — model on `AuthAuditImportPage.jsx`.
-- App joins them against `visit_schedule_data` for the same Sun-Sat week.
-- Runs the flag rules. Shows the table. You review.
-- This gets you a **working flag system in 3 days**, validates the rules, and lets you keep payroll moving while we wait on Paylocity API enablement.
+### 3.1 Inputs
 
-### Stage 2 — Paylocity API automation (1-2 weeks, after Paylocity Web Services approval)
-- Edge Function pulls time-card data automatically each Monday morning.
-- Removes the manual export step.
-- Adds employee-master sync so we don't have to maintain `clinician_payroll_map` by hand.
+- **Paylocity** clock hours per clinician per week, by category — *already imported into the portal's Hours table*
+- **Pariox** completed visits per clinician per week, deduped via `dedupEncounters()` in `src/lib/visitMath.js:82` — lives in `visit_schedule_data` in Supabase
+- **Mileage** per clinician per week — *already in the portal's Mileage Review queue*
 
-### Stage 3 — Mileage API automation (1 week, if/when staff app supports it)
-- Same pattern: Edge Function pull → reconcile → flag.
-- Optional. If staff move to a paper/Google Form process this never happens.
+### 3.2 The single core calculation
 
-### Stage 4 — Closed-loop workflow (1 week)
-- Approve / hold / send-back-to-clinician actions
-- Email notification to clinician via Resend (`@axiomhealthmanagement.com`)
-- Audit trail of reviewer + decision in `payroll_reviews.status`
+```
+expected_clinic_hours[clinician, week] =
+    count(completed_visits in week) × 60 min
+```
 
-### What I'm explicitly **not** putting in v1
-- Geocoded mileage reconciliation (visit-to-visit driving distance estimation). It's tempting but it's a project — Google Maps API quota, geocoding all patient addresses, handling P.O. boxes, accounting for the clinician's home as a start point. Defer to v3 if at all.
-- Training hours reconciliation against an LMS unless you confirm one exists in scope.
-- Anything that writes back to Paylocity (corrections, adjustments). Out of scope — a writeback bug becomes payroll fraud risk.
+(Q3 locked at 60 min/visit minimum.)
+
+```
+variance_pct[clinician, week] =
+    (paylocity_regular_hours - expected_clinic_hours) / expected_clinic_hours
+```
+
+This is the headline number. Above +20% = flag.
+
+A few wrinkles to handle:
+- **PTO + visits same day** — if PTO hours > 0 on a day where Pariox has completed visits, flag (this catches double-dipping)
+- **Mileage with no visits** — if mileage > 0 on a day with zero completed visits, flag
+- **OT with flat-or-down volume** — OT hours > 0 AND WoW completed-visits change ≤ 0%, flag
+- **Zero visits, no PTO, no training** — clinician absent without leave, flag
+- **Training hours** — already a category in the portal's Hours table; treat training time as "clock hours used" against the expected-clinic-hours bucket (training time legitimately reduces visit hours)
+
+### 3.3 Flag rules table (proposed, editable)
+
+| Rule | Trigger | Severity | Dollar-impact calc |
+|---|---|---|---|
+| `hours_variance_high` | Reg+OT clock hrs > (visits × 60 min) by ≥20%, excluding PTO/Training/Meetings hours | hard | (clock_hrs − expected_hrs) × hourly_rate |
+| `pto_with_visits_same_day` | PTO claimed AND ≥1 completed visit on same day | hard | day's PTO + day's visit revenue (potential double-pay) |
+| `mileage_no_visits` | Mileage > 0 AND completed visits = 0 on a day | hard | miles × portal mileage rate |
+| `ot_no_volume` | OT > 0 AND visits WoW change ≤ 0% | hard | OT_hrs × rate × 1.5 |
+| `zero_visits_no_leave` | 0 completed visits, 0 PTO, 0 Training, 0 Meetings in week | hard | full clock hrs × rate |
+| `mileage_outlier` | Claimed miles > 2× clinician's 8-week rolling median | soft | excess miles × portal rate |
+| `unverified_visits` | Imported visits with `verified=false` AND used in revenue calc | soft | unverified count × $230 |
+
+Each flag carries a $ at-risk so Liam can see "$ at risk this period" as the headline KPI.
+
+### 3.4 What the UI screen needs
+
+A weekly/biweekly table, one row per clinician, columns:
+
+```
+Clinician | Reg hrs | OT | PTO | Training | Visits | Expected hrs | Variance % | Mileage | Flags | $ at risk | Status
+```
+
+Row click → drawer with the same day-by-day breakdown described in rev 1 (§5.2), showing each day's clock-vs-visit reconciliation. Approve / Hold / Send back to clinician actions, with a notes field that gets logged.
+
+**Critical:** the screen should be **read-only on Paylocity values and mileage values** — never write back. Updates flow upstream to the source (portal or Paylocity), not downstream from the audit layer. This is a hard constraint: an audit tool that modifies its source is no longer an audit tool.
 
 ---
 
-## 3. Data sources & data model
+## 4. Effort estimate (revised — much smaller)
 
-### 3.1 Pariox — what we have (and what we don't)
-
-`visit_schedule_data` (verified via Supabase query 2026-06-01):
-
-| Field | Type | Notes |
+### Option A — in-portal (recommended)
+| Piece | Owner | Effort |
 |---|---|---|
-| `staff_name` | text | "Aguilar, Isaac" — needs mapping to Paylocity employee_id |
-| `staff_name_normalized` | text | Already normalized; use this as the join key |
-| `visit_date` | date | Reliable |
-| `visit_time` | text | Freeform: "1530 - 1645", "0700 - 0815", "8:00", sometimes blank. ~21% range / ~42% single / ~37% other in last month. |
-| `event_type` | text | Maintenance, Level 2/3/4/5, Evaluation, Cancelled Treatment, Attempted Visit, +PDF variants |
-| `status` | text | Completed / Scheduled / Cancelled / Missed. **CRITICAL: Pariox stores cancelled-as-status="Completed" + event_type="Cancelled Treatment".** Use `isCompleted()` from `src/lib/visitMath.js:67`, not raw string check. |
-| `discipline` | text | LYMPHEDEMA PT / PTA / OT |
+| Pariox import into portal Firestore (one-time CSV upload of visits using existing visit-upload tab, OR small Cloud Function that reads from Supabase) | CEO | 0.5 day |
+| `payroll_flag_rules` collection + seed | CEO | 0.5 day |
+| Variance computation logic (the math in §3.2) | CEO | 0.5 day |
+| New "Variance Audit" tab UI (table + drawer + approve/hold/send-back) | CEO | 1 day |
+| **Total** | | **~2.5 days of CEO time** |
 
-**What's missing for payroll:**
-- No stored duration field. Solution: a `visit_duration_assumptions` config table keyed on `event_type` (or `event_type` pattern). Default: Maintenance 45 min, Level 2-5 + Eval 60 min, Cancelled/Attempted 0 min. Editable through Settings.
-- No clinician → Paylocity employee_id mapping. Solution: `clinician_payroll_map` table — small (≤30 rows). Seeded manually, maintained when staff onboard.
-- `visit_time` parseability — only ~21% have a parseable range. Recommended approach: prefer parsed range when available, otherwise fall back to event-type assumption.
-
-### 3.2 Paylocity — what we'd pull
-
-Paylocity Web Services REST API endpoints we'd need ([Paylocity dev portal](https://developer.paylocity.com/integrations/docs/common-use-cases-partners)):
-- `GET /api/v2/companies/{cid}/employees` — employee master + active/terminated status
-- `GET /api/v2/companies/{cid}/timecards?startDate=...&endDate=...` — daily punches by employee
-- `GET /api/v2/companies/{cid}/employees/{eid}/earnings?payDate=...` — earnings categories (Regular, Overtime, Training, PTO, Holiday)
-- PTO balance is in `/employees/{eid}/pto` per `[Time Entry → Payroll Batch endpoint](https://paylocity.egain.cloud/system/templates/selfservice/pctycss/help/customer/locale/en-US/portal/308600000001020/content/PCTY-126374/Utilize-Time-Entry-Information-to-Create-a-Payroll-Batch-via-API)`
-
-**Authentication:** OAuth2 client_credentials. Paylocity issues client_id + client_secret after Web Services Access Request approval. Stored in Supabase Vault, accessed only by Edge Function.
-
-**Caveat:** Paylocity is **read-only** in this design. We do not write back. This is a firm constraint — Liam should reject any future scope creep that wants to do payroll adjustments via API.
-
-### 3.3 Mileage — TBD until Liam confirms app
-
-Three scenarios and the work each implies:
-
-| Scenario | Effort |
-|---|---|
-| **Paper / Google Form / spreadsheet** | v1 = paste/upload XLSX (1 day). No API needed. |
-| **MileIQ / TripLog / Everlance** | All three offer weekly XLSX export. v1 = XLSX upload (1 day). v2 = API integration *if* a free/cheap tier exists; otherwise stay on XLSX. |
-| **Custom mobile app the team built** | Need API access details. Could be hours or weeks depending on what's there. |
-
-### 3.4 Proposed schema additions (DDL not run yet)
-
-```sql
--- Pay period (Sun-Sat or bi-weekly Sun-Sat × 2)
-CREATE TABLE payroll_periods (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  period_start  date NOT NULL,    -- Sunday
-  period_end    date NOT NULL,    -- Saturday (or Sat 2 weeks later)
-  cadence       text NOT NULL DEFAULT 'weekly',  -- 'weekly' | 'biweekly'
-  status        text NOT NULL DEFAULT 'open',    -- 'open' | 'in_review' | 'closed'
-  opened_at     timestamptz DEFAULT now(),
-  closed_at     timestamptz,
-  closed_by     uuid REFERENCES coordinators(id),
-  UNIQUE (period_start, period_end)
-);
-
--- One row per clinician per pay period
-CREATE TABLE payroll_reviews (
-  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  period_id         uuid REFERENCES payroll_periods(id) ON DELETE CASCADE,
-  clinician_id      uuid REFERENCES coordinators(id),
-  staff_name_normalized text NOT NULL,  -- fallback join key for Pariox
-  paylocity_data    jsonb,    -- raw clock hours, OT, PTO, training breakdown
-  mileage_data      jsonb,    -- raw mileage submission
-  pariox_summary    jsonb,    -- {visits_completed, visits_cancelled, estimated_clinic_hours, by_day}
-  flags             jsonb,    -- array of {rule_id, severity, message, dollar_impact}
-  status            text NOT NULL DEFAULT 'pending',  -- 'pending' | 'approved' | 'hold' | 'sent_back'
-  reviewer_notes    text,
-  reviewed_by       uuid REFERENCES coordinators(id),
-  reviewed_at       timestamptz,
-  created_at        timestamptz DEFAULT now(),
-  UNIQUE (period_id, staff_name_normalized)
-);
-
--- Editable flag rules (so Liam can tune thresholds without a deploy)
-CREATE TABLE payroll_flag_rules (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  rule_key    text UNIQUE NOT NULL,
-  name        text NOT NULL,
-  description text,
-  threshold   jsonb,         -- e.g., {variance_pct: 20}
-  severity    text NOT NULL, -- 'soft' (yellow) | 'hard' (red)
-  is_active   boolean NOT NULL DEFAULT true,
-  updated_at  timestamptz DEFAULT now()
-);
-
--- Editable visit-duration assumptions (event_type pattern → minutes)
-CREATE TABLE visit_duration_assumptions (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  event_pattern text UNIQUE NOT NULL,  -- e.g., 'Maintenance', 'Level%', 'Evaluation', 'Cancelled%'
-  minutes     int NOT NULL,
-  is_active   boolean NOT NULL DEFAULT true
-);
-
--- Bridge table — Pariox staff_name to Paylocity employee_id
-CREATE TABLE clinician_payroll_map (
-  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  coordinator_id  uuid REFERENCES coordinators(id),
-  staff_name_normalized text UNIQUE NOT NULL,
-  paylocity_employee_id text UNIQUE,
-  mileage_app_user_id   text,
-  hourly_rate     numeric(8,2),     -- optional, for dollar-impact calculations
-  is_active       boolean NOT NULL DEFAULT true
-);
-```
-
-All five tables use `coordinators.id` for FKs (not `auth.uid()`). RLS in v1: super_admin + admin only. If RLS is added later, join through `coordinators.user_id` per the project convention in `CLAUDE.md`.
-
----
-
-## 4. Flag rules — what counts as "doesn't seem right"
-
-All rules read from `payroll_flag_rules` so thresholds are editable. Severity colour: soft = yellow (review recommended), hard = red (review required).
-
-| Rule | Trigger | Default threshold | Severity | Dollar-impact calc |
-|---|---|---|---|---|
-| `hours_variance_high` | Paylocity clock hours > Pariox-implied hours by N% | 20% | hard | (clock_hrs − pariox_hrs) × hourly_rate |
-| `hours_variance_low` | Paylocity clock hours **less** than Pariox-implied hours by N% | 20% | soft | clinician underreporting — wage-and-hour risk; flag for HR |
-| `ot_no_volume` | OT hours > 0 AND completed-visits WoW change ≤ 0% | n/a | hard | OT_hrs × hourly_rate × 1.5 |
-| `pto_with_visits` | PTO claimed on day D AND visits completed on day D | 1+ visit | hard | day's PTO + day's visit revenue |
-| `mileage_without_visits` | Mileage claimed on day D AND 0 visits on day D | any | hard | miles × $0.67 |
-| `zero_visits_no_pto` | Zero completed visits in pay period AND no PTO/training claimed | n/a | hard | full clock hours × rate |
-| `training_hours_unlogged` | Training hrs claimed but no training event record | requires training table — v3 | soft | training_hrs × rate |
-| `mileage_outlier` | Claimed miles > P95 of clinician's rolling-8-week median by N× | 2× | soft | excess miles × $0.67 |
-
-Total dollar-at-risk = sum of per-row dollar-impact. That number drives the KPI strip at the top of the page so Liam can see how much money is questionable this week.
-
-**Soft vs hard threshold reasoning:** soft flags trigger review but don't block; hard flags require an explicit "Approve anyway" with a note (logged to `payroll_reviews.reviewer_notes`).
-
----
-
-## 5. UI design
-
-### 5.1 Sidebar placement
-
-New section: `PAYROLL` (single word — matches existing all-caps convention in `Sidebar.jsx:13-23` and the DB constraint that `page_section` strings match verbatim). Inserted between `PERFORMANCE` and `ADMIN`.
-
-Two pages in v1:
-- `payroll-review` — "Payroll Review" — the main weekly table
-- `payroll-settings` — "Payroll Rules" — admin-only, edits `payroll_flag_rules` + `visit_duration_assumptions` + `clinician_payroll_map`
-
-Page permissions seed:
-```sql
-INSERT INTO page_permissions (page_section, page_key, page_label, sort_order, super_admin, admin)
-VALUES ('PAYROLL', 'payroll-review',   'Payroll Review', 100, true, true),
-       ('PAYROLL', 'payroll-settings', 'Payroll Rules',  900, true, false);
-```
-
-Add `'PAYROLL'` to `ALL_SECTIONS` in `Sidebar.jsx:13-23` between PERFORMANCE and ADMIN, plus page icons in `PAGE_ICONS` (lines 25-44).
-
-### 5.2 Payroll Review page layout
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│  Payroll Review — [Pay Period: May 24 - Jun 6, 2026 ▾]  [Sun-Sat ▾]    │
-├────────────────────────────────────────────────────────────────────────┤
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐           │
-│  │ Clinicians │ │ Flagged    │ │ $ at risk  │ │ Approved   │           │
-│  │    23      │ │    6  (26%)│ │  $4,820    │ │  17 / 23   │           │
-│  └────────────┘ └────────────┘ └────────────┘ └────────────┘           │
-├────────────────────────────────────────────────────────────────────────┤
-│  Upload Paylocity XLSX  [📤]    Upload Mileage XLSX  [📤]               │
-│  Last imported: Paylocity 2026-06-01 09:14 by Liam | Mileage —          │
-├────────────────────────────────────────────────────────────────────────┤
-│  Clinician    │ Clock | Pariox  │ OT  │ PTO │ Mileage │ Flags │ Status │
-│  ─────────────┼───────┼─────────┼─────┼─────┼─────────┼───────┼────────│
-│  Aguilar, I.  │ 38.5h │ 12 v / 9h│ 0h  │ 0h  │ 142 mi  │ 🔴 2  │ pending│
-│  Davis, S.    │ 40.0h │ 18 v /13.5│0h  │ 8h  │ 89 mi   │ 🟡 1  │ pending│
-│  Manaay, H.   │ 40.0h │ 22 v /16.5│0h  │ 0h  │ 167 mi  │ ✓     │ approved│
-│  ...                                                                    │
-├────────────────────────────────────────────────────────────────────────┤
-│  [Export selected] [Approve all clear] [Close pay period]               │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-Click any row → side drawer with day-by-day breakdown:
-
-```
-┌──── Aguilar, Isaac — May 24-30 ────────────────────────────────────────┐
-│ Day  │ Clock │ Visits │ Pariox hrs │ Mileage │ PTO │ Flag             │
-│ Sun  │ 0     │ 0      │ 0          │ 0       │ 0   │ —                │
-│ Mon  │ 8.5   │ 4      │ 3.5        │ 28      │ 0   │ 🔴 -5h variance  │
-│ Tue  │ 8.0   │ 3      │ 2.75       │ 22      │ 0   │ 🔴 -5.25h        │
-│ Wed  │ 0     │ 0      │ 0          │ 18      │ 0   │ 🔴 mileage/no-vis│
-│ Thu  │ 8.0   │ 2      │ 1.75       │ 24      │ 0   │ 🔴 -6.25h        │
-│ Fri  │ 8.0   │ 2      │ 1.75       │ 26      │ 0   │ 🔴 -6.25h        │
-│ Sat  │ 6.0   │ 1      │ 0.75       │ 24      │ 0   │ 🔴 -5.25h        │
-│ ──── │ ───── │ ─────  │ ──────     │ ─────   │ ─── │                  │
-│ Total│ 38.5  │ 12     │ 10.5       │ 142     │ 0   │ -28h gap         │
-│                                                                         │
-│ Estimated $ at risk: 28h × $32/hr = $896                                │
-│                                                                         │
-│ Reviewer notes: ______________________________                          │
-│                                                                         │
-│ [Approve] [Hold for review] [Send back to clinician]                    │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-The "Send back to clinician" action sends a Resend email from a `@axiomhealthmanagement.com` mailbox (existing infra — DKIM/SPF verified on that domain per `CLAUDE.md`).
-
-### 5.3 Conventions to reuse
-
-- Week selector: `src/components/WeekSelector.jsx` (Sun-Sat already correct)
-- Week helpers: `getWeekStart` / `getWeekEnd` / `getWeekRange` from `src/lib/dateUtils.js`
-- Visit math: `isCompleted`, `isCancelled`, `dedupEncounters`, `classifyVisits` from `src/lib/visitMath.js`
-- Pagination: `fetchAllPages` from `src/lib/supabase.js` — required because `visit_schedule_data` > 5K rows per `CLAUDE.md`
-- Activity logging: `logActivity` from `src/lib/supabase.js`
-- Modal pattern: `src/components/StatusChangeModal.jsx`
-- Upload pattern: `src/pages/AuthAuditImportPage.jsx` — stage → diff → preview → apply
-- No inline unicode in JSX text (use `{'✓'}` if needed)
-
----
-
-## 6. Effort estimate (be specific)
-
-| Piece | Effort | Risk |
+### Option B — in EdemaCare Ops (read-from-Firestore)
+| Piece | Owner | Effort |
 |---|---|---|
-| Schema (5 tables) + seed data | 0.5 day | Low |
-| Sidebar + page_permissions wiring | 0.5 day | Low |
-| XLSX upload + parse for Paylocity export | 1 day | Med — depends on Paylocity report format |
-| XLSX upload + parse for mileage | 0.5–1 day | Med — depends on app (Q1) |
-| Pariox reconciliation engine | 1 day | Low — math is well-understood, helpers exist |
-| Flag rules engine | 0.5 day | Low |
-| Main table UI + KPI strip | 1 day | Low |
-| Day-by-day drawer | 0.5 day | Low |
-| Approve/Hold/Send-back actions + Resend email | 0.5 day | Low |
-| **Stage 1 subtotal** | **5.5–6 days** | |
-| Paylocity Web Services Access Request | 0 dev days; 2-4 wk Paylocity-side wait | High — outside our control |
-| Paylocity OAuth2 + Edge Function | 2 days | Med |
-| Paylocity timecard pull + employee sync | 2 days | Med |
-| Replace XLSX import with API pull | 1 day | Low |
-| **Stage 2 subtotal** | **5 dev days + Paylocity wait** | |
-| Mileage API (only if app supports it) | 2-5 days | TBD on Q1 |
-| Closed-loop workflow polish | 2-3 days | Low |
-| **Stage 4 subtotal** | **2-3 days** | |
-| **Total to feature-complete v2** | **~13-20 dev days** + Paylocity enablement wait | |
+| Firebase Admin SDK setup + service-account credential | Me + Liam | 0.5 day (credential is the slow part) |
+| Edge Function that pulls Firestore collections nightly | Me | 1 day |
+| New Supabase tables to mirror payroll data (5 tables; rev 1 §3.4 schema, minus `clinician_payroll_map` which lives in portal) | Me | 0.5 day |
+| Sidebar wiring + PAYROLL section + page_permissions | Me | 0.5 day |
+| Variance engine | Me | 0.5 day |
+| Table + drawer UI | Me | 1.5 days |
+| Approve/Hold/Send-back actions (write back to Firestore via Edge Function) | Me | 1 day |
+| **Total** | | **~5.5 dev days** |
 
-**Reality check for Liam:** the original ask sounded like "build this in a sprint." Honest answer is it's 3-4 weeks of focused work to get Stages 1+2 done, *plus* the Paylocity enablement wait which is outside our control. Stage 1 alone is 5-6 days and gives you 80% of the value.
+### Option C — hybrid
+| Piece | Owner | Effort |
+|---|---|---|
+| Cloud Function in portal that writes weekly snapshot to a Supabase endpoint | CEO | 1 day |
+| Supabase Edge Function receiver + snapshot table | Me | 0.5 day |
+| Sidebar/page wiring + UI | Me | 2 days |
+| **Total** | | **~3.5 days split between us** |
 
 ---
 
-## 7. Risks I want flagged before we start
+## 5. Risks I want flagged before we start
 
-1. **Pariox visit duration is an assumption, not a measurement.** Every flag based on hours variance is therefore an *estimate*. If a clinician disputes a flag, you have to be able to show the assumption used and why. The day-by-day drawer should show "estimated" explicitly, never "actual."
-2. **Wage-and-hour law.** The `hours_variance_low` rule (clinician working unreported time) is a legal exposure if you don't follow up. FLSA requires you to pay for hours worked even if not clocked. This is HR/legal territory — Liam should loop in counsel before that flag goes live.
-3. **Pariox data lag.** Pariox uploads are batched. If a clinician's visits for Friday don't hit `visit_schedule_data` until Monday, the Sunday-night payroll review will under-count visits and over-flag. Mitigation: don't run the reconciliation until at least 48h after the period ends.
-4. **Co-treat visits.** PT + PTA on the same patient/date = one encounter for revenue but **two clinicians clocked.** `dedupEncounters` in `visitMath.js:82` collapses them for billing but does NOT collapse them for per-clinician productivity, which is what we want for payroll. Confirm both clinicians have their visit row.
-5. **Cross-week scheduling.** A visit scheduled at 23:30 on Saturday that ends at 00:45 Sunday — does it count to which week? Default: count by start time (already in `visit_date`).
-6. **The 22 `@axiomhealthmanagement.com` coordinator rows** stay as-is per `CLAUDE.md`. Don't rename. Map them via `clinician_payroll_map`.
-7. **Vercel preview deploys** can be public — no Paylocity creds in env vars for previews; only in production.
-
----
-
-## 8. What I need from Liam to greenlight build
-
-A reply that says **"go with the recommended defaults, except question N where I want X"** is enough. Specifically:
-- Confirm Q1 (mileage app)
-- Confirm or override Q3 (duration assumptions)
-- Confirm Q6 (existing workflow today)
-- Confirm Stage 1 first, Stage 2 later (counter-proposal in §2)
-
-Anything else, I'll proceed with the bold defaults in §1.
-
-When you greenlight, Phase 2 build order will be: schema migration → sidebar wiring → XLSX import → reconciliation engine → table UI → drawer → workflow actions. Roughly 5-6 dev days for Stage 1 as scoped.
+1. **Duplication risk.** Option B mirrors payroll data into Supabase. If Firestore changes and the mirror doesn't (or vice versa) you have two sources of truth — exactly the problem the audit tool is supposed to detect, ironically. Option A avoids this entirely.
+2. **Pariox visit duration is still an assumption.** Q3 sets a minimum at 60 min. The "Variance %" flag is therefore an *estimate*; the day-by-day drawer should label it "Estimated" not "Actual". This is a defensible posture for review-and-discuss but not for discipline-without-discussion.
+3. **Wage-and-hour exposure (FLSA).** I'm dropping the `hours_variance_low` rule from rev 1 — that's an HR/legal concern, not an operations concern, and putting it in your hands surfaces a duty to act. Push that to HR if/when you have one. Your `hours_variance_high` rule is the right one for your seat.
+4. **The portal has unverified visits in its visits table** (column: `Verified`). The audit should distinguish between flagging "clinician visit unverified" vs "real variance." Surface unverified count as a soft flag, not a hard one.
+5. **CEO bandwidth.** Option A depends on it. If your CEO is too busy to spend 2-3 days on this in the next 2-3 weeks, default to Option B and accept the dev cost.
+6. **Paylocity PDF parsing fragility.** The portal parses Paylocity PDFs. PDF parsers break when Paylocity ships a new report format. Owns the same risk regardless of option, but worth noting.
+7. **Pay cadence.** Portal already has "Pay Period" concept. Use the portal's pay-period dates as the authoritative time window — don't compute a separate Sun-Sat in this audit layer.
+8. **The 22 `@axiomhealthmanagement.com` coordinator rows** in Supabase stay as-is per `CLAUDE.md`. The portal already has its own employee table with Paylocity IDs — that's the authoritative mapping table for payroll, not `coordinators`.
 
 ---
 
-*This is a design doc, not an implementation plan. No code, schema, or config has been changed. The `~/Documents/GitHub/edemacare-ops` working tree is untouched as of 2026-06-01.*
+## 6. What I need from Liam to greenlight
+
+A reply of the form:
+
+> "Option A — I'll loop in the CEO."
+> "Option B — build it inside EdemaCare Ops, mirror Firestore."
+> "Option C — let me ask the CEO if he can push snapshots."
+
+Plus, if Option B or C:
+- Confirm we can get a Firebase service-account key for the `axiom-payroll` project (you or CEO generates it in [Firebase Console → Project Settings → Service Accounts](https://console.firebase.google.com/project/axiom-payroll/settings/serviceaccounts/adminsdk))
+
+If Option A — I'm out of the build path. I'd be available for a code review on what CEO produces, but the work happens in his Claude instance against the Firebase project.
+
+---
+
+## 7. What to tell your CEO if you go with Option A
+
+> "Liam wants a weekly variance/audit screen in the portal. Three sources are already in the portal (Paylocity hours, mileage, visits) plus Pariox visits in our Supabase. The variance flag math is in `docs/Payroll_Review_Design.md` §3 of the EdemaCare Ops repo. Goal: one screen, one row per clinician per period, flag rows where clock hours don't match visit volume. ~2.5 days. Can you scope?"
+
+That message + this doc is enough for him to start.
+
+---
+
+## 8. Things I am *not* recommending you do
+
+- ❌ Build Paylocity API integration in EdemaCare Ops. Portal already handles Paylocity import via PDF. API would be a v3 nice-to-have.
+- ❌ Build mileage import in EdemaCare Ops. Portal already does it.
+- ❌ Build a second Hours & Approvals workflow in EdemaCare Ops. Portal already does it.
+- ❌ Rename `axiomhealth*` identifiers in this repo per `CLAUDE.md`.
+- ❌ Start any of this without first looping in the CEO. He owns the portal.
+
+---
+
+*This is a design doc, not an implementation plan. No code, schema, or config has been changed in `~/Documents/GitHub/edemacare-ops`. The working tree is untouched as of 2026-06-02.*

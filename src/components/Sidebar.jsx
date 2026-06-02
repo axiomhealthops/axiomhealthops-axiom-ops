@@ -19,6 +19,10 @@ const ALL_SECTIONS = [
   { key: 'CLINICAL DEPARTMENT', label: 'CLINICAL DEPARTMENT' },
   { key: 'MARKETING',           label: 'MARKETING' },
   { key: 'PERFORMANCE',         label: 'PERFORMANCE' },
+  // 2026-06-02: New PAYROLL section per docs/Payroll_Review_Design.md (rev 2).
+  // Gated to super_admin + admin (Liam + Carla initially). Sits between
+  // PERFORMANCE and ADMIN so it's reachable without expanding ADMIN.
+  { key: 'PAYROLL',             label: 'PAYROLL' },
   { key: 'ADMIN',               label: 'ADMIN' },
 ];
 
@@ -41,6 +45,9 @@ const PAGE_ICONS = {
   'stuck-auths': '🐢',
   'my-day': '☀',
   users: '👥', uploads: '↑', settings: '⚙', 'insurance-settings': '🏥', 'audit-import': '📋', 'dept-reports': '📑',
+  // 2026-06-02 PAYROLL section
+  'payroll-review':   '💵',
+  'payroll-settings': '⚖',
 };
 
 export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, alertBadges = {} }) {

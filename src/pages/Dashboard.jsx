@@ -63,6 +63,9 @@ import VisitRunwayPage from './dashboard/VisitRunwayPage';
 import AuthExpiryTimelinePage from './dashboard/AuthExpiryTimelinePage';
 import StuckAuthsPage from './dashboard/StuckAuthsPage';
 import MyDayPage from './dashboard/MyDayPage';
+// 2026-06-02 Phase 2A: Payroll Review & Audit (docs/Payroll_Review_Design.md rev 2)
+import PayrollReviewPage from './dashboard/PayrollReviewPage';
+import PayrollSettingsPage from './dashboard/PayrollSettingsPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
@@ -125,6 +128,8 @@ const PAGE_COMPONENTS = {
   'auth-expiry-timeline':    AuthExpiryTimelinePage,
   'stuck-auths':             StuckAuthsPage,
   'my-day':                  MyDayPage,
+  'payroll-review':          PayrollReviewPage,
+  'payroll-settings':        PayrollSettingsPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 
