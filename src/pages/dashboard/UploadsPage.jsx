@@ -6,6 +6,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { runAlertEngine } from '../../lib/alertEngine';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import HighRiskUploadCard from '../../components/HighRiskUploadCard';
+import MedicareRosterUploadCard from '../../components/MedicareRosterUploadCard';
  
 // ── XLSX → CSV ────────────────────────────────────────────────────────
 function parseXLSXFile(arrayBuffer) {
@@ -729,6 +730,7 @@ export default function UploadsPage() {
             profile={profile}
           />
           <HighRiskUploadCard profile={profile} />
+          <MedicareRosterUploadCard profile={profile} />
         </div>
  
         {/* Upload History */}

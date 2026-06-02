@@ -110,14 +110,28 @@ function projectVisitDate(careStartDate, lastVisitDate, currentCount, targetVisi
 }
 
 // --- severity bucket -------------------------------------------------------
+// Per-episode count is the cap-relevant number (Phase 3 / 2026-06-01).
+// Falls back to total_completed_visits for the first time the page is loaded
+// after a fresh patient is added before recalc has populated the episode.
+function visitsForCap(f) {
+  if (f?.current_episode_visit_count != null) return f.current_episode_visit_count;
+  return f?.total_completed_visits || 0;
+}
 function bucketOf(f) {
-  const v = f?.total_completed_visits || 0;
+  const v = visitsForCap(f);
   if (v >= 21) return 'over_cap';
   if (v >= 20) return 'discharge';
   if (v >= 18) return 'dc_soon';
   if (v >= 10 && f?.progress_note_due) return 'note_overdue';
   if (v >= 8) return 'note_soon';
   return 'ok';
+}
+// True when Pariox-derived current-episode count and Liam's manual import
+// disagree by more than 2 visits. Helps surface mismatches without picking a
+// winner; 2-visit fuzz is normal (timing of upload + reconciliation lag).
+function manualDriftOf(f) {
+  if (f?.manual_visit_count == null || f?.current_episode_visit_count == null) return 0;
+  return Math.abs(f.current_episode_visit_count - f.manual_visit_count);
 }
 const BUCKET_STYLE = {
   over_cap:     { bg: '#1F2937', fg: '#FFFFFF', label: 'OVER CAP',   icon: 'X' },
@@ -611,7 +625,7 @@ export default function MedicareTrackerPage() {
               ) : sorted.map(f => {
                 const bucket = bucketOf(f);
                 const style = BUCKET_STYLE[bucket];
-                const remaining = 20 - (f.total_completed_visits || 0);
+                const remaining = 20 - visitsForCap(f);
                 return (
                   <tr key={f.id}
                     onClick={() => setSelectedPatient(f)}
@@ -640,7 +654,19 @@ export default function MedicareTrackerPage() {
                     </td>
                     <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace' }}>20</td>
                     <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace', fontWeight:900 }}>
-                      {f.total_completed_visits || 0}
+                      {visitsForCap(f)}
+                      {f.current_episode_number > 1 && (
+                        <div style={{ fontSize:9, fontWeight:600, opacity:0.7 }}>
+                          Ep {f.current_episode_number}/{f.episode_count}
+                        </div>
+                      )}
+                      {manualDriftOf(f) > 2 && (
+                        <div style={{ fontSize:9, fontWeight:700, color:'#92400E',
+                                      background:'#FEF3C7', padding:'1px 4px',
+                                      borderRadius:3, marginTop:2, display:'inline-block' }}>
+                          DRIFT manual {f.manual_visit_count}
+                        </div>
+                      )}
                     </td>
                     <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace', fontWeight:700,
                                  color: remaining <= 0 ? '#FFFFFF' : style.fg }}>
@@ -820,7 +846,8 @@ function PatientDrawer({ flag, isAdmin, profile, onClose, onSaved }) {
     onSaved();
   }
 
-  const remaining = 20 - (flag.total_completed_visits || 0);
+  const epVisits = flag.current_episode_visit_count ?? flag.total_completed_visits ?? 0;
+  const remaining = 20 - epVisits;
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:2000 }}>
@@ -844,9 +871,20 @@ function PatientDrawer({ flag, isAdmin, profile, onClose, onSaved }) {
             <button onClick={onClose} style={{ background:'transparent', color:'#fff', border:'1px solid rgba(255,255,255,0.3)',
               borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>{'✕'}</button>
           </div>
-          <div style={{ marginTop:10, display:'flex', gap:14, fontFamily:'DM Mono, monospace' }}>
-            <span><span style={{ fontSize:22, fontWeight:900 }}>{flag.total_completed_visits || 0}</span>
-              <span style={{ fontSize:11, opacity:0.7 }}> / 20</span></span>
+          <div style={{ marginTop:10, display:'flex', gap:14, fontFamily:'DM Mono, monospace', flexWrap:'wrap', alignItems:'center' }}>
+            <span><span style={{ fontSize:22, fontWeight:900 }}>{epVisits}</span>
+              <span style={{ fontSize:11, opacity:0.7 }}> / 20 this episode</span></span>
+            {flag.current_episode_number > 1 && (
+              <span style={{ alignSelf:'center', fontSize:10, opacity:0.85,
+                             background:'rgba(255,255,255,0.15)', padding:'2px 8px', borderRadius:999 }}>
+                Episode {flag.current_episode_number} of {flag.episode_count}
+              </span>
+            )}
+            {flag.lifetime_visit_count != null && flag.lifetime_visit_count > epVisits && (
+              <span style={{ alignSelf:'center', fontSize:10, opacity:0.65 }}>
+                lifetime {flag.lifetime_visit_count}
+              </span>
+            )}
             <span style={{ alignSelf:'center', fontSize:11, opacity:0.85 }}>
               {remaining >= 0 ? remaining + ' remaining' : Math.abs(remaining) + ' OVER cap'}
             </span>
