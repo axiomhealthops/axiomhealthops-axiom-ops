@@ -18,7 +18,7 @@
 // Activity log: every outreach insert calls logActivity() so RMPs show up
 // in the engagement signal.
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
@@ -267,32 +267,34 @@ function ContactPersonModal({ provider, person, onClose, onSaved, profile }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Outreach Modal — the heart of the new CRM. Conditional fields by type.
 // ─────────────────────────────────────────────────────────────────────────────
-function OutreachModal({ provider, contactPeopleAll, specialProjects, onClose, onSaved, profile }) {
+function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects, onClose, onSaved, profile }) {
+  // Edit mode if `encounter` is supplied; otherwise create mode.
   // Untargeted (no provider selected before opening the modal) defaults to
   // 'event' so the user isn't immediately blocked by the "needs a provider"
   // save guard. They can switch types after.
-  const defaultType = provider ? 'in_person_visit' : 'event';
-  const defaultLabel = provider ? 'In-Person Visit' : 'Event';
+  const isEdit = !!encounter;
+  const defaultType = encounter?.outreach_type || (provider ? 'in_person_visit' : 'event');
+  const defaultLabel = OUTREACH_LABEL[defaultType] || (provider ? 'In-Person Visit' : 'Event');
   const [form, setForm] = useState({
     outreach_type: defaultType,
-    encounter_type: defaultLabel,  // legacy column kept in sync
-    encounter_date: new Date().toISOString().slice(0,10),
-    region: provider?.region || profile?.regions?.[0] || '',
-    contact_person_id: '',
-    purpose: '',
-    discussion_points: '',
-    follow_up_actions: '',
-    summary: '',
-    outcome_rating: '',
-    outcome: '',  // legacy free-text; mirrors rating label for back-compat
-    payer: '',
-    scheduled_next_event_date: '',
-    phone_call_reason: '',
-    target_clinic_or_school: '',
-    special_project_id: '',
-    referrals_received: 0,
-    follow_up_date: '',
-    follow_up_notes: '',
+    encounter_type: defaultLabel,
+    encounter_date: encounter?.encounter_date || new Date().toISOString().slice(0,10),
+    region: encounter?.region || provider?.region || profile?.regions?.[0] || '',
+    contact_person_id: encounter?.contact_person_id || '',
+    purpose: encounter?.purpose || '',
+    discussion_points: encounter?.discussion_points || '',
+    follow_up_actions: encounter?.follow_up_actions || '',
+    summary: encounter?.summary || '',
+    outcome_rating: encounter?.outcome_rating || '',
+    outcome: encounter?.outcome || '',
+    payer: encounter?.payer || '',
+    scheduled_next_event_date: encounter?.scheduled_next_event_date || '',
+    phone_call_reason: encounter?.phone_call_reason || '',
+    target_clinic_or_school: encounter?.target_clinic_or_school || '',
+    special_project_id: encounter?.special_project_id || '',
+    referrals_received: encounter?.referrals_received ?? 0,
+    follow_up_date: encounter?.follow_up_date || '',
+    follow_up_notes: encounter?.follow_up_notes || '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -346,13 +348,19 @@ function OutreachModal({ provider, contactPeopleAll, specialProjects, onClose, o
       follow_up_date: form.follow_up_date || null,
       follow_up_notes: form.follow_up_notes || null,
     };
-    const { data } = await supabase.from('marketing_encounters').insert(payload).select().single();
+    let recordId = encounter?.id;
+    if (isEdit) {
+      await supabase.from('marketing_encounters').update(payload).eq('id', encounter.id);
+    } else {
+      const { data } = await supabase.from('marketing_encounters').insert(payload).select().single();
+      recordId = data?.id;
+    }
     const specialName = (specialProjects || []).find(s => s.id === form.special_project_id)?.name;
     logActivity({
       coordinatorId: profile?.id, coordinatorName: profile?.full_name, coordinatorRole: profile?.role,
-      actionType: 'marketing_outreach_logged',
+      actionType: isEdit ? 'marketing_outreach_updated' : 'marketing_outreach_logged',
       actionDetail: `${OUTREACH_LABEL[form.outreach_type]}${provider?` - ${provider.practice_name}`:''}${form.target_clinic_or_school?` - ${form.target_clinic_or_school}`:''}${specialName?` [${specialName}]`:''}`,
-      tableName: 'marketing_encounters', recordId: data?.id,
+      tableName: 'marketing_encounters', recordId,
       metadata: { outreach_type: form.outreach_type, outcome_rating: form.outcome_rating, region: payload.region },
     });
     setSaving(false);
@@ -364,7 +372,7 @@ function OutreachModal({ provider, contactPeopleAll, specialProjects, onClose, o
       <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:680, maxHeight:'92vh', overflow:'auto', boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
         <div style={{ padding:'16px 22px', background:'#065F46', borderRadius:'14px 14px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center', position:'sticky', top:0, zIndex:1 }}>
           <div>
-            <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>Log Outreach</div>
+            <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>{isEdit ? 'Edit Outreach' : 'Log Outreach'}</div>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.85)', marginTop:2 }}>
               Logged as <strong>{profile?.full_name || profile?.email || 'Unknown rep'}</strong>
               {profile?.email ? <> {'·'} {profile.email}</> : null}
@@ -608,6 +616,266 @@ function SpecialProjectModal({ project, onClose, onSaved, profile }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Confirm-delete modal — small reusable confirmation prompt.
+// ─────────────────────────────────────────────────────────────────────────────
+function ConfirmDeleteModal({ title, message, confirmLabel = 'Delete', onConfirm, onCancel }) {
+  const [busy, setBusy] = useState(false);
+  async function go() {
+    setBusy(true);
+    try { await onConfirm(); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:2200, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:440, boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding:'18px 22px', borderBottom:'1px solid var(--border)' }}>
+          <div style={{ fontSize:15, fontWeight:700, color:'var(--black)' }}>{title}</div>
+        </div>
+        <div style={{ padding:'18px 22px', fontSize:13, color:'var(--black)', lineHeight:1.5 }}>
+          {message}
+        </div>
+        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
+          <button onClick={onCancel} disabled={busy} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
+          <button onClick={go} disabled={busy} style={{ padding:'8px 22px', background:'#DC2626', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:'pointer', opacity:busy?0.6:1 }}>
+            {busy ? 'Working...' : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Contact Quick-Add Modal — primary entry from main header "+ New Contact".
+// Provider typeahead from existing providers + inline "create new provider"
+// for when the contact's organization isn't yet in the system.
+// ─────────────────────────────────────────────────────────────────────────────
+function ContactQuickAddModal({ providers, onClose, onSaved, profile }) {
+  const [step, setStep] = useState('pick');  // 'pick' | 'newprovider'
+  const [providerSearch, setProviderSearch] = useState('');
+  const [selectedProvider, setSelectedProvider] = useState(null);
+  // Inline new-provider sub-form (minimum fields; full edit available afterward)
+  const [newProv, setNewProv] = useState({
+    practice_name:'', contact_type:'PCP', region: profile?.regions?.[0] || '',
+    primary_insurance:'', referral_potential:'medium', active_referral_source:false,
+  });
+  const [contact, setContact] = useState({ name:'', title:'', phone:'', email:'', notes:'', is_primary:false });
+  const [saving, setSaving] = useState(false);
+
+  const activeProviders = useMemo(
+    () => (providers || []).filter(p => p.is_active !== false),
+    [providers]
+  );
+  const filteredProviders = useMemo(() => {
+    const q = providerSearch.trim().toLowerCase();
+    if (!q) return activeProviders.slice(0, 50);
+    return activeProviders.filter(p =>
+      (p.practice_name||'').toLowerCase().includes(q)
+      || (p.contact_type||'').toLowerCase().includes(q)
+      || (p.region||'').toLowerCase().includes(q)
+      || (p.city||'').toLowerCase().includes(q)
+    ).slice(0, 50);
+  }, [activeProviders, providerSearch]);
+
+  async function save() {
+    if (!contact.name?.trim()) return;
+    if (step === 'pick' && !selectedProvider) return;
+    if (step === 'newprovider' && !newProv.practice_name?.trim()) return;
+    setSaving(true);
+
+    let providerId = selectedProvider?.id;
+    let providerForLog = selectedProvider;
+
+    // Inline create new provider
+    if (step === 'newprovider') {
+      const { data: pd } = await supabase.from('marketing_contacts').insert({
+        ...newProv,
+        is_active: true,
+        assigned_rep_id: profile?.id || null,
+        created_by: profile?.full_name || profile?.email,
+        updated_at: new Date().toISOString(),
+      }).select().single();
+      providerId = pd?.id;
+      providerForLog = pd;
+      logActivity({
+        coordinatorId: profile?.id, coordinatorName: profile?.full_name, coordinatorRole: profile?.role,
+        actionType: 'marketing_provider_created',
+        actionDetail: `${newProv.practice_name} (${newProv.contact_type}) - Region ${newProv.region || 'n/a'} [inline from quick contact]`,
+        tableName: 'marketing_contacts', recordId: providerId,
+        metadata: { region: newProv.region, provider_type: newProv.contact_type, inline_from_quick_contact: true },
+      });
+    }
+
+    // Insert the contact
+    if (providerId) {
+      const { data: cd } = await supabase.from('marketing_contact_people').insert({
+        provider_id: providerId,
+        name: contact.name,
+        title: contact.title || null,
+        phone: contact.phone || null,
+        email: contact.email || null,
+        notes: contact.notes || null,
+        is_primary: !!contact.is_primary,
+        is_active: true,
+        region: providerForLog?.region || null,
+        created_by: profile?.id || null,
+        updated_at: new Date().toISOString(),
+      }).select().single();
+      logActivity({
+        coordinatorId: profile?.id, coordinatorName: profile?.full_name, coordinatorRole: profile?.role,
+        actionType: 'marketing_contact_created',
+        actionDetail: `${contact.name} at ${providerForLog?.practice_name || 'unknown provider'}`,
+        tableName: 'marketing_contact_people', recordId: cd?.id,
+        metadata: { provider_id: providerId, region: providerForLog?.region },
+      });
+    }
+
+    setSaving(false);
+    onSaved();
+  }
+
+  const canSubmit = !!contact.name?.trim() && (
+    (step === 'pick' && selectedProvider) ||
+    (step === 'newprovider' && newProv.practice_name?.trim())
+  );
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:2100, display:'flex', alignItems:'center', justifyContent:'center', padding:24, overflowY:'auto' }}>
+      <div style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:620, maxHeight:'92vh', overflow:'auto', boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding:'16px 22px', background:'#1565C0', borderRadius:'14px 14px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center', position:'sticky', top:0, zIndex:1 }}>
+          <div>
+            <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>New Contact</div>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.85)', marginTop:2 }}>
+              Step 1: choose or create the provider · Step 2: contact details
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'rgba(255,255,255,0.7)' }}>{'×'}</button>
+        </div>
+
+        <div style={{ padding:20, display:'flex', flexDirection:'column', gap:14 }}>
+
+          {/* Provider section */}
+          <div style={{ background:'var(--bg)', border:'1px solid var(--border)', borderRadius:10, padding:14 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+              <div style={{ fontSize:12, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.04em', color:'var(--gray)' }}>
+                Provider
+              </div>
+              <button
+                onClick={() => { setStep(step === 'newprovider' ? 'pick' : 'newprovider'); setSelectedProvider(null); }}
+                style={{ fontSize:11, fontWeight:600, color:'#1565C0', background:'none', border:'none', cursor:'pointer', padding:0 }}>
+                {step === 'newprovider' ? '← Pick existing provider' : '+ Create new provider inline'}
+              </button>
+            </div>
+
+            {step === 'pick' && (
+              <>
+                <input value={providerSearch} onChange={e => setProviderSearch(e.target.value)}
+                  placeholder="Search providers by name, type, region, city..."
+                  style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box', marginBottom:8 }} />
+                <div style={{ maxHeight:200, overflowY:'auto', border:'1px solid var(--border)', borderRadius:6, background:'var(--card-bg)' }}>
+                  {filteredProviders.length === 0 ? (
+                    <div style={{ padding:12, fontSize:12, color:'var(--gray)', textAlign:'center', fontStyle:'italic' }}>
+                      No providers match. Try "+ Create new provider inline" above.
+                    </div>
+                  ) : filteredProviders.map(p => {
+                    const sel = selectedProvider?.id === p.id;
+                    return (
+                      <div key={p.id} onClick={() => setSelectedProvider(p)}
+                        style={{ padding:'8px 12px', borderBottom:'1px solid var(--border)', cursor:'pointer', background: sel ? '#EFF6FF' : 'transparent', display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+                        <div style={{ minWidth:0, flex:1 }}>
+                          <div style={{ fontSize:12, fontWeight:600, color:'var(--black)' }}>{p.practice_name}</div>
+                          <div style={{ fontSize:10, color:'var(--gray)' }}>{p.contact_type} · Region {p.region || '—'} {p.city ? `· ${p.city}` : ''}</div>
+                        </div>
+                        {sel && <span style={{ fontSize:10, fontWeight:700, color:'#1E40AF' }}>Selected</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {step === 'newprovider' && (
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                <div style={{ gridColumn:'span 2' }}>
+                  <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Practice Name *</label>
+                  <input value={newProv.practice_name} onChange={e => setNewProv(p=>({...p,practice_name:e.target.value}))}
+                    style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Provider Type</label>
+                  <select value={newProv.contact_type} onChange={e => setNewProv(p=>({...p,contact_type:e.target.value}))}
+                    style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
+                    {PROVIDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Region</label>
+                  <select value={newProv.region} onChange={e => setNewProv(p=>({...p,region:e.target.value}))}
+                    style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
+                    <option value="">Unassigned</option>
+                    {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
+                  </select>
+                </div>
+                <div style={{ gridColumn:'span 2', fontSize:11, color:'var(--gray)', fontStyle:'italic' }}>
+                  You can fill in address, NPI, insurance, etc. afterward from the Providers tab.
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Contact section */}
+          <div style={{ background:'var(--bg)', border:'1px solid var(--border)', borderRadius:10, padding:14 }}>
+            <div style={{ fontSize:12, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.04em', color:'var(--gray)', marginBottom:10 }}>
+              Contact
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+              <div style={{ gridColumn:'span 2' }}>
+                <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Contact Name *</label>
+                <input value={contact.name} onChange={e => setContact(c=>({...c,name:e.target.value}))}
+                  style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
+              </div>
+              <div style={{ gridColumn:'span 2' }}>
+                <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Title (MD, DO, NP, Office Manager, Referral Lead, etc.)</label>
+                <input value={contact.title} onChange={e => setContact(c=>({...c,title:e.target.value}))}
+                  style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Phone</label>
+                <input value={contact.phone} onChange={e => setContact(c=>({...c,phone:e.target.value}))}
+                  style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Email</label>
+                <input value={contact.email} onChange={e => setContact(c=>({...c,email:e.target.value}))} type="email"
+                  style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)', boxSizing:'border-box' }} />
+              </div>
+              <div style={{ gridColumn:'span 2' }}>
+                <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Notes</label>
+                <textarea value={contact.notes} onChange={e => setContact(c=>({...c,notes:e.target.value}))}
+                  placeholder="Best time to reach, referral preferences, decision-maker context, etc."
+                  style={{ width:'100%', padding:'8px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:60, background:'var(--card-bg)' }} />
+              </div>
+              <div style={{ gridColumn:'span 2', display:'flex', alignItems:'center', gap:8 }}>
+                <input type="checkbox" id="qc_primary" checked={!!contact.is_primary} onChange={e => setContact(c=>({...c,is_primary:e.target.checked}))} />
+                <label htmlFor="qc_primary" style={{ fontSize:13, color:'var(--black)' }}>Primary contact for this provider</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
+          <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
+          <button onClick={save} disabled={saving || !canSubmit}
+            style={{ padding:'8px 22px', background:'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:'pointer', opacity:!canSubmit?0.5:1 }}>
+            {saving ? 'Saving...' : (step === 'newprovider' ? 'Create Provider & Contact' : 'Add Contact')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
 export default function MarketingCRMPage() {
@@ -639,9 +907,20 @@ export default function MarketingCRMPage() {
   const [editPerson, setEditPerson]               = useState(null);
   const [outreachProvider, setOutreachProvider]   = useState(null);
   const [outreachUntargeted, setOutreachUntargeted] = useState(false); // events/job-fairs without provider
+  const [editEncounter, setEditEncounter]         = useState(null);    // 2026-05-30: outreach edit
   const [editProject, setEditProject]             = useState(null);
   const [showProjectModal, setShowProjectModal]   = useState(false);
   const [expandedProvider, setExpandedProvider]   = useState(null);
+
+  // 2026-05-30 Phase 2c — CRUD enhancements
+  const [showQuickContactModal, setShowQuickContactModal] = useState(false);
+  const [showInactive, setShowInactive]           = useState(false);
+  const [expandedContact, setExpandedContact]     = useState(null);
+  // pendingDelete shape: { type: 'provider'|'contact'|'outreach', record: {...} } | null
+  const [pendingDelete, setPendingDelete]         = useState(null);
+  const [contactSearchQ, setContactSearchQ]       = useState('');
+  const [contactSortKey, setContactSortKey]       = useState('name');
+  const [contactSortDir, setContactSortDir]       = useState('asc');
 
   const isAdminTier = profile && (
     ['super_admin','admin','director','ceo'].includes(profile.role)
@@ -678,8 +957,64 @@ export default function MarketingCRMPage() {
   useEffect(() => { load(); }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
   useRealtimeTable(['marketing_contacts', 'marketing_encounters', 'marketing_contact_people', 'marketing_special_projects'], load);
 
+  // ── Delete handlers (Phase 2c, 2026-05-30) ───────────────────────────────
+  // Soft delete for providers + contacts (preserves attribution + history).
+  // Hard delete for outreach events (discrete, recoverable from activity log).
+  async function softDeleteProvider(p) {
+    await supabase.from('marketing_contacts')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', p.id);
+    logActivity({
+      coordinatorId: profile?.id, coordinatorName: profile?.full_name, coordinatorRole: profile?.role,
+      actionType: 'marketing_provider_deactivated',
+      actionDetail: `${p.practice_name} (${p.contact_type || 'unknown'})`,
+      tableName: 'marketing_contacts', recordId: p.id,
+      metadata: { region: p.region, soft_delete: true },
+    });
+    setPendingDelete(null);
+    load();
+  }
+  async function softDeleteContact(pp) {
+    const prov = providers.find(x => x.id === pp.provider_id);
+    await supabase.from('marketing_contact_people')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', pp.id);
+    logActivity({
+      coordinatorId: profile?.id, coordinatorName: profile?.full_name, coordinatorRole: profile?.role,
+      actionType: 'marketing_contact_deactivated',
+      actionDetail: `${pp.name}${prov?` at ${prov.practice_name}`:''}`,
+      tableName: 'marketing_contact_people', recordId: pp.id,
+      metadata: { provider_id: pp.provider_id, region: pp.region || prov?.region, soft_delete: true },
+    });
+    setPendingDelete(null);
+    load();
+  }
+  async function hardDeleteOutreach(e) {
+    const prov = providers.find(x => x.id === e.contact_id);
+    await supabase.from('marketing_encounters').delete().eq('id', e.id);
+    logActivity({
+      coordinatorId: profile?.id, coordinatorName: profile?.full_name, coordinatorRole: profile?.role,
+      actionType: 'marketing_outreach_deleted',
+      actionDetail: `${OUTREACH_LABEL[e.outreach_type] || e.encounter_type || 'outreach'} on ${e.encounter_date}${prov?` - ${prov.practice_name}`:''}${e.target_clinic_or_school?` - ${e.target_clinic_or_school}`:''}`,
+      tableName: 'marketing_encounters', recordId: e.id,
+      metadata: { outreach_type: e.outreach_type, region: e.region, hard_delete: true },
+    });
+    setPendingDelete(null);
+    load();
+  }
+  // Permission helper. Admin tier OR the original logger can delete an outreach.
+  function canDeleteOutreach(e) {
+    if (!profile) return false;
+    if (isAdminTier) return true;
+    return e.rep_id === profile.id;
+  }
+  function canDeleteContactOrProvider() {
+    return isAdminTier;
+  }
+
   // ── Derived filtering ─────────────────────────────────────────────────────
   const filteredProviders = useMemo(() => providers.filter(p => {
+    if (!showInactive && p.is_active === false) return false;
     if (filterType !== 'ALL' && p.contact_type !== filterType) return false;
     if (filterRegion !== 'ALL' && p.region !== filterRegion) return false;
     if (filterPotential !== 'ALL' && p.referral_potential !== filterPotential) return false;
@@ -690,7 +1025,44 @@ export default function MarketingCRMPage() {
       if (!`${p.practice_name} ${p.city||''} ${p.npi||''} ${p.primary_insurance||''}`.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [providers, filterType, filterRegion, filterPotential, filterPayer, myPipeline, profile?.id, searchQ]);
+  }), [providers, showInactive, filterType, filterRegion, filterPotential, filterPayer, myPipeline, profile?.id, searchQ]);
+
+  // ── All-Contacts tab data + sort ─────────────────────────────────────────
+  const filteredContactPeople = useMemo(() => {
+    const lowerQ = (contactSearchQ || '').trim().toLowerCase();
+    const rows = (people || []).map(pp => {
+      const prov = providers.find(p => p.id === pp.provider_id);
+      const lastEnc = encounters
+        .filter(e => e.contact_person_id === pp.id || e.contact_id === pp.provider_id)
+        .sort((a,b) => (b.encounter_date||'').localeCompare(a.encounter_date||''))[0];
+      return { ...pp, _provider: prov || null, _lastEncounter: lastEnc || null };
+    }).filter(pp => {
+      if (!showInactive && pp.is_active === false) return false;
+      if (filterRegion !== 'ALL' && (pp.region || pp._provider?.region) !== filterRegion) return false;
+      if (filterRep !== 'ALL' && pp._provider?.assigned_rep_id !== filterRep) return false;
+      if (lowerQ) {
+        const hay = `${pp.name||''} ${pp.title||''} ${pp.phone||''} ${pp.email||''} ${pp._provider?.practice_name||''} ${pp.notes||''}`.toLowerCase();
+        if (!hay.includes(lowerQ)) return false;
+      }
+      return true;
+    });
+
+    const dir = contactSortDir === 'asc' ? 1 : -1;
+    const keyFn = {
+      name:     pp => (pp.name || '').toLowerCase(),
+      title:    pp => (pp.title || '').toLowerCase(),
+      provider: pp => (pp._provider?.practice_name || '').toLowerCase(),
+      region:   pp => (pp.region || pp._provider?.region || '').toLowerCase(),
+      last:     pp => pp._lastEncounter?.encounter_date || '',
+    }[contactSortKey] || (pp => (pp.name || '').toLowerCase());
+
+    return rows.sort((a, b) => {
+      const av = keyFn(a), bv = keyFn(b);
+      if (av < bv) return -1 * dir;
+      if (av > bv) return  1 * dir;
+      return 0;
+    });
+  }, [people, providers, encounters, showInactive, filterRegion, filterRep, contactSearchQ, contactSortKey, contactSortDir]);
 
   const filteredEncounters = useMemo(() => encounters.filter(e => {
     if (filterRegion !== 'ALL' && e.region !== filterRegion) return false;
@@ -798,6 +1170,7 @@ export default function MarketingCRMPage() {
         {[
           ['activity','Activity Log'],
           ['providers','Providers'],
+          ['contacts','Contacts'],
           ['followups','Follow-Ups'],
           ['reports','Reports'],
           ...(isAdminTier ? [['admin','Projects Admin']] : []),
@@ -876,14 +1249,17 @@ export default function MarketingCRMPage() {
             <label style={{ fontSize:11, color:'var(--gray)', display:'flex', alignItems:'center', gap:5, marginLeft:6 }}>
               <input type="checkbox" checked={myPipeline} onChange={e => setMyPipeline(e.target.checked)} /> My pipeline
             </label>
+            <label style={{ fontSize:11, color:'var(--gray)', display:'flex', alignItems:'center', gap:5 }}>
+              <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} /> Show inactive
+            </label>
             <span style={{ marginLeft:'auto', display:'flex', gap:6 }}>
               <button onClick={() => { setOutreachUntargeted(true); setOutreachProvider(null); }}
                 style={{ padding:'7px 14px', background:'#065F46', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer' }}>
                 + Log Outreach
               </button>
-              <button onClick={() => { setEditProvider(null); setShowProviderModal(true); }}
+              <button onClick={() => setShowQuickContactModal(true)}
                 style={{ padding:'7px 14px', background:'#1565C0', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer' }}>
-                + Provider
+                + New Contact
               </button>
             </span>
           </div>
@@ -929,6 +1305,14 @@ export default function MarketingCRMPage() {
                         +{e.referrals_received} ref{e.referrals_received>1?'s':''}
                       </span>
                     )}
+                    <div style={{ display:'flex', gap:4, marginTop:2 }}>
+                      <button onClick={() => setEditEncounter(e)}
+                        style={{ fontSize:10, color:'var(--gray)', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:5, padding:'2px 7px', cursor:'pointer' }}>Edit</button>
+                      {canDeleteOutreach(e) && (
+                        <button onClick={() => setPendingDelete({ type:'outreach', record: e })}
+                          style={{ fontSize:10, color:'#DC2626', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:5, padding:'2px 7px', cursor:'pointer' }}>Delete</button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -942,10 +1326,21 @@ export default function MarketingCRMPage() {
         {/* ── PROVIDERS ── */}
         {activeTab === 'providers' && (
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {/* Providers tab header — "+ Add Provider" button (the main page
+                header "+ New Contact" is for adding a contact under a provider) */}
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontSize:12, color:'var(--gray)' }}>
+                {filteredProviders.length} provider{filteredProviders.length === 1 ? '' : 's'} shown
+              </div>
+              <button onClick={() => { setEditProvider(null); setShowProviderModal(true); }}
+                style={{ fontSize:12, fontWeight:700, color:'#fff', background:'#1565C0', border:'none', borderRadius:6, padding:'6px 12px', cursor:'pointer' }}>
+                + Add Provider
+              </button>
+            </div>
             {filteredProviders.length === 0 ? (
               <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:36, textAlign:'center' }}>
                 <div style={{ fontSize:14, fontWeight:600 }}>No providers match your filters</div>
-                <div style={{ fontSize:12, color:'var(--gray)', marginTop:6 }}>Start a new one with the + Provider button above.</div>
+                <div style={{ fontSize:12, color:'var(--gray)', marginTop:6 }}>Click "+ Add Provider" to create one.</div>
               </div>
             ) : filteredProviders.map(p => {
               const pEnc = encounters.filter(e => e.contact_id === p.id);
@@ -990,6 +1385,12 @@ export default function MarketingCRMPage() {
                           style={{ fontSize:11, color:'var(--gray)', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:6, padding:'4px 10px', cursor:'pointer' }}>
                           Edit
                         </button>
+                        {canDeleteContactOrProvider() && p.is_active !== false && (
+                          <button onClick={ev => { ev.stopPropagation(); setPendingDelete({ type:'provider', record: p }); }}
+                            style={{ fontSize:11, color:'#DC2626', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:6, padding:'4px 10px', cursor:'pointer' }}>
+                            Delete
+                          </button>
+                        )}
                       </div>
                       <span style={{ fontSize:14, color:'var(--gray)' }}>{isExpanded ? '▲' : '▼'}</span>
                     </div>
@@ -1010,15 +1411,28 @@ export default function MarketingCRMPage() {
                       {pPeople.length === 0 ? (
                         <div style={{ fontSize:11, color:'var(--gray)', fontStyle:'italic', marginBottom:10 }}>No contacts on file yet.</div>
                       ) : pPeople.map(pp => (
-                        <div key={pp.id} style={{ display:'flex', gap:10, padding:'6px 10px', background:'var(--card-bg)', borderRadius:6, border:'1px solid var(--border)', marginBottom:5, alignItems:'center' }}>
-                          <div style={{ flex:1 }}>
+                        <div key={pp.id} style={{ display:'flex', gap:10, padding:'8px 10px', background:'var(--card-bg)', borderRadius:6, border:'1px solid var(--border)', marginBottom:5, alignItems:'flex-start', opacity: pp.is_active === false ? 0.55 : 1 }}>
+                          <div style={{ flex:1, minWidth:0 }}>
                             <div style={{ fontSize:12, fontWeight:600 }}>
-                              {pp.name}{pp.title?` · ${pp.title}`:''}{pp.is_primary?<span style={{ marginLeft:6, fontSize:9, fontWeight:700, color:'#065F46', background:'#ECFDF5', padding:'1px 6px', borderRadius:999 }}>Primary</span>:null}
+                              {pp.name}{pp.title?` · ${pp.title}`:''}
+                              {pp.is_primary?<span style={{ marginLeft:6, fontSize:9, fontWeight:700, color:'#065F46', background:'#ECFDF5', padding:'1px 6px', borderRadius:999 }}>Primary</span>:null}
+                              {pp.is_active === false ? <span style={{ marginLeft:6, fontSize:9, fontWeight:700, color:'#92400E', background:'#FEF3C7', padding:'1px 6px', borderRadius:999 }}>Inactive</span> : null}
                             </div>
                             <div style={{ fontSize:11, color:'var(--gray)' }}>{pp.phone || ''} {pp.email ? `· ${pp.email}` : ''}</div>
+                            {pp.notes && (
+                              <div style={{ fontSize:11, color:'var(--gray)', fontStyle:'italic', marginTop:4, lineHeight:1.4, whiteSpace:'pre-wrap' }}>
+                                {pp.notes}
+                              </div>
+                            )}
                           </div>
-                          <button onClick={() => { setEditPerson(pp); setPersonProvider(p); }}
-                            style={{ fontSize:10, color:'var(--gray)', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>Edit</button>
+                          <div style={{ display:'flex', flexDirection:'column', gap:4, flexShrink:0 }}>
+                            <button onClick={() => { setEditPerson(pp); setPersonProvider(p); }}
+                              style={{ fontSize:10, color:'var(--gray)', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>Edit</button>
+                            {canDeleteContactOrProvider() && pp.is_active !== false && (
+                              <button onClick={() => setPendingDelete({ type:'contact', record: pp })}
+                                style={{ fontSize:10, color:'#DC2626', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>Delete</button>
+                            )}
+                          </div>
                         </div>
                       ))}
 
@@ -1045,6 +1459,137 @@ export default function MarketingCRMPage() {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* ── ALL CONTACTS ── (Phase 2c — 2026-05-30) */}
+        {activeTab === 'contacts' && (
+          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+              <input value={contactSearchQ} onChange={e => setContactSearchQ(e.target.value)}
+                placeholder="Search name, title, phone, email, provider, notes..."
+                style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)', width:300 }} />
+              <span style={{ marginLeft:'auto', fontSize:11, color:'var(--gray)' }}>
+                {filteredContactPeople.length} contact{filteredContactPeople.length === 1 ? '' : 's'} shown
+              </span>
+              <button onClick={() => setShowQuickContactModal(true)}
+                style={{ fontSize:12, fontWeight:700, color:'#fff', background:'#1565C0', border:'none', borderRadius:6, padding:'6px 12px', cursor:'pointer' }}>
+                + Add Contact
+              </button>
+            </div>
+
+            <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
+              {filteredContactPeople.length === 0 ? (
+                <div style={{ padding:40, textAlign:'center', color:'var(--gray)', fontSize:13 }}>
+                  No contacts match your filters.
+                </div>
+              ) : (
+                <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                  <thead>
+                    <tr style={{ background:'var(--bg)' }}>
+                      {[
+                        ['name',     'Contact'],
+                        ['title',    'Title'],
+                        ['provider', 'Provider'],
+                        ['region',   'Region'],
+                        ['last',     'Last Outreach'],
+                      ].map(([k, label]) => {
+                        const active = contactSortKey === k;
+                        return (
+                          <th key={k} onClick={() => {
+                            if (contactSortKey === k) setContactSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                            else { setContactSortKey(k); setContactSortDir('asc'); }
+                          }}
+                            style={{ textAlign:'left', fontSize:10, fontWeight:700, color:active?'var(--black)':'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', padding:'10px 14px', borderBottom:'1px solid var(--border)', cursor:'pointer', userSelect:'none', whiteSpace:'nowrap' }}>
+                            {label} {active ? (contactSortDir === 'asc' ? '▲' : '▼') : ''}
+                          </th>
+                        );
+                      })}
+                      <th style={{ textAlign:'right', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', padding:'10px 14px', borderBottom:'1px solid var(--border)' }}>
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredContactPeople.map((pp, i) => {
+                      const isOpen = expandedContact === pp.id;
+                      const prov = pp._provider;
+                      const lastEnc = pp._lastEncounter;
+                      return (
+                        <Fragment key={pp.id}>
+                          <tr onClick={() => setExpandedContact(isOpen ? null : pp.id)}
+                            style={{ background: pp.is_active === false ? '#FEF9F0' : (i%2===0 ? 'var(--card-bg)' : 'var(--bg)'), cursor:'pointer', borderTop:'1px solid var(--border)', opacity: pp.is_active === false ? 0.7 : 1 }}>
+                            <td style={{ padding:'10px 14px', verticalAlign:'top' }}>
+                              <div style={{ fontSize:12, fontWeight:600, color:'var(--black)' }}>
+                                {pp.name}
+                                {pp.is_primary ? <span style={{ marginLeft:6, fontSize:9, fontWeight:700, color:'#065F46', background:'#ECFDF5', padding:'1px 6px', borderRadius:999 }}>Primary</span> : null}
+                                {pp.is_active === false ? <span style={{ marginLeft:6, fontSize:9, fontWeight:700, color:'#92400E', background:'#FEF3C7', padding:'1px 6px', borderRadius:999 }}>Inactive</span> : null}
+                              </div>
+                              <div style={{ fontSize:10, color:'var(--gray)', marginTop:2 }}>
+                                {pp.phone || ''}{pp.phone && pp.email ? ' · ' : ''}{pp.email || ''}
+                              </div>
+                            </td>
+                            <td style={{ padding:'10px 14px', fontSize:11, color:'var(--black)', verticalAlign:'top' }}>{pp.title || <span style={{ color:'var(--gray)' }}>—</span>}</td>
+                            <td style={{ padding:'10px 14px', fontSize:11, color:'var(--black)', verticalAlign:'top' }}>{prov?.practice_name || <span style={{ color:'var(--gray)' }}>—</span>}</td>
+                            <td style={{ padding:'10px 14px', fontSize:11, color:'var(--gray)', verticalAlign:'top' }}>{pp.region || prov?.region || '—'}</td>
+                            <td style={{ padding:'10px 14px', fontSize:11, color:'var(--gray)', verticalAlign:'top' }}>{lastEnc ? fmtDate(lastEnc.encounter_date) : <span style={{ fontStyle:'italic' }}>None</span>}</td>
+                            <td onClick={ev => ev.stopPropagation()} style={{ padding:'10px 14px', textAlign:'right', verticalAlign:'top' }}>
+                              <div style={{ display:'inline-flex', gap:4 }}>
+                                <button onClick={() => { setEditPerson(pp); setPersonProvider(prov || { id: pp.provider_id, practice_name: '—', region: pp.region }); }}
+                                  style={{ fontSize:10, color:'var(--gray)', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>Edit</button>
+                                {canDeleteContactOrProvider() && pp.is_active !== false && (
+                                  <button onClick={() => setPendingDelete({ type:'contact', record: pp })}
+                                    style={{ fontSize:10, color:'#DC2626', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>Delete</button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                          {isOpen && (
+                            <tr style={{ background: pp.is_active === false ? '#FEF9F0' : 'var(--bg)' }}>
+                              <td colSpan={6} style={{ padding:'14px 18px', borderTop:'1px dashed var(--border)' }}>
+                                <div style={{ display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(0, 1fr)', gap:18 }}>
+                                  <div>
+                                    <div style={{ fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4 }}>Notes</div>
+                                    <div style={{ fontSize:12, color:'var(--black)', lineHeight:1.5, whiteSpace:'pre-wrap', fontStyle: pp.notes ? 'normal' : 'italic' }}>
+                                      {pp.notes || 'No notes on file. Click Edit to add.'}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4 }}>Recent outreach (last 5)</div>
+                                    {(() => {
+                                      const recent = encounters
+                                        .filter(e => e.contact_person_id === pp.id || e.contact_id === pp.provider_id)
+                                        .sort((a,b) => (b.encounter_date||'').localeCompare(a.encounter_date||''))
+                                        .slice(0, 5);
+                                      if (recent.length === 0) {
+                                        return <div style={{ fontSize:11, color:'var(--gray)', fontStyle:'italic' }}>No outreach logged.</div>;
+                                      }
+                                      return recent.map(enc => {
+                                        const outc = OUTCOME_RATINGS.find(o => o.key === enc.outcome_rating);
+                                        return (
+                                          <div key={enc.id} style={{ display:'flex', gap:8, alignItems:'flex-start', padding:'4px 0', borderBottom:'1px dotted var(--border)' }}>
+                                            <div style={{ fontSize:10, fontFamily:'DM Mono, monospace', color:'var(--gray)', minWidth:70 }}>{fmtDate(enc.encounter_date)}</div>
+                                            <div style={{ flex:1, fontSize:11 }}>
+                                              <span style={{ fontWeight:600 }}>{OUTREACH_LABEL[enc.outreach_type] || enc.encounter_type}</span>
+                                              {enc.summary && <span style={{ color:'var(--gray)' }}> · {enc.summary}</span>}
+                                            </div>
+                                            {outc && <span style={{ fontSize:9, fontWeight:700, color:outc.color, background:outc.bg, padding:'1px 6px', borderRadius:999, flexShrink:0 }}>{outc.label}</span>}
+                                          </div>
+                                        );
+                                      });
+                                    })()}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         )}
 
@@ -1255,11 +1800,55 @@ export default function MarketingCRMPage() {
           onSaved={() => { setOutreachProvider(null); setOutreachUntargeted(false); load(); }}
           profile={profile} />
       )}
+      {editEncounter && (
+        <OutreachModal provider={providers.find(p => p.id === editEncounter.contact_id) || null}
+          encounter={editEncounter}
+          contactPeopleAll={people} specialProjects={specialProjects}
+          onClose={() => setEditEncounter(null)}
+          onSaved={() => { setEditEncounter(null); load(); }}
+          profile={profile} />
+      )}
+      {showQuickContactModal && (
+        <ContactQuickAddModal providers={providers}
+          onClose={() => setShowQuickContactModal(false)}
+          onSaved={() => { setShowQuickContactModal(false); load(); }}
+          profile={profile} />
+      )}
       {showProjectModal && (
         <SpecialProjectModal project={editProject}
           onClose={() => { setShowProjectModal(false); setEditProject(null); }}
           onSaved={() => { setShowProjectModal(false); setEditProject(null); load(); }}
           profile={profile} />
+      )}
+      {pendingDelete && (
+        <ConfirmDeleteModal
+          title={
+            pendingDelete.type === 'provider' ? 'Deactivate Provider?' :
+            pendingDelete.type === 'contact'  ? 'Deactivate Contact?'  :
+                                                'Delete Outreach Event?'
+          }
+          message={(() => {
+            const r = pendingDelete.record;
+            if (pendingDelete.type === 'provider') {
+              const cnt = people.filter(pp => pp.provider_id === r.id && pp.is_active !== false).length;
+              const eCnt = encounters.filter(e => e.contact_id === r.id).length;
+              return `"${r.practice_name}" will be marked inactive (soft delete). ${cnt} contact${cnt===1?'':'s'} and ${eCnt} outreach event${eCnt===1?'':'s'} stay on file for attribution and historical reporting. You can restore by toggling "Show inactive" and editing.`;
+            }
+            if (pendingDelete.type === 'contact') {
+              const prov = providers.find(p => p.id === r.provider_id);
+              return `"${r.name}"${prov?` at ${prov.practice_name}`:''} will be marked inactive (soft delete). Historical outreach attribution stays intact.`;
+            }
+            const prov = providers.find(p => p.id === r.contact_id);
+            return `Permanently delete the ${OUTREACH_LABEL[r.outreach_type] || 'outreach'} event from ${fmtDate(r.encounter_date)}${prov?` at ${prov.practice_name}`:''}? This cannot be undone, but the audit record stays in the coordinator activity log.`;
+          })()}
+          confirmLabel={pendingDelete.type === 'outreach' ? 'Delete' : 'Deactivate'}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={async () => {
+            if (pendingDelete.type === 'provider') await softDeleteProvider(pendingDelete.record);
+            else if (pendingDelete.type === 'contact') await softDeleteContact(pendingDelete.record);
+            else await hardDeleteOutreach(pendingDelete.record);
+          }}
+        />
       )}
     </div>
   );
