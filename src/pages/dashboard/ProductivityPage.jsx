@@ -122,17 +122,32 @@ export default function ProductivityPage() {
       .order('region')
       .order('full_name');
 
-    // 2026-06-02 BUG FIX (Liam, productivity over-count):
-    // Pariox uploads APPEND rows to visit_schedule_data. The upsert key is
-    // (patient,date,event_type,staff) — so when a visit changes event_type
-    // (e.g. "Level 3 *e*" → "Maintenance *e*") OR is cancelled in Pariox between
-    // uploads, the OLD row from yesterday's batch stays as a ghost row and
-    // inflates "Sched" counts. Example seen 6/2: Crystal Alviedo page=36,
-    // truth=26 (11 ghosts from 5/31 + 6/1 batches). 35 of 46 clinicians affected.
+    // 2026-06-03 BUG FIX (Liam, productivity under-count after over-count):
     //
-    // Fix: for each visit_date, only honor rows from the LATEST batch_id that
-    // has any row for that date. That mirrors Pariox's "current schedule view"
-    // — older uploads are superseded for the dates they overlap with.
+    // History: The 6/2 first attempt at this filter used "latest batch per
+    // visit_date" — drop every row from any batch that isn't the most recent
+    // batch covering that date. That rule was wrong: when Pariox sends a
+    // partial-update upload (e.g. only the 4 changed visits for a date), it
+    // becomes "the latest batch for date D" and the rule then silently nukes
+    // the 20+ unchanged visits from the prior full upload. Brian Espinola
+    // under-counted 19/22 on 6/3 for exactly this reason.
+    //
+    // Correct rule: per (patient_name, visit_date), keep only rows with the
+    // LATEST uploaded_at for that combination. This handles BOTH cases:
+    //   - Cross-staff reassignment (same patient/date, different staff,
+    //     different batches): the older clinician's row is dropped — correct,
+    //     Pariox reassigned the visit.
+    //   - Same-batch co-treat (same patient/date, different staff, SAME
+    //     uploaded_at): both rows are kept — correct, two clinicians legitimately
+    //     treated the patient that day.
+    //   - Partial-update upload (older batch's rows for a (patient,date) that
+    //     the newer batch didn't touch): older rows are kept — correct, the
+    //     newer partial upload simply didn't re-send them, they're still valid.
+    //
+    // Defense in depth: with Replace mode now default in UploadsPage.jsx,
+    // every Pariox visit upload clears its date range before insert, so
+    // multi-batch dates should not arise in steady state. This page-level
+    // filter remains as a safety net for the toggle-off and historical cases.
     var fetchVisits = function() {
       var all = [];
       var PAGE = 1000;
@@ -150,24 +165,22 @@ export default function ProductivityPage() {
           });
       };
       return pull(0).then(function(rows) {
-        // Step 1: pick the latest uploaded_at per visit_date
-        var latestUpByDate = {};
+        // Per (patient_name, visit_date), find the latest uploaded_at.
+        var latestUpByPatientDate = {};
         rows.forEach(function(r) {
           var d = (r.visit_date + '').slice(0, 10);
+          var key = (r.patient_name || '') + '||' + d;
           var up = r.uploaded_at || '';
-          if (!latestUpByDate[d] || up > latestUpByDate[d]) latestUpByDate[d] = up;
+          if (!latestUpByPatientDate[key] || up > latestUpByPatientDate[key]) {
+            latestUpByPatientDate[key] = up;
+          }
         });
-        // Step 2: derive the batch_id that owns the latest upload for each date
-        //         (a single batch can span multiple dates; we lock by date).
-        var latestBatchByDate = {};
-        rows.forEach(function(r) {
-          var d = (r.visit_date + '').slice(0, 10);
-          if ((r.uploaded_at || '') === latestUpByDate[d]) latestBatchByDate[d] = r.batch_id;
-        });
-        // Step 3: keep only rows whose batch matches the latest batch for their date
+        // Keep rows whose uploaded_at matches the latest for their (patient, date).
+        // Ties (same uploaded_at) survive — co-treats from the same batch both count.
         return rows.filter(function(r) {
           var d = (r.visit_date + '').slice(0, 10);
-          return r.batch_id === latestBatchByDate[d];
+          var key = (r.patient_name || '') + '||' + d;
+          return (r.uploaded_at || '') === latestUpByPatientDate[key];
         });
       });
     };

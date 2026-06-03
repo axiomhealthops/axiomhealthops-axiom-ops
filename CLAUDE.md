@@ -174,3 +174,40 @@ supabase/migrations/
    `"Discharge - Change Insurance"`). Normalize before applying.
 8. **`needs_frequency_review` auto-clears** via Postgres trigger when patient
    moves to Discharge/On Hold/Hospitalized/Non-Admit/Waitlist statuses.
+9. **`visit_schedule_data` ghost rows** (2026-06-02) — Pariox visit uploads were
+   running as append-only upserts on conflict key `(patient_name, visit_date,
+   event_type, staff_name)`. When Pariox reassigned a slot to a different staff
+   member or dropped a cancellation, the old row stayed (different conflict key,
+   nothing to overwrite). Result: **1,573 ghost rows accumulated across history,
+   389 of them with `status='Completed'`, inflating Director Command revenue by
+   ~$89,470 YTD** and over-counting 35 of 46 active clinicians on the
+   Productivity Tracker (24.7% inflation on the current week alone). Fix:
+   `UploadsPage.jsx` now defaults Replace Mode = TRUE for `batchType === 'visits'`,
+   which deletes every existing row in the file's date range before insert.
+   Toggle stays visible in the UI for the rare partial-week file case.
+   One-time backfill snapshot lives in
+   `_visit_schedule_data_ghost_purge_2026_06_02` (safe to drop after one
+   clean Pariox cycle proves the fix). **New ingestion paths for any table
+   where Pariox is the source of truth MUST use Replace Mode semantics — do
+   not assume `onConflict` will collapse reassignments.** Audited 2026-06-02:
+   `census_data` and `patient_master` (conflict on `patient_name` — full
+   census means absent-rows are intentional historical retention),
+   `intake_referrals`, `auth_tracker`, `patient_risk_factors`,
+   `medicare_roster` are all safe — no other Pariox-style replacement
+   ingestion exists.
+10. **Page-level "latest batch per visit_date" filter was wrong** (2026-06-03).
+    The Productivity Tracker had a filter that, for each `visit_date`, dropped
+    any row not in the newest batch covering that date. That broke on partial
+    Pariox uploads: when Pariox sent a 3-row update for date D after a 30-row
+    full upload earlier, the 3-row batch became "the latest for D" and the
+    filter silently nuked the 27 unchanged rows from the prior batch. Brian
+    Espinola under-counted 19/22, the rest of the team was off by ~10.9%
+    system-wide (650 vs 721 true slots that week). **Correct rule (now in
+    `ProductivityPage.jsx`): per `(patient_name, visit_date)`, keep only
+    rows with the latest `uploaded_at`.** Handles all three cases:
+    (a) cross-staff reassignment — older clinician's row drops, new one wins;
+    (b) same-batch co-treat — both rows have same `uploaded_at`, both survive;
+    (c) partial-update upload — older batch's untouched rows are kept because
+    the newer upload never covered those (patient, date) pairs. Any new
+    consumer of `visit_schedule_data` for counting/billing MUST use this
+    per-(patient, date) latest rule, NOT per-date latest batch.

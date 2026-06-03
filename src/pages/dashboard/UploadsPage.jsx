@@ -210,8 +210,13 @@ function UploadCard(props) {
   // 2026-05-18: "Replace mode" — when uploading visits, delete existing rows
   // in the file's date range BEFORE upsert. Solves stale-row accumulation
   // (Pariox removes a visit from the schedule but the row stays in our DB).
-  // OFF by default — destructive operation, opt-in only.
-  var [replaceMode, setReplaceMode] = useState(false);
+  // 2026-06-02: DEFAULTED ON for visits after the ghost-row diagnosis showed
+  // append-only upserts were inflating revenue by ~$89K YTD and overcounting
+  // 35/46 clinicians (24.7% inflation on the current week alone). One-time
+  // backfill purged 1,573 ghost rows; snapshot in
+  // _visit_schedule_data_ghost_purge_2026_06_02. Toggle stays visible so a
+  // user can opt out for a single upload if Pariox ever sends a partial file.
+  var [replaceMode, setReplaceMode] = useState(props.batchType === 'visits');
   var inputRef = useRef();
  
   useEffect(function() {
@@ -604,12 +609,13 @@ function UploadCard(props) {
           </div>
         )}
       </div>
-      {/* 2026-05-18: Replace mode toggle — visits-only. Default OFF. */}
+      {/* 2026-06-02: Replace mode toggle — visits-only. DEFAULT ON after the
+          ghost-row diagnosis. Stays toggleable for the rare partial-file case. */}
       {props.batchType === 'visits' && (
         <div onClick={function(e) { e.stopPropagation(); }}
           style={{
-            background: replaceMode ? '#FEF3C7' : '#F9FAFB',
-            border: '1px solid ' + (replaceMode ? '#FCD34D' : 'var(--border)'),
+            background: replaceMode ? '#ECFDF5' : '#FEF3C7',
+            border: '1px solid ' + (replaceMode ? '#A7F3D0' : '#FCD34D'),
             borderRadius: 8, padding: '10px 14px', marginBottom: 12,
             display: 'flex', gap: 10, alignItems: 'flex-start',
           }}>
@@ -618,14 +624,17 @@ function UploadCard(props) {
             onChange={function(e) { setReplaceMode(e.target.checked); }}
             style={{ marginTop: 2, cursor: 'pointer' }} />
           <label htmlFor={'replace-mode-' + props.batchType} style={{ flex: 1, cursor: 'pointer' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: replaceMode ? '#92400E' : 'var(--black)' }}>
-              {replaceMode ? '⚠ Replace Mode ON — will DELETE then re-insert' : 'Replace Mode (purges stale rows)'}
+            <div style={{ fontSize: 12, fontWeight: 700, color: replaceMode ? '#065F46' : '#92400E' }}>
+              {replaceMode
+                ? 'Replace Mode ON (default) - clears stale rows in this file\'s date range before insert'
+                : 'Replace Mode OFF - WARNING: old rows will accumulate as ghosts. Only disable for partial-file uploads.'}
             </div>
             <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 3, lineHeight: 1.4 }}>
-              When ON, the system auto-detects the date range in your file and
-              <strong> deletes every existing visit row in that range</strong> before inserting.
-              Use this when Pariox has removed visits but they're still showing in our system.
-              You'll get a confirmation dialog before anything is deleted.
+              Replace Mode is the default for Pariox visit uploads. It auto-detects the date
+              range in your file and <strong>deletes every existing visit row in that range</strong>
+              before inserting, so reassigned or cancelled slots don't linger as ghosts (the
+              cause of the 6/2/26 phantom-revenue bug). A confirmation dialog runs before any
+              delete. Only turn this off if you're uploading a partial-week file on purpose.
             </div>
           </label>
         </div>
