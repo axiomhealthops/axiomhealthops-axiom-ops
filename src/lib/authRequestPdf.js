@@ -1,23 +1,35 @@
 // EdemaCare Auth Request Form - PDF renderer (jsPDF, client-side).
 // Design doc: docs/Auth_Request_Form_Design.md (rev 2).
 //
-// Renders a polished, fax-readable PDF mirroring the static
-// Humana/CarePlus/FHCP layout the team has used historically, but now
-// works for ALL payors EdemaCare services and switches title/addressee
-// based on whether the carrier requires prior auth.
+// Renders a polished, fax-readable PDF that includes:
+//   PAGE 1: HIPAA-compliant fax cover sheet with EdemaCare contact info,
+//           From/To/Date/Pages/Subject, and the full HIPAA confidentiality
+//           notice required for transmissions containing PHI.
+//   PAGE 2+: The authorization request (or service order) itself, mirroring
+//           the static Humana/CarePlus/FHCP layout the team used historically.
 //
 // Brand rules (CLAUDE.md):
 //   - Visible strings say "EdemaCare"
 //   - Legal-line footer: "EdemaCare is a service of AxiomHealth Management LLC"
-//   - Keep body B&W for fax readability; brand color only on the rule
+//   - Body kept B&W for fax readability; brand color only on rules
+//
+// Contact info is loaded from the clinic_settings table on every render so
+// admins can update it without redeploying. If any required value is still
+// the placeholder string, the cover sheet renders a loud yellow banner so
+// an auth coordinator cannot accidentally fax placeholder values to a PCP.
 
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { supabase } from './supabase';
 
 const BRAND_RED = [217, 79, 43]; // #D94F2B
 const BLACK     = [26, 26, 26];
 const GRAY      = [107, 114, 128];
 const LIGHT     = [240, 228, 224];
+const WARN_BG   = [254, 243, 199];
+const WARN_FG   = [146, 64, 14];
+
+const PLACEHOLDER_TOKEN = '[CONFIGURE IN SETTINGS]';
 
 function safe(v) {
   if (v === null || v === undefined) return '';
@@ -26,14 +38,19 @@ function safe(v) {
 
 function fmtDate(iso) {
   if (!iso) return '';
-  // Avoid Date(timezone) drift by parsing YYYY-MM-DD as local
   const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(iso + 'T00:00:00') : new Date(iso);
   if (isNaN(d.getTime())) return safe(iso);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function fmtDateTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return safe(iso);
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
 function loadLogoDataUrl() {
-  // Embed /logo.png via fetch. Returns a Promise<string|null>.
   return fetch('/logo.png')
     .then(r => r.ok ? r.blob() : null)
     .then(blob => {
@@ -48,48 +65,92 @@ function loadLogoDataUrl() {
     .catch(() => null);
 }
 
+// Load clinic contact info from clinic_settings. Returns { phone, fax,
+// email, website, npi, tax_id, street, city_state_zip, clinic_name,
+// legal_entity, missingRequired:[...] } so the renderer can show a warning
+// banner if any required field is still the placeholder.
+async function loadClinicSettings() {
+  const defaults = {
+    clinic_name:          'EdemaCare',
+    legal_entity:         'AxiomHealth Management LLC',
+    clinic_phone:         PLACEHOLDER_TOKEN,
+    clinic_fax:           PLACEHOLDER_TOKEN,
+    clinic_email:         PLACEHOLDER_TOKEN,
+    clinic_website:       'edemacare.com',
+    clinic_npi:           PLACEHOLDER_TOKEN,
+    clinic_tax_id:        PLACEHOLDER_TOKEN,
+    clinic_street:        PLACEHOLDER_TOKEN,
+    clinic_city_state_zip: PLACEHOLDER_TOKEN,
+  };
+  try {
+    const { data, error } = await supabase
+      .from('clinic_settings')
+      .select('setting_key, setting_value, is_required');
+    if (error) throw error;
+    const settings = { ...defaults };
+    const missing = [];
+    (data || []).forEach(r => {
+      settings[r.setting_key] = (r.setting_value && r.setting_value.trim()) || PLACEHOLDER_TOKEN;
+      if (r.is_required && (!r.setting_value || r.setting_value === PLACEHOLDER_TOKEN || !r.setting_value.trim())) {
+        missing.push(r.setting_key);
+      }
+    });
+    settings.missingRequired = missing;
+    return settings;
+  } catch (e) {
+    console.warn('[loadClinicSettings] using defaults', e?.message || e);
+    return {
+      ...defaults,
+      missingRequired: Object.keys(defaults).filter(k => defaults[k] === PLACEHOLDER_TOKEN),
+    };
+  }
+}
+
+// Format a token as "(XXX) XXX-XXXX" if it looks like 10 digits, else as-is.
+function fmtPhone(s) {
+  if (!s || s === PLACEHOLDER_TOKEN) return s || '';
+  const digits = String(s).replace(/\D/g, '');
+  if (digits.length === 10) {
+    return '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
+  }
+  return String(s);
+}
+
 // Main entry point. `form` is the auth_request_forms row shape.
+// Optional `opts.includeCoverSheet` (default true) to skip the cover.
 // Returns a jsPDF instance the caller can .save() or .output() on.
-export async function buildAuthRequestPdf(form) {
+export async function buildAuthRequestPdf(form, opts = {}) {
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const includeCover = opts.includeCoverSheet !== false;
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
   const M = 36; // 0.5" margins
 
   const isOrderOnly = form.requires_prior_auth === false;
-  const title = isOrderOnly
+  const docTitle = isOrderOnly
     ? 'Service Order / Plan of Care Notification'
     : 'Authorization Request';
 
-  // ---- Header ----------------------------------------------------------
-  const logoDataUrl = await loadLogoDataUrl();
-  if (logoDataUrl) {
-    try { doc.addImage(logoDataUrl, 'PNG', M, M, 110, 30); } catch (_) {}
-  } else {
-    doc.setFontSize(16);
-    doc.setTextColor(...BRAND_RED);
-    doc.setFont('helvetica', 'bold');
-    doc.text('EdemaCare', M, M + 18);
+  const [logoDataUrl, clinic] = await Promise.all([
+    loadLogoDataUrl(),
+    loadClinicSettings(),
+  ]);
+
+  const fd = form.form_data || {};
+
+  // -----------------------------------------------------------------
+  // PAGE 1: HIPAA cover sheet
+  // -----------------------------------------------------------------
+  if (includeCover) {
+    drawCoverSheet({ doc, W, H, M, clinic, logoDataUrl, form, fd, docTitle, isOrderOnly });
+    doc.addPage();
   }
 
-  doc.setFontSize(16);
-  doc.setTextColor(...BLACK);
-  doc.setFont('helvetica', 'bold');
-  doc.text(title, W - M, M + 18, { align: 'right' });
+  // -----------------------------------------------------------------
+  // PAGE 2+: Authorization request body
+  // -----------------------------------------------------------------
+  drawHeader({ doc, W, M, logoDataUrl, title: docTitle, formId: form.id });
 
-  doc.setFontSize(8);
-  doc.setTextColor(...GRAY);
-  doc.setFont('helvetica', 'normal');
-  doc.text('Form ID ' + safe(form.id).slice(0, 8), W - M, M + 32, { align: 'right' });
-  doc.text('Generated ' + fmtDate(new Date().toISOString()), W - M, M + 42, { align: 'right' });
-
-  // Brand divider
-  doc.setDrawColor(...BRAND_RED);
-  doc.setLineWidth(1.2);
-  doc.line(M, M + 52, W - M, M + 52);
-
-  // ---- Body ------------------------------------------------------------
-  const fd = form.form_data || {};
   let y = M + 72;
 
   function section(label) {
@@ -107,7 +168,6 @@ export async function buildAuthRequestPdf(form) {
   }
 
   function row(pairs) {
-    // pairs = [[label, value], [label, value]] - two columns
     const colW = (W - 2 * M) / 2;
     doc.setFontSize(8);
     doc.setTextColor(...GRAY);
@@ -141,7 +201,7 @@ export async function buildAuthRequestPdf(form) {
   // Insurance
   section('Insurance');
   if (isOrderOnly) {
-    doc.setFillColor(255, 247, 219);
+    doc.setFillColor(...WARN_BG);
     doc.rect(M, y - 4, W - 2 * M, 24, 'F');
     doc.setFontSize(9);
     doc.setTextColor(...BLACK);
@@ -170,7 +230,7 @@ export async function buildAuthRequestPdf(form) {
   }
   if (fd.diagnosis_description) block('Diagnosis Description', fd.diagnosis_description);
 
-  // CPT codes table
+  // CPT codes
   section('Service Codes Requested');
   const cpts = Array.isArray(fd.cpt_codes) ? fd.cpt_codes : [];
   if (cpts.length === 0) {
@@ -204,7 +264,9 @@ export async function buildAuthRequestPdf(form) {
   row([['Submitted By', form.created_by_name || fd.created_by_name], ['Submission Date', fmtDate(form.sent_at || form.created_at)]]);
   row([['Typed Signature (e-sig)', fd.signature_typed_name], ['Date', fmtDate(fd.signature_date || form.created_at)]]);
 
-  // ---- Footer (every page) --------------------------------------------
+  // -----------------------------------------------------------------
+  // Footer on every page
+  // -----------------------------------------------------------------
   const pageCount = doc.internal.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
@@ -214,12 +276,210 @@ export async function buildAuthRequestPdf(form) {
 
     doc.setFontSize(8);
     doc.setTextColor(...GRAY);
-    doc.text('EdemaCare  |  Phone: (XXX) XXX-XXXX  |  Fax: (XXX) XXX-XXXX  |  NPI: XXXXXXXXXX', M, H - 30);
-    doc.text('EdemaCare is a service of AxiomHealth Management LLC', M, H - 18);
+    const contactLine =
+      safe(clinic.clinic_name) +
+      '  |  Phone: ' + fmtPhone(clinic.clinic_phone) +
+      '  |  Fax: '   + fmtPhone(clinic.clinic_fax) +
+      '  |  NPI: '   + safe(clinic.clinic_npi);
+    doc.text(contactLine, M, H - 30);
+    doc.text(safe(clinic.clinic_name) + ' is a service of ' + safe(clinic.legal_entity), M, H - 18);
     doc.text('Page ' + i + ' of ' + pageCount, W - M, H - 18, { align: 'right' });
   }
 
   return doc;
+}
+
+// =====================================================================
+// HIPAA cover sheet renderer
+// =====================================================================
+function drawCoverSheet({ doc, W, H, M, clinic, logoDataUrl, form, fd, docTitle, isOrderOnly }) {
+  // --- Letterhead / clinic identity (top) ---
+  if (logoDataUrl) {
+    try { doc.addImage(logoDataUrl, 'PNG', M, M, 110, 30); } catch (_) {}
+  } else {
+    doc.setFontSize(18);
+    doc.setTextColor(...BRAND_RED);
+    doc.setFont('helvetica', 'bold');
+    doc.text(safe(clinic.clinic_name) || 'EdemaCare', M, M + 18);
+  }
+
+  // Right-side clinic contact block
+  doc.setFontSize(9);
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'normal');
+  const contactLines = [
+    safe(clinic.clinic_street),
+    safe(clinic.clinic_city_state_zip),
+    'Phone: ' + fmtPhone(clinic.clinic_phone) + '   Fax: ' + fmtPhone(clinic.clinic_fax),
+    'NPI: ' + safe(clinic.clinic_npi) + '   Tax ID: ' + safe(clinic.clinic_tax_id),
+  ];
+  if (clinic.clinic_email && clinic.clinic_email !== PLACEHOLDER_TOKEN) {
+    contactLines.push('Email: ' + clinic.clinic_email);
+  }
+  if (clinic.clinic_website && clinic.clinic_website !== PLACEHOLDER_TOKEN) {
+    contactLines.push('Web: ' + clinic.clinic_website);
+  }
+  contactLines.forEach((line, i) => {
+    doc.text(line, W - M, M + 12 + i * 11, { align: 'right' });
+  });
+
+  // Brand divider
+  doc.setDrawColor(...BRAND_RED);
+  doc.setLineWidth(1.5);
+  doc.line(M, M + 80, W - M, M + 80);
+
+  // --- Big cover sheet title ---
+  let y = M + 110;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.setTextColor(...BLACK);
+  doc.text('FAX COVER SHEET', W / 2, y, { align: 'center' });
+  y += 8;
+  doc.setFontSize(11);
+  doc.setTextColor(...GRAY);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Contains Protected Health Information - Handle in accordance with HIPAA', W / 2, y + 12, { align: 'center' });
+  y += 32;
+
+  // --- Configuration warning, if any required clinic field still placeholder ---
+  if (Array.isArray(clinic.missingRequired) && clinic.missingRequired.length > 0) {
+    doc.setFillColor(...WARN_BG);
+    doc.setDrawColor(...WARN_FG);
+    doc.setLineWidth(1);
+    doc.rect(M, y, W - 2 * M, 56, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...WARN_FG);
+    doc.text('DO NOT FAX - CLINIC CONTACT INFO NOT CONFIGURED', M + 12, y + 18);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    const missingList = clinic.missingRequired.map(k => k.replace(/^clinic_/, '').replace(/_/g, ' ')).join(', ');
+    const lines = doc.splitTextToSize(
+      'These required values are still placeholders: ' + missingList +
+      '. An admin must set them in clinic_settings before this form is sent to a PCP or payor.',
+      W - 2 * M - 24
+    );
+    doc.text(lines, M + 12, y + 32);
+    y += 70;
+  }
+
+  // --- From / To / Date / Pages / Subject block ---
+  doc.setDrawColor(...LIGHT);
+  doc.setLineWidth(0.5);
+  doc.rect(M, y, W - 2 * M, 130, 'S');
+
+  const colW = (W - 2 * M) / 2;
+  function cell(label, value, x, yy) {
+    doc.setFontSize(8);
+    doc.setTextColor(...GRAY);
+    doc.text(String(label).toUpperCase(), x + 10, yy + 14);
+    doc.setFontSize(11);
+    doc.setTextColor(...BLACK);
+    doc.text(value || '-', x + 10, yy + 28);
+  }
+
+  // Row 1: TO / FROM
+  cell('To',          safe(fd.pcp_facility) || safe(fd.pcp_name) || 'PCP Office',           M,         y);
+  cell('From',        safe(clinic.clinic_name),                                            M + colW,   y);
+  doc.setDrawColor(...LIGHT);
+  doc.line(M, y + 42, W - M, y + 42);
+  // sub-rows under TO
+  doc.setFontSize(9);
+  doc.setTextColor(...BLACK);
+  if (fd.pcp_name)     doc.text('Attn: ' + fd.pcp_name,                          M + 10,        y + 56);
+  if (fd.pcp_fax)      doc.text('Fax: '  + fmtPhone(fd.pcp_fax),                 M + 10,        y + 68);
+  if (fd.pcp_phone)    doc.text('Phone: '+ fmtPhone(fd.pcp_phone),               M + 10,        y + 80);
+  // sub-rows under FROM
+  doc.text('Sender: ' + safe(form.created_by_name || 'EdemaCare Auth Team'),    M + colW + 10, y + 56);
+  doc.text('Fax: '    + fmtPhone(clinic.clinic_fax),                            M + colW + 10, y + 68);
+  doc.text('Phone: '  + fmtPhone(clinic.clinic_phone),                          M + colW + 10, y + 80);
+
+  // Row 2: DATE / PAGES
+  doc.line(M, y + 92, W - M, y + 92);
+  cell('Date',  fmtDateTime(form.sent_at || form.created_at || new Date().toISOString()),
+       M,         y + 90);
+  cell('Pages', 'See document - includes this cover sheet', M + colW, y + 90);
+
+  y += 144;
+
+  // --- Subject line ---
+  doc.setFontSize(8);
+  doc.setTextColor(...GRAY);
+  doc.text('SUBJECT', M, y);
+  doc.setFontSize(12);
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  const subject = docTitle + ' - ' + safe(form.patient_name) +
+                  (form.patient_dob ? ' (DOB ' + fmtDate(form.patient_dob) + ')' : '');
+  doc.text(subject, M, y + 14);
+  doc.setFont('helvetica', 'normal');
+  y += 36;
+
+  // --- Brief message ---
+  doc.setFontSize(10);
+  doc.setTextColor(...BLACK);
+  const messageBody = isOrderOnly
+    ? 'Attached is a Service Order / Plan of Care Notification for the above-referenced patient. This document does not require prior authorization from the payor; it is provided to the PCP for clinical coordination and patient records. Please review and contact our office at the number above with any questions.'
+    : 'Attached is an Authorization Request for the above-referenced patient. Please review the requested services and CPT codes listed on the following page. Return the signed and/or approved request to the fax number listed in the FROM block above. If you have questions or need additional clinical documentation, please contact our office at the number above.';
+  const messageLines = doc.splitTextToSize(messageBody, W - 2 * M);
+  doc.text(messageLines, M, y);
+  y += messageLines.length * 12 + 16;
+
+  // --- HIPAA confidentiality notice ---
+  doc.setFontSize(9);
+  doc.setTextColor(...BRAND_RED);
+  doc.setFont('helvetica', 'bold');
+  doc.text('CONFIDENTIALITY NOTICE', M, y);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...BLACK);
+  y += 14;
+
+  const hipaa = 'This facsimile transmission and any documents accompanying it may contain confidential, ' +
+    'privileged, and legally protected health information intended solely for the use of the individual ' +
+    'or entity named in the TO block above. Protected Health Information (PHI) is governed by the ' +
+    'Health Insurance Portability and Accountability Act of 1996 (HIPAA), 45 CFR Parts 160 and 164. ' +
+    'If you are not the intended recipient, you are hereby notified that any disclosure, copying, ' +
+    'distribution, or use of the information contained in or transmitted with this facsimile is ' +
+    'strictly prohibited. If you have received this transmission in error, please notify the sender ' +
+    'immediately by telephone at ' + fmtPhone(clinic.clinic_phone) + ' and destroy this transmission ' +
+    'along with any attachments. Thank you.';
+  const hipaaLines = doc.splitTextToSize(hipaa, W - 2 * M);
+  doc.setFontSize(9);
+  doc.text(hipaaLines, M, y);
+  y += hipaaLines.length * 11 + 16;
+
+  // --- Form tracking ID for support calls ---
+  doc.setFontSize(8);
+  doc.setTextColor(...GRAY);
+  doc.text('Form Tracking ID: ' + safe(form.id).slice(0, 8) + ' (reference if calling about this request)', M, H - 60);
+}
+
+// =====================================================================
+// Body header (used by page 2+)
+// =====================================================================
+function drawHeader({ doc, W, M, logoDataUrl, title, formId }) {
+  if (logoDataUrl) {
+    try { doc.addImage(logoDataUrl, 'PNG', M, M, 110, 30); } catch (_) {}
+  } else {
+    doc.setFontSize(16);
+    doc.setTextColor(...BRAND_RED);
+    doc.setFont('helvetica', 'bold');
+    doc.text('EdemaCare', M, M + 18);
+  }
+  doc.setFontSize(16);
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.text(title, W - M, M + 18, { align: 'right' });
+
+  doc.setFontSize(8);
+  doc.setTextColor(...GRAY);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Form ID ' + safe(formId).slice(0, 8), W - M, M + 32, { align: 'right' });
+  doc.text('Generated ' + fmtDate(new Date().toISOString()), W - M, M + 42, { align: 'right' });
+
+  doc.setDrawColor(...BRAND_RED);
+  doc.setLineWidth(1.2);
+  doc.line(M, M + 52, W - M, M + 52);
 }
 
 function categoryLabel(c) {
