@@ -265,11 +265,18 @@ export async function buildAuthRequestPdf(form, opts = {}) {
     autoTable(doc, {
       startY: y,
       margin: { left: M, right: M },
-      head: [['CPT', 'Description']],
-      body: cpts.map(c => [safe(c.code), safe(c.description)]),
+      head: [['CPT', 'Qty', 'Description']],
+      body: cpts.map(c => [
+        safe(c.code),
+        safe(c.quantity != null && c.quantity !== '' ? c.quantity : '1'),
+        safe(c.description),
+      ]),
       styles:      { fontSize: 8, cellPadding: 2, lineColor: LIGHT, lineWidth: 0.2 },
-      headStyles:  { fillColor: BRAND_RED, textColor: 255, fontStyle: 'bold', fontSize: 8 },
-      columnStyles:{ 0: { cellWidth: 60, fontStyle: 'bold' } },
+      headStyles:  { fillColor: BRAND_RED, textColor: 255, fontStyle: 'bold', fontSize: 8, halign: 'left' },
+      columnStyles:{
+        0: { cellWidth: 55, fontStyle: 'bold' },
+        1: { cellWidth: 36, halign: 'center', fontStyle: 'bold' },
+      },
       alternateRowStyles: { fillColor: [251, 247, 246] },
       pageBreak: 'avoid',
     });

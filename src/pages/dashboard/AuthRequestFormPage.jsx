@@ -302,8 +302,26 @@ export default function AuthRequestFormPage({ intent }) {
     setDraftData(d => {
       const already = (d.cpt_codes || []).find(x => x.code === c.code);
       if (already) return { ...d, cpt_codes: d.cpt_codes.filter(x => x.code !== c.code) };
-      return { ...d, cpt_codes: [...(d.cpt_codes || []), { code: c.code, description: c.description, category: c.category }] };
+      return {
+        ...d,
+        cpt_codes: [
+          ...(d.cpt_codes || []),
+          { code: c.code, description: c.description, category: c.category, quantity: 1 },
+        ],
+      };
     });
+  }
+
+  // 2026-06-04: per-code quantity. Each selected CPT gets its own visit /
+  // unit count so different intensities (e.g. 24 visits of 97140 vs 1 eval
+  // of 97161) are captured correctly on the auth request.
+  function setCptQuantity(code, qty) {
+    setDraftData(d => ({
+      ...d,
+      cpt_codes: (d.cpt_codes || []).map(x =>
+        x.code === code ? { ...x, quantity: qty } : x
+      ),
+    }));
   }
 
   // ---- Save / send -----------------------------------------------------
@@ -661,12 +679,28 @@ export default function AuthRequestFormPage({ intent }) {
               <div style={S.cptList}>
                 {(cptTab === 'all' ? cptCodes : (cptByCat[cptTab] || [])).map(c => {
                   const sel = (draftData.cpt_codes || []).find(x => x.code === c.code);
+                  const toggle = () => !locked && toggleCpt(c);
                   return (
-                    <label key={c.code} style={{ ...S.cptRow, ...(sel ? S.cptRowOn : {}) }}>
-                      <input type="checkbox" disabled={locked} checked={!!sel} onChange={() => toggleCpt(c)} />
-                      <div style={S.cptCode}>{c.code}</div>
-                      <div style={S.cptDesc}>{c.description}</div>
-                    </label>
+                    <div key={c.code} style={{ ...S.cptRow, ...(sel ? S.cptRowOn : {}) }}>
+                      <input type="checkbox" disabled={locked} checked={!!sel} onChange={toggle} />
+                      <div onClick={toggle} style={{ ...S.cptCode, cursor: locked ? 'default' : 'pointer' }}>{c.code}</div>
+                      <div onClick={toggle} style={{ ...S.cptDesc, cursor: locked ? 'default' : 'pointer' }}>{c.description}</div>
+                      {sel ? (
+                        <input
+                          type="number"
+                          min="1"
+                          disabled={locked}
+                          value={sel.quantity ?? 1}
+                          onChange={e => setCptQuantity(c.code, parseInt(e.target.value, 10) || 1)}
+                          onClick={e => e.stopPropagation()}
+                          placeholder="Qty"
+                          title="Visits / units requested for this code"
+                          style={S.cptQty}
+                        />
+                      ) : (
+                        <div style={S.cptQtyPlaceholder}>Qty</div>
+                      )}
+                    </div>
                   );
                 })}
                 {(cptTab !== 'all' && (cptByCat[cptTab] || []).length === 0) && (
@@ -675,8 +709,8 @@ export default function AuthRequestFormPage({ intent }) {
               </div>
               {(draftData.cpt_codes || []).length > 0 && (
                 <div style={{ marginTop: 10, fontSize: 12, color: '#374151' }}>
-                  Selected ({draftData.cpt_codes.length}):{' '}
-                  {draftData.cpt_codes.map(c => c.code).join(', ')}
+                  Selected ({draftData.cpt_codes.length}, total qty {(draftData.cpt_codes || []).reduce((s, c) => s + (parseInt(c.quantity, 10) || 0), 0)}):{' '}
+                  {draftData.cpt_codes.map(c => c.code + ' x' + (c.quantity || 1)).join(', ')}
                 </div>
               )}
             </Section>
@@ -1217,11 +1251,13 @@ const S = {
 
   tabBtn: { padding: '5px 10px', borderRadius: 6, border: '1px solid #D1D5DB', background: '#fff', cursor: 'pointer', fontSize: 12, color: '#374151' },
   tabBtnActive: { background: '#1A1A1A', color: '#fff', borderColor: '#1A1A1A' },
-  cptList: { maxHeight: 260, overflowY: 'auto', border: '1px solid #F3F4F6', borderRadius: 6 },
-  cptRow: { display: 'grid', gridTemplateColumns: '24px 70px 1fr', gap: 8, padding: '8px 10px', borderBottom: '1px solid #F3F4F6', cursor: 'pointer', alignItems: 'center' },
+  cptList: { maxHeight: 280, overflowY: 'auto', border: '1px solid #F3F4F6', borderRadius: 6 },
+  cptRow: { display: 'grid', gridTemplateColumns: '24px 70px 1fr 70px', gap: 8, padding: '8px 10px', borderBottom: '1px solid #F3F4F6', alignItems: 'center' },
   cptRowOn: { background: '#FEF7F5' },
   cptCode: { fontFamily: 'ui-monospace, Menlo, monospace', fontWeight: 700, fontSize: 12 },
   cptDesc: { fontSize: 12, color: '#374151' },
+  cptQty: { width: '100%', padding: '4px 6px', border: '1px solid #D94F2B', borderRadius: 4, fontSize: 12, fontWeight: 700, textAlign: 'center', background: '#fff', boxSizing: 'border-box' },
+  cptQtyPlaceholder: { fontSize: 10, color: '#D1D5DB', textAlign: 'center', textTransform: 'uppercase', letterSpacing: '0.06em' },
 
   listWrap: { padding: 20, display: 'flex', flexDirection: 'column', gap: 6 },
   listRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, cursor: 'pointer' },
