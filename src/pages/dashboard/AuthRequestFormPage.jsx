@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+// (useCallback used by PatientTypeahead helper below.)
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages, safeUpdate, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
@@ -62,7 +63,10 @@ export default function AuthRequestFormPage({ intent }) {
       patient_name: '',
       patient_dob: '',
       manual_patient: false,
-      insurance_name: 'Humana',
+      // Default blank so the typeahead shows the whole census until the user
+      // either picks a patient (carrier autofills) or sets the carrier as
+      // a deliberate filter.
+      insurance_name: '',
       insurance_type: '',
       requires_prior_auth: true,
       // form_data jsonb payload
@@ -117,30 +121,59 @@ export default function AuthRequestFormPage({ intent }) {
   })(); }, []);
 
   // ---- Load patient typeahead source ----------------------------------
+  // 2026-06-03 bug fix: fetchAllPages takes a (builder) - a Supabase query -
+  // not (table, fn). The earlier signature silently failed and left
+  // `patients` empty, which made the dropdown never appear.
+  // Sources merged for the typeahead, by precedence:
+  //   census_data (current census) > intake_referrals (referrals) >
+  //   auth_tracker (gives us insurance_type / plan info per patient).
   useEffect(() => { (async () => {
-    const census = await fetchAllPages('census_data', q => q.select('patient_name, region, insurance'));
-    const intake = await fetchAllPages('intake_referrals',
-      q => q.select('patient_name, dob, region, insurance, policy_number, phone, contact_number, location, city, zip_code, county, pcp_name, pcp_phone, pcp_fax, diagnosis_clean, diagnosis, medicare_type, secondary_insurance, secondary_id, has_wound, wound_type')
-            .not('patient_name', 'is', null)
+    const census = await fetchAllPages(
+      supabase.from('census_data')
+        .select('patient_name, region, insurance, has_wound, wound_type')
+        .not('patient_name', 'is', null)
+    );
+    const intake = await fetchAllPages(
+      supabase.from('intake_referrals')
+        .select('patient_name, dob, region, insurance, policy_number, phone, contact_number, location, city, zip_code, county, pcp_name, pcp_phone, pcp_fax, diagnosis_clean, diagnosis, medicare_type, secondary_insurance, secondary_id, has_wound, wound_type')
+        .not('patient_name', 'is', null)
+    );
+    const auths = await fetchAllPages(
+      supabase.from('auth_tracker')
+        .select('patient_name, dob, region, insurance, insurance_type, member_id, phone, pcp_name, pcp_phone, pcp_fax, pcp_facility, diagnosis_code, requesting_provider, requesting_provider_npi')
+        .not('patient_name', 'is', null)
     );
     const byName = new Map();
-    (census || []).forEach(r => {
-      if (!r.patient_name) return;
-      const key = r.patient_name.trim().toLowerCase();
-      if (!byName.has(key)) byName.set(key, { source: 'census', patient_name: r.patient_name, region: r.region, insurance: r.insurance });
-    });
-    (intake || []).forEach(r => {
-      if (!r.patient_name) return;
-      const key = r.patient_name.trim().toLowerCase();
-      const existing = byName.get(key) || { source: 'intake', patient_name: r.patient_name };
-      byName.set(key, { ...existing, ...r, patient_name: existing.patient_name || r.patient_name });
-    });
-    setPatients(Array.from(byName.values()).sort((a, b) => (a.patient_name || '').localeCompare(b.patient_name || '')));
+    function merge(row, defaults) {
+      if (!row?.patient_name) return;
+      const key = row.patient_name.trim().toLowerCase();
+      const existing = byName.get(key) || { patient_name: row.patient_name };
+      // Keep the most-specific non-null value for each field.
+      const next = { ...defaults, ...existing };
+      Object.entries(row).forEach(([k, v]) => {
+        if (v !== null && v !== undefined && v !== '' && (next[k] === null || next[k] === undefined || next[k] === '')) {
+          next[k] = v;
+        }
+      });
+      next.patient_name = existing.patient_name || row.patient_name;
+      byName.set(key, next);
+    }
+    (census || []).forEach(r => merge(r, { source: 'census' }));
+    (intake || []).forEach(r => merge(r, { source: 'intake' }));
+    (auths  || []).forEach(r => merge(r, { source: 'auth_tracker' }));
+    setPatients(
+      Array.from(byName.values()).sort(
+        (a, b) => (a.patient_name || '').localeCompare(b.patient_name || '')
+      )
+    );
   })(); }, []);
 
   // ---- Load saved forms for the right-side list / history -------------
+  // Same fetchAllPages signature fix.
   useEffect(() => { (async () => {
-    const rows = await fetchAllPages('auth_request_forms', q => q.select('*').order('created_at', { ascending: false }));
+    const rows = await fetchAllPages(
+      supabase.from('auth_request_forms').select('*').order('created_at', { ascending: false })
+    );
     setForms(rows || []);
   })(); }, [reloadKey]);
 
@@ -226,30 +259,39 @@ export default function AuthRequestFormPage({ intent }) {
   }, [forms, draftData.patient_name]);
 
   // ---- Patient selection + autopopulate -------------------------------
+  // Patient is the PRIMARY input. Picking a patient overwrites the whole
+  // form scaffold with what we know about them across census / intake /
+  // auth_tracker, including the insurance carrier and plan type. The user
+  // can still adjust any field after autofill.
   function selectPatient(p) {
     setDraftData(d => ({
       ...d,
-      manual_patient: false,
-      patient_name: p.patient_name || '',
-      patient_dob:  p.dob || '',
-      address:      p.location || '',
-      city:         p.city || '',
-      zip_code:     p.zip_code || '',
-      phone:        p.phone || p.contact_number || '',
-      member_id:    p.policy_number || '',
-      region:       p.region || '',
-      pcp_name:     p.pcp_name || '',
-      pcp_phone:    p.pcp_phone || '',
-      pcp_fax:      p.pcp_fax || '',
-      diagnosis_code: p.diagnosis_clean || '',
+      manual_patient:        false,
+      patient_name:          p.patient_name || '',
+      patient_dob:           p.dob || '',
+      address:               p.location || '',
+      city:                  p.city || '',
+      zip_code:              p.zip_code || '',
+      phone:                 p.phone || p.contact_number || '',
+      member_id:             p.member_id || p.policy_number || '',
+      region:                p.region || '',
+      pcp_name:              p.pcp_name || '',
+      pcp_phone:             p.pcp_phone || '',
+      pcp_fax:               p.pcp_fax || '',
+      pcp_facility:          p.pcp_facility || '',
+      diagnosis_code:        p.diagnosis_code || p.diagnosis_clean || '',
       diagnosis_description: p.diagnosis || '',
-      medicare_type:        p.medicare_type || '',
-      secondary_insurance:  p.secondary_insurance || '',
-      secondary_id:         p.secondary_id || '',
-      wounds_present:       !!p.has_wound,
-      wound_type:           p.wound_type || '',
-      // If patient has an insurance, try to align dropdown
+      medicare_type:         p.medicare_type || '',
+      secondary_insurance:   p.secondary_insurance || '',
+      secondary_id:          p.secondary_id || '',
+      wounds_present:        !!p.has_wound,
+      wound_type:            p.wound_type || '',
+      requesting_provider:     p.requesting_provider || '',
+      requesting_provider_npi: p.requesting_provider_npi || '',
+      // Align insurance carrier dropdown to the patient's carrier.
       insurance_name: matchCarrier(p.insurance, d.insurance_name, carriers),
+      // Pull plan type from auth_tracker if we have it.
+      insurance_type: p.insurance_type || d.insurance_type || '',
     }));
   }
 
@@ -454,15 +496,37 @@ export default function AuthRequestFormPage({ intent }) {
               </div>
             )}
 
-            <Section title="Patient Selection">
+            <Section title="Patient">
+              <PatientTypeahead
+                value={draftData.patient_name}
+                disabled={locked}
+                options={patients}
+                filterInsurance={draftData.insurance_name === 'Other' ? '' : draftData.insurance_name}
+                filterPlanType={draftData.insurance_type}
+                carriers={carriers}
+                onSelect={selectPatient}
+                onManualChange={(name) => setDraftData(d => ({ ...d, patient_name: name, manual_patient: true }))}
+              />
+              {draftData.manual_patient && draftData.patient_name && (
+                <div style={S.hint}>
+                  Using "{draftData.patient_name}" as a new patient. All other fields stay blank for you to fill in.
+                </div>
+              )}
+            </Section>
+
+            <Section title="Insurance">
               <Field label="Insurance Carrier">
                 <select value={draftData.insurance_name} disabled={locked}
                         onChange={e => setDraftData(d => ({ ...d, insurance_name: e.target.value }))}
                         style={S.input}>
+                  <option value="">- Auto-fills when you pick a patient -</option>
                   {carriers.map(c => (
                     <option key={c.insurance_name} value={c.insurance_name}>{c.insurance_name}</option>
                   ))}
                 </select>
+                <div style={S.hint}>
+                  Tip: set carrier + plan type BEFORE picking a patient to narrow the patient search above.
+                </div>
               </Field>
               {draftData.insurance_name === 'Other' && (
                 <Field label="Specify Carrier">
@@ -484,14 +548,6 @@ export default function AuthRequestFormPage({ intent }) {
                   <option value="Commercial">Commercial</option>
                 </select>
               </Field>
-
-              <PatientTypeahead
-                value={draftData.patient_name}
-                disabled={locked}
-                options={patients}
-                onSelect={selectPatient}
-                onManualChange={(name) => setDraftData(d => ({ ...d, patient_name: name, manual_patient: true }))}
-              />
             </Section>
 
             <Section title="Demographics">
@@ -788,42 +844,178 @@ function Badge({ status }) {
   return <span style={{ fontSize: 10, fontWeight: 700, color: s.color, background: s.bg, padding: '2px 8px', borderRadius: 999 }}>{s.label}</span>;
 }
 
-function PatientTypeahead({ value, disabled, options, onSelect, onManualChange }) {
-  const [q, setQ] = useState(value || '');
-  const [open, setOpen] = useState(false);
+// 2026-06-03 redesign per Liam:
+//   * Patient is the primary input, sits at the top, drives autofill.
+//   * When Insurance Carrier / Plan Type are set BEFORE picking a patient,
+//     the typeahead narrows to that filtered census slice.
+//   * Keyboard nav (up/down/enter/escape) + rich row preview + match
+//     highlight + "Use as new patient" fallback when no hits.
+function PatientTypeahead({
+  value, disabled, options, onSelect, onManualChange,
+  filterInsurance, filterPlanType, carriers,
+}) {
+  const [q, setQ]           = useState(value || '');
+  const [open, setOpen]     = useState(false);
+  const [hover, setHover]   = useState(0);
   useEffect(() => { setQ(value || ''); }, [value]);
+
+  // Normalize the carrier filter to handle the messy `auth_tracker.insurance`
+  // values like "A - Humana" we merged in. Insurance equality is loose-match.
+  const carrierMatches = useCallbackInsurance(filterInsurance, carriers);
+
   const filtered = useMemo(() => {
     const needle = (q || '').trim().toLowerCase();
-    if (!needle) return options.slice(0, 50);
-    return options.filter(p => (p.patient_name || '').toLowerCase().includes(needle)).slice(0, 50);
-  }, [q, options]);
+    let pool = options;
+    if (filterInsurance && filterInsurance !== '' && filterInsurance !== 'Other') {
+      pool = pool.filter(p => carrierMatches(p.insurance));
+    }
+    if (filterPlanType) {
+      // Plan type only exists on auth_tracker-sourced rows. If we filter,
+      // we keep rows where insurance_type matches OR is null (unknown).
+      const planN = filterPlanType.toLowerCase();
+      pool = pool.filter(p => {
+        const t = (p.insurance_type || '').toLowerCase();
+        if (!t) return true;
+        return t === planN;
+      });
+    }
+    if (!needle) return pool.slice(0, 80);
+    return pool
+      .filter(p => (p.patient_name || '').toLowerCase().includes(needle))
+      .slice(0, 80);
+  }, [q, options, filterInsurance, filterPlanType, carrierMatches]);
+
+  // Reset hover when filtered list changes so up/down lands on a valid row.
+  useEffect(() => { setHover(0); }, [q, filterInsurance, filterPlanType]);
+
+  function pick(p) {
+    if (!p) return;
+    onSelect(p);
+    setQ(p.patient_name);
+    setOpen(false);
+  }
+
+  function onKey(e) {
+    if (!open) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHover(h => Math.min(h + 1, filtered.length - 1)); }
+    else if (e.key === 'ArrowUp')   { e.preventDefault(); setHover(h => Math.max(h - 1, 0)); }
+    else if (e.key === 'Enter')     { e.preventDefault(); if (filtered[hover]) pick(filtered[hover]); }
+    else if (e.key === 'Escape')    { setOpen(false); }
+  }
+
+  const showNoMatch = open && q.trim() && filtered.length === 0;
+
   return (
     <div style={{ position: 'relative' }}>
-      <div style={S.fieldLabel}>Patient</div>
+      <div style={S.fieldLabel}>
+        Patient Name {(filterInsurance || filterPlanType) ? (
+          <span style={S.filterTag}>
+            Filtered by {[filterInsurance, filterPlanType].filter(Boolean).join(' / ')}
+          </span>
+        ) : null}
+      </div>
       <input
         value={q}
         disabled={disabled}
+        autoFocus
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 200)}
         onChange={e => { setQ(e.target.value); onManualChange(e.target.value); setOpen(true); }}
-        placeholder="Type to search census / referrals, or type a new name"
-        style={S.input}
+        onKeyDown={onKey}
+        placeholder={options.length === 0
+          ? 'Loading patient census...'
+          : 'Start typing - matches from census, referrals, and auth tracker'}
+        style={{ ...S.input, fontSize: 14, padding: '10px 12px' }}
       />
       {open && filtered.length > 0 && (
         <div style={S.suggest}>
-          {filtered.map((p, i) => (
-            <div key={(p.patient_name || '') + i} style={S.suggestRow}
-                 onMouseDown={() => { onSelect(p); setQ(p.patient_name); setOpen(false); }}>
-              <div style={{ fontWeight: 600 }}>{p.patient_name}</div>
-              <div style={{ fontSize: 11, color: '#6B7280' }}>
-                {(p.region || '-') + ' - ' + (p.insurance || '-')}
+          <div style={S.suggestMeta}>
+            {filtered.length} match{filtered.length === 1 ? '' : 'es'}
+            {q.trim() ? ` for "${q.trim()}"` : ''}
+            {(filterInsurance || filterPlanType) ? ' (filtered)' : ''}
+          </div>
+          {filtered.map((p, i) => {
+            const isHover = i === hover;
+            return (
+              <div key={(p.patient_name || '') + i}
+                   style={{ ...S.suggestRow, background: isHover ? '#FEF7F5' : '#fff' }}
+                   onMouseEnter={() => setHover(i)}
+                   onMouseDown={() => pick(p)}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#1A1A1A' }}>
+                    {highlight(p.patient_name, q)}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#9CA3AF', fontFamily: 'ui-monospace, Menlo, monospace' }}>
+                    {p.dob ? fmtDob(p.dob) : ''}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: '#6B7280', marginTop: 3, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <span>{p.insurance || 'No insurance on file'}{p.insurance_type ? ' (' + p.insurance_type + ')' : ''}</span>
+                  <span>Region {p.region || '-'}</span>
+                  <span style={{ color: '#9CA3AF' }}>via {p.source || 'system'}</span>
+                </div>
               </div>
+            );
+          })}
+        </div>
+      )}
+      {showNoMatch && (
+        <div style={S.suggest}>
+          <div style={S.suggestMeta}>No matches found in census / referrals / auth tracker.</div>
+          <div style={{ ...S.suggestRow, background: '#fff' }}
+               onMouseDown={() => { onManualChange(q.trim()); setOpen(false); }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: '#D94F2B' }}>
+              + Use "{q.trim()}" as a new patient
             </div>
-          ))}
+            <div style={{ fontSize: 11, color: '#6B7280', marginTop: 3 }}>
+              You will need to fill in DOB, address, insurance, etc. manually.
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
+}
+
+// Inline match-highlight: bolds the matched substring.
+function highlight(text, needle) {
+  if (!text || !needle) return text || '';
+  const n = needle.trim().toLowerCase();
+  if (!n) return text;
+  const i = text.toLowerCase().indexOf(n);
+  if (i < 0) return text;
+  return (
+    <>
+      {text.slice(0, i)}
+      <span style={{ background: '#FEE4B7', color: '#7C2D12', borderRadius: 2, padding: '0 1px' }}>
+        {text.slice(i, i + n.length)}
+      </span>
+      {text.slice(i + n.length)}
+    </>
+  );
+}
+
+function fmtDob(d) {
+  if (!d) return '';
+  const dt = /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + 'T00:00:00') : new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  return dt.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+}
+
+// Returns a stable function that decides whether a candidate patient's
+// `insurance` field matches the chosen carrier filter. Handles the messy
+// `auth_tracker.insurance` strings (region-prefixed) by stripping them
+// before comparison.
+function useCallbackInsurance(filterCarrier, carriers) {
+  return useCallback((insuranceValue) => {
+    if (!filterCarrier) return true;
+    if (!insuranceValue) return false;
+    const norm = String(insuranceValue).replace(/^[A-Z]\s*-\s*/, '').trim().toLowerCase();
+    const target = filterCarrier.trim().toLowerCase();
+    if (norm === target) return true;
+    if (norm.includes(target) || target.includes(norm)) return true;
+    return false;
+  }, [filterCarrier, carriers]);
 }
 
 // ===================== styles =====================
@@ -847,8 +1039,11 @@ const S = {
   checkLabel: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#1A1A1A', cursor: 'pointer' },
   charCount: { fontSize: 10, color: '#9CA3AF', textAlign: 'right', marginTop: 2 },
 
-  suggest: { position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, marginTop: 4, maxHeight: 260, overflowY: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', zIndex: 50 },
-  suggestRow: { padding: '8px 10px', cursor: 'pointer', borderBottom: '1px solid #F3F4F6' },
+  suggest: { position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #D1D5DB', borderRadius: 8, marginTop: 4, maxHeight: 340, overflowY: 'auto', boxShadow: '0 12px 28px rgba(0,0,0,0.14)', zIndex: 500 },
+  suggestRow: { padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid #F3F4F6' },
+  suggestMeta: { padding: '6px 12px', fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.04em', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB' },
+  filterTag: { fontSize: 9, fontWeight: 700, color: '#7C2D12', background: '#FEE4B7', padding: '2px 6px', borderRadius: 999, marginLeft: 6, textTransform: 'none', letterSpacing: 'normal' },
+  hint: { fontSize: 11, color: '#6B7280', marginTop: 6, lineHeight: 1.4 },
 
   tabBtn: { padding: '5px 10px', borderRadius: 6, border: '1px solid #D1D5DB', background: '#fff', cursor: 'pointer', fontSize: 12, color: '#374151' },
   tabBtnActive: { background: '#1A1A1A', color: '#fff', borderColor: '#1A1A1A' },
