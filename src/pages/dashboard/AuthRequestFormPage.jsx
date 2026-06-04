@@ -244,11 +244,20 @@ export default function AuthRequestFormPage({ intent }) {
   }, [pendingIntent, intentHandled, loading, forms, patients, carriers]);
 
   // ---- Derived ---------------------------------------------------------
+  // 2026-06-04: numerical sort across all CPT lists. localeCompare with
+  // numeric:true handles '11042' < '97161' correctly AND keeps letter-
+  // prefixed codes (G0151, A6531) grouped together after the all-digit ones.
+  const cptCodesSorted = useMemo(() => {
+    return [...cptCodes].sort((a, b) =>
+      String(a.code).localeCompare(String(b.code), undefined, { numeric: true, sensitivity: 'base' })
+    );
+  }, [cptCodes]);
+
   const cptByCat = useMemo(() => {
     const m = { wound_care: [], lymphedema: [], pt: [], ot: [] };
-    cptCodes.forEach(c => { if (m[c.category]) m[c.category].push(c); });
+    cptCodesSorted.forEach(c => { if (m[c.category]) m[c.category].push(c); });
     return m;
-  }, [cptCodes]);
+  }, [cptCodesSorted]);
 
   const filteredCarrier = useMemo(
     () => carriers.find(c => c.insurance_name === draftData.insurance_name) || null,
@@ -296,7 +305,33 @@ export default function AuthRequestFormPage({ intent }) {
 
   // ---- CPT picker handling --------------------------------------------
   const [cptTab, setCptTab] = useState('wound_care');
+  const [cptSearch, setCptSearch] = useState('');
   useEffect(() => { setCptTab(draftData.wounds_present ? 'wound_care' : 'pt'); /* default */ }, [draftData.wounds_present]);
+  // Clear the search when the user switches categories - separate workflows.
+  useEffect(() => { setCptSearch(''); }, [cptTab]);
+
+  // Apply the search filter on top of the active category. Match code OR
+  // description, case-insensitive.
+  const visibleCpts = useMemo(() => {
+    const base = cptTab === 'all' ? cptCodesSorted : (cptByCat[cptTab] || []);
+    const needle = cptSearch.trim().toLowerCase();
+    if (!needle) return base;
+    return base.filter(c =>
+      (c.code || '').toLowerCase().includes(needle) ||
+      (c.description || '').toLowerCase().includes(needle)
+    );
+  }, [cptTab, cptCodesSorted, cptByCat, cptSearch]);
+
+  // If the search has content but no hits in the active category, peek at
+  // whether other categories have matches so we can nudge the user.
+  const searchMatchesOutsideTab = useMemo(() => {
+    const needle = cptSearch.trim().toLowerCase();
+    if (!needle || visibleCpts.length > 0 || cptTab === 'all') return 0;
+    return cptCodesSorted.filter(c =>
+      (c.code || '').toLowerCase().includes(needle) ||
+      (c.description || '').toLowerCase().includes(needle)
+    ).length;
+  }, [cptSearch, visibleCpts, cptCodesSorted, cptTab]);
 
   function toggleCpt(c) {
     setDraftData(d => {
@@ -676,8 +711,21 @@ export default function AuthRequestFormPage({ intent }) {
                   </button>
                 ))}
               </div>
+              <div style={{ position: 'relative', marginBottom: 10 }}>
+                <input
+                  type="search"
+                  disabled={locked}
+                  value={cptSearch}
+                  onChange={e => setCptSearch(e.target.value)}
+                  placeholder="Quick search: type CPT code or keyword (e.g. 97597 or debridement)"
+                  style={S.cptSearch}
+                />
+                {cptSearch && (
+                  <button onClick={() => setCptSearch('')} style={S.cptSearchClear} title="Clear search">x</button>
+                )}
+              </div>
               <div style={S.cptList}>
-                {(cptTab === 'all' ? cptCodes : (cptByCat[cptTab] || [])).map(c => {
+                {visibleCpts.map(c => {
                   const sel = (draftData.cpt_codes || []).find(x => x.code === c.code);
                   const toggle = () => !locked && toggleCpt(c);
                   return (
@@ -703,7 +751,21 @@ export default function AuthRequestFormPage({ intent }) {
                     </div>
                   );
                 })}
-                {(cptTab !== 'all' && (cptByCat[cptTab] || []).length === 0) && (
+                {visibleCpts.length === 0 && cptSearch && (
+                  <div style={S.empty}>
+                    No matches for "{cptSearch}" in {CATEGORY_TABS.find(t => t.value === cptTab)?.label || ''}.
+                    {searchMatchesOutsideTab > 0 && (
+                      <>
+                        <br />
+                        <button onClick={() => setCptTab('all')}
+                                style={{ marginTop: 8, padding: '4px 10px', borderRadius: 6, border: '1px solid #D94F2B', background: '#fff', color: '#D94F2B', fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>
+                          {searchMatchesOutsideTab} match{searchMatchesOutsideTab === 1 ? '' : 'es'} in other categories - search All
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+                {visibleCpts.length === 0 && !cptSearch && cptTab !== 'all' && (
                   <div style={S.empty}>No codes in this category yet.</div>
                 )}
               </div>
@@ -1251,6 +1313,8 @@ const S = {
 
   tabBtn: { padding: '5px 10px', borderRadius: 6, border: '1px solid #D1D5DB', background: '#fff', cursor: 'pointer', fontSize: 12, color: '#374151' },
   tabBtnActive: { background: '#1A1A1A', color: '#fff', borderColor: '#1A1A1A' },
+  cptSearch: { width: '100%', padding: '8px 32px 8px 12px', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, background: '#fff', boxSizing: 'border-box', outline: 'none' },
+  cptSearchClear: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', width: 22, height: 22, borderRadius: '50%', border: 'none', background: '#E5E7EB', color: '#374151', fontSize: 11, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 },
   cptList: { maxHeight: 280, overflowY: 'auto', border: '1px solid #F3F4F6', borderRadius: 6 },
   cptRow: { display: 'grid', gridTemplateColumns: '24px 70px 1fr 70px', gap: 8, padding: '8px 10px', borderBottom: '1px solid #F3F4F6', alignItems: 'center' },
   cptRowOn: { background: '#FEF7F5' },
