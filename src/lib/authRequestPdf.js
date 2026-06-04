@@ -127,9 +127,12 @@ export async function buildAuthRequestPdf(form, opts = {}) {
   const M = 36; // 0.5" margins
 
   const isOrderOnly = form.requires_prior_auth === false;
+  // 2026-06-04 (Liam): match the AxiomHealth original title format.
+  // The form doubles as a physician order, so the title carries
+  // both halves regardless of payor prior-auth status.
   const docTitle = isOrderOnly
-    ? 'Service Order / Plan of Care Notification'
-    : 'Authorization Request';
+    ? 'Service Order / Physician Order'
+    : 'Authorization Request / Physician Order';
 
   const [logoDataUrl, clinic] = await Promise.all([
     loadLogoDataUrl(),
@@ -147,122 +150,198 @@ export async function buildAuthRequestPdf(form, opts = {}) {
   }
 
   // -----------------------------------------------------------------
-  // PAGE 2+: Authorization request body
+  // PAGE 2: Authorization Request / Physician Order body
+  //
+  // 2026-06-04 (Liam): rebuilt to fit on one page with PCP signature
+  // block + memo section. Layout strategy:
+  //   - Section headers 9pt (was 10), reduced to 12pt gap
+  //   - Label 7pt / value 9pt (was 8/10), 13pt row pitch (was 28pt)
+  //   - Compact 2-column CPT table, no category col
+  //   - Optional sections (medicaid id, secondary ins, diagnosis_description,
+  //     additional_notes, etc) only render when populated
+  //   - Bottom: memo block + PCP signature box with Signature, Printed
+  //     Name, Title, Date for wet-signature return
   // -----------------------------------------------------------------
   drawHeader({ doc, W, M, logoDataUrl, title: docTitle, formId: form.id });
 
-  let y = M + 72;
+  let y = M + 60;
 
+  // Compact section header.
   function section(label) {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.setTextColor(...BRAND_RED);
     doc.text(String(label).toUpperCase(), M, y);
     doc.setDrawColor(...LIGHT);
-    doc.setLineWidth(0.5);
-    doc.line(M, y + 3, W - M, y + 3);
-    y += 16;
+    doc.setLineWidth(0.4);
+    doc.line(M, y + 2, W - M, y + 2);
+    y += 12;
     doc.setTextColor(...BLACK);
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
   }
 
+  // Compact 2-column row. 13pt total height (was 28pt). Label 7pt + value 9pt
+  // on the same line (label, value).
   function row(pairs) {
     const colW = (W - 2 * M) / 2;
-    doc.setFontSize(8);
+    doc.setFontSize(7);
     doc.setTextColor(...GRAY);
     doc.text(safe(pairs[0][0]).toUpperCase(), M, y);
     if (pairs[1]) doc.text(safe(pairs[1][0]).toUpperCase(), M + colW, y);
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.setTextColor(...BLACK);
-    doc.text(safe(pairs[0][1]) || '-', M, y + 12);
-    if (pairs[1]) doc.text(safe(pairs[1][1]) || '-', M + colW, y + 12);
-    y += 28;
+    doc.text(safe(pairs[0][1]) || '-', M, y + 10);
+    if (pairs[1]) doc.text(safe(pairs[1][1]) || '-', M + colW, y + 10);
+    y += 18;
   }
 
-  function block(label, value) {
-    doc.setFontSize(8);
+  // Tight free-text block (label on its own line, value wrapped below).
+  function block(label, value, maxLines) {
+    if (!value) return;
+    doc.setFontSize(7);
     doc.setTextColor(...GRAY);
     doc.text(safe(label).toUpperCase(), M, y);
-    y += 12;
-    doc.setFontSize(10);
+    y += 9;
+    doc.setFontSize(9);
     doc.setTextColor(...BLACK);
-    const wrapped = doc.splitTextToSize(safe(value) || '-', W - 2 * M);
+    let wrapped = doc.splitTextToSize(safe(value), W - 2 * M);
+    if (maxLines && wrapped.length > maxLines) {
+      wrapped = wrapped.slice(0, maxLines);
+      // ellipsis marker on the last line
+      const last = wrapped[wrapped.length - 1];
+      wrapped[wrapped.length - 1] = (last.length > 5 ? last.slice(0, last.length - 3) : last) + '...';
+    }
     doc.text(wrapped, M, y);
-    y += wrapped.length * 12 + 6;
+    y += wrapped.length * 10 + 4;
   }
 
-  // Patient
+  // ---- Patient ----
   section('Patient Information');
   row([['Patient Name', form.patient_name], ['DOB', fmtDate(form.patient_dob)]]);
-  row([['Address', fd.address], ['City / State / ZIP', [fd.city, fd.zip_code].filter(Boolean).join(', ')]]);
-  row([['Phone', fd.phone], ['Region', form.region]]);
+  row([['Address', [fd.address, fd.city, fd.zip_code].filter(Boolean).join(', ')],
+       ['Phone', fmtPhone(fd.phone)]]);
 
-  // Insurance
+  // ---- Insurance ----
   section('Insurance');
   if (isOrderOnly) {
     doc.setFillColor(...WARN_BG);
-    doc.rect(M, y - 4, W - 2 * M, 24, 'F');
-    doc.setFontSize(9);
+    doc.rect(M, y - 2, W - 2 * M, 14, 'F');
+    doc.setFontSize(8);
     doc.setTextColor(...BLACK);
-    doc.text('Note: This payor does not require prior authorization. This form is a service order for the patient record and PCP.', M + 6, y + 11);
-    y += 30;
+    doc.text('Prior authorization not required for this payor; serves as Physician Order only.', M + 6, y + 8);
+    y += 18;
   }
   row([['Insurance Carrier', form.insurance_name], ['Plan Type', form.insurance_type]]);
-  row([['Member / Policy #', fd.member_id], ['Medicare Type', fd.medicare_type]]);
+  row([['Member / Policy #', fd.member_id],
+       ['Medicare Type / Medicaid ID', [fd.medicare_type, fd.medicaid_id].filter(Boolean).join(' / ')]]);
   if (fd.secondary_insurance) {
     row([['Secondary Insurance', fd.secondary_insurance], ['Secondary ID', fd.secondary_id]]);
   }
-  if (fd.medicaid_id) {
-    row([['Medicaid ID', fd.medicaid_id], ['MSP Screening', fd.msp_screening || '-']]);
-  }
 
-  // Clinical
+  // ---- Clinical ----
   section('Clinical');
-  row([['Primary Diagnosis (ICD-10)', fd.diagnosis_code], ['Disciplines', (fd.disciplines || []).join(', ')]]);
-  row([['Wounds Present', fd.wounds_present ? 'Yes' : 'No'], ['Wound Type / Location', fd.wound_type || '-']]);
-  row([['PCP Name', fd.pcp_name], ['PCP Phone / Fax', [fd.pcp_phone, fd.pcp_fax].filter(Boolean).join(' / ')]]);
-  if (fd.pcp_facility) {
-    row([['PCP Facility', fd.pcp_facility], ['Requesting Provider', fd.requesting_provider]]);
+  row([['Primary Diagnosis (ICD-10)', fd.diagnosis_code],
+       ['Disciplines', (fd.disciplines || []).join(', ')]]);
+  row([['Wounds Present', fd.wounds_present ? 'Yes' : 'No'],
+       ['Wound Type / Location', fd.wound_type || '-']]);
+  row([['PCP Name', fd.pcp_name],
+       ['PCP Phone / Fax', [fmtPhone(fd.pcp_phone), fmtPhone(fd.pcp_fax)].filter(Boolean).join(' / ')]]);
+  if (fd.pcp_facility || fd.requesting_provider) {
+    row([['PCP Facility', fd.pcp_facility || '-'],
+         ['Requesting Provider (NPI)', [fd.requesting_provider, fd.requesting_provider_npi].filter(Boolean).join(' / ')]]);
   }
-  if (fd.requesting_provider_npi) {
-    row([['Requesting Provider NPI', fd.requesting_provider_npi], ['', '']]);
-  }
-  if (fd.diagnosis_description) block('Diagnosis Description', fd.diagnosis_description);
+  if (fd.diagnosis_description) block('Diagnosis Description', fd.diagnosis_description, 2);
 
-  // CPT codes
+  // ---- CPT codes (compact 2-column table) ----
   section('Service Codes Requested');
   const cpts = Array.isArray(fd.cpt_codes) ? fd.cpt_codes : [];
   if (cpts.length === 0) {
-    block('CPT Codes', 'None selected');
+    doc.setFontSize(9);
+    doc.setTextColor(...GRAY);
+    doc.text('No CPT codes selected.', M, y + 4);
+    y += 14;
   } else {
     autoTable(doc, {
       startY: y,
       margin: { left: M, right: M },
-      head: [['CPT', 'Description', 'Category']],
-      body: cpts.map(c => [safe(c.code), safe(c.description), categoryLabel(c.category)]),
-      styles: { fontSize: 9, cellPadding: 4 },
-      headStyles: { fillColor: BRAND_RED, textColor: 255, fontStyle: 'bold' },
+      head: [['CPT', 'Description']],
+      body: cpts.map(c => [safe(c.code), safe(c.description)]),
+      styles:      { fontSize: 8, cellPadding: 2, lineColor: LIGHT, lineWidth: 0.2 },
+      headStyles:  { fillColor: BRAND_RED, textColor: 255, fontStyle: 'bold', fontSize: 8 },
+      columnStyles:{ 0: { cellWidth: 60, fontStyle: 'bold' } },
       alternateRowStyles: { fillColor: [251, 247, 246] },
+      pageBreak: 'avoid',
     });
-    y = doc.lastAutoTable.finalY + 16;
+    y = doc.lastAutoTable.finalY + 8;
   }
 
-  // Service request
-  if (y > H - 200) { doc.addPage(); y = M; }
+  // ---- Service Request ----
   section('Service Request');
-  row([['Visits Requested', safe(fd.visits_requested)], ['Evaluations', safe(fd.evals_requested)]]);
-  row([['Frequency', fd.frequency], ['Duration', fd.duration]]);
-  row([['Start Date', fmtDate(fd.start_date)], ['End Date', fmtDate(fd.end_date)]]);
-  row([['Place of Service', fd.place_of_service || '12 - Home'], ['', '']]);
-  if (fd.clinical_justification) block('Clinical Justification', fd.clinical_justification);
-  if (fd.additional_notes)       block('Additional Notes',      fd.additional_notes);
+  row([['Visits Requested', safe(fd.visits_requested)],
+       ['Evaluations / Re-evals', [safe(fd.evals_requested), safe(fd.reassessments_requested)].filter(s => s && s !== '0').join(' / ') || '-']]);
+  row([['Frequency / Duration', [fd.frequency, fd.duration].filter(Boolean).join(' x ') || '-'],
+       ['Date Range', [fmtDate(fd.start_date), fmtDate(fd.end_date)].filter(Boolean).join(' - ') || '-']]);
+  row([['Place of Service', fd.place_of_service || '12 - Home'],
+       ['Submitted By', form.created_by_name || fd.created_by_name || '-']]);
+  if (fd.clinical_justification) block('Clinical Justification', fd.clinical_justification, 3);
+  if (fd.additional_notes)       block('Additional Notes',      fd.additional_notes, 2);
 
-  // Signature
-  if (y > H - 140) { doc.addPage(); y = M; }
-  section('Authorized Representative');
-  row([['Submitted By', form.created_by_name || fd.created_by_name], ['Submission Date', fmtDate(form.sent_at || form.created_at)]]);
-  row([['Typed Signature (e-sig)', fd.signature_typed_name], ['Date', fmtDate(fd.signature_date || form.created_at)]]);
+  // ---- Memo: what we need back from the PCP ----
+  // Right above the signature block - critical instruction for the PCP
+  // so the returned fax has everything billing needs.
+  section('Please Return to EdemaCare');
+  doc.setFontSize(9);
+  doc.setTextColor(...BLACK);
+  const returnFax = fmtPhone(clinic.clinic_fax);
+  const returnPhone = fmtPhone(clinic.clinic_phone);
+  const memoLines = [
+    'Fax to: ' + returnFax + '   |   Questions: ' + returnPhone,
+    '   [_]  Signed Physician Order (signature, name, title, date below)',
+    '   [_]  Authorization number once approved by ' + safe(form.insurance_name || 'the payor'),
+    '   [_]  Any additional clinical documentation required by the payor',
+  ];
+  memoLines.forEach((line, i) => {
+    if (i === 0) {
+      doc.setFont('helvetica', 'bold');
+    } else {
+      doc.setFont('helvetica', 'normal');
+    }
+    doc.text(line, M, y + 4 + i * 11);
+  });
+  doc.setFont('helvetica', 'normal');
+  y += 8 + memoLines.length * 11 + 4;
+
+  // ---- PCP / Provider Acknowledgement & Signature ----
+  section('Provider Acknowledgement and Signature');
+  doc.setFontSize(8);
+  doc.setTextColor(...BLACK);
+  doc.text(
+    'By signing below, I certify that the services requested above are medically necessary for the named ' +
+    'patient and are consistent with my plan of care. This signature serves as a Physician Order.',
+    M, y + 2, { maxWidth: W - 2 * M }
+  );
+  y += 18;
+
+  // Signature box - 2 columns: Signature + Date on top row, Printed Name + Title on bottom row.
+  const sigColW = (W - 2 * M) / 2;
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.6);
+  // Top row lines (signature left, date right)
+  doc.line(M,                y + 16, M + sigColW - 12,       y + 16);
+  doc.line(M + sigColW,      y + 16, W - M,                  y + 16);
+  doc.setFontSize(7);
+  doc.setTextColor(...GRAY);
+  doc.text('PROVIDER SIGNATURE',  M,           y + 26);
+  doc.text('DATE',                M + sigColW, y + 26);
+  // Bottom row (printed name, title)
+  y += 36;
+  doc.setDrawColor(...BLACK);
+  doc.line(M,                y + 16, M + sigColW - 12,       y + 16);
+  doc.line(M + sigColW,      y + 16, W - M,                  y + 16);
+  doc.text('PRINTED NAME',        M,           y + 26);
+  doc.text('TITLE',               M + sigColW, y + 26);
+  y += 30;
 
   // -----------------------------------------------------------------
   // Footer on every page
