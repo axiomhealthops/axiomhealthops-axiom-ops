@@ -44,6 +44,7 @@ const PAGE_ICONS = {
   'auth-expiry-timeline': '📅',
   'stuck-auths': '🐢',
   'my-day': '☀',
+  'auth-request-form': '📄',
   users: '👥', uploads: '↑', settings: '⚙', 'insurance-settings': '🏥', 'audit-import': '📋', 'dept-reports': '📑',
   // 2026-06-02 PAYROLL section
   'payroll-review':   '💵',

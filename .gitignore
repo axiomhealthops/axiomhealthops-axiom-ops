@@ -34,3 +34,4 @@ yarn-error.log*
 .auto-memory/
 .npm/
 .env*.local
+vite.config.js.timestamp-*.mjs

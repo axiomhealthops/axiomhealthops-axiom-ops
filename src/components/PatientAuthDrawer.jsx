@@ -33,6 +33,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase, safeUpdate, logActivity, fetchAllPages } from '../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import PatientNotesPanel from './PatientNotesPanel';
+// 2026-06-03 Phase 2.5 - auth request forms surfaced on the patient chart.
+import { downloadAuthRequestPdf } from '../lib/authRequestPdf';
 
 // ----- pure helpers (kept top-level so no per-render allocation) ------------
 const STATUSES = [
@@ -92,9 +94,10 @@ export default function PatientAuthDrawer({
   const [allAuthsForPatient, setAllAuthsForPatient] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [authRequestForms, setAuthRequestForms] = useState([]); // 2026-06-03 Phase 2.5
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [section, setSection] = useState('edit'); // edit | actions | notes | activity
+  const [section, setSection] = useState('edit'); // edit | actions | notes | requests | activity
 
   // Local UI state for the "Dismiss Alert" reason input + "Contact Attempt" text
   const [dismissTargetId, setDismissTargetId] = useState(null);
@@ -146,14 +149,22 @@ export default function PatientAuthDrawer({
           .order('created_at', { ascending: false })
           .limit(8)
       : Promise.resolve({ data: [] });
+    // 2026-06-03 Phase 2.5 - auth_request_forms history for this patient.
+    const reqQ = patientName
+      ? supabase.from('auth_request_forms')
+          .select('*')
+          .eq('patient_name', patientName)
+          .order('created_at', { ascending: false })
+      : Promise.resolve({ data: [] });
 
-    const [a, sibs, alerted, acts] = await Promise.all([authQ, sibQ, alertQ, actQ]);
+    const [a, sibs, alerted, acts, reqs] = await Promise.all([authQ, sibQ, alertQ, actQ, reqQ]);
 
     const row = a.data || null;
     setAuth(row);
     setAllAuthsForPatient(sibs.data || []);
     setAlerts(alerted.data || []);
     setActivity(acts.data || []);
+    setAuthRequestForms(reqs.data || []);
 
     // Initial form state.  For new patients (no authId), seed sensible defaults.
     setForm(row
@@ -366,6 +377,63 @@ export default function PatientAuthDrawer({
     setSaving(false);
   }
 
+  // ---------------------------------------------------------------------------
+  // 2026-06-03 Phase 2.5 - Auth Request Form download + deep-link to the editor.
+  // The drawer never leaves the current page; navigation to AuthRequestFormPage
+  // is done via the global axiom-navigate event Dashboard.jsx already listens to,
+  // and the page consumes `intent` on mount to prefill/open.
+  // ---------------------------------------------------------------------------
+  async function downloadRequestPdf(req) {
+    try {
+      await downloadAuthRequestPdf(req);
+      try {
+        await logActivity({
+          coordinatorId:   profile?.id,
+          coordinatorName: profileName,
+          coordinatorRole: profile?.role,
+          actionType:      'auth_request_form_downloaded',
+          tableName:       'auth_request_forms',
+          recordId:        req.id,
+          actionDetail:    `Downloaded ${req.requires_prior_auth === false ? 'Service Order' : 'Auth Request'} v${req.version_number || 1} - ${req.insurance_name || '-'}`,
+          metadata:        { patient_name: patientName },
+        });
+      } catch (_) { /* non-blocking */ }
+      showToast('PDF downloaded.');
+    } catch (e) {
+      showToast('PDF export failed: ' + (e?.message || e), 'err');
+    }
+  }
+
+  function openRequestEditor(req) {
+    window.dispatchEvent(new CustomEvent('axiom-navigate', {
+      detail: { page: 'auth-request-form', intent: { formId: req.id } },
+    }));
+    if (typeof onClose === 'function') onClose();
+  }
+
+  function newRequestForPatient() {
+    window.dispatchEvent(new CustomEvent('axiom-navigate', {
+      detail: {
+        page: 'auth-request-form',
+        intent: {
+          patientPrefill: {
+            patient_name: patientName,
+            dob:          auth?.dob || null,
+            region:       auth?.region || null,
+            insurance:    auth?.insurance || null,
+            member_id:    auth?.member_id || null,
+            pcp_name:     auth?.pcp_name || null,
+            pcp_phone:    auth?.pcp_phone || null,
+            pcp_fax:      auth?.pcp_fax || null,
+            pcp_facility: auth?.pcp_facility || null,
+            diagnosis_code: auth?.diagnosis_code || null,
+          },
+        },
+      },
+    }));
+    if (typeof onClose === 'function') onClose();
+  }
+
   // Quick status change (no full save) - bypasses the form and writes only auth_status.
   async function quickStatus(newStatus) {
     if (!authId || saving) return;
@@ -486,6 +554,7 @@ export default function PatientAuthDrawer({
             { k: 'edit',     l: 'Edit Auth' },
             { k: 'actions',  l: `Alerts${alerts.length ? ' (' + alerts.length + ')' : ''}` },
             { k: 'notes',    l: 'Notes' },
+            { k: 'requests', l: `Requests${authRequestForms.length ? ' (' + authRequestForms.length + ')' : ''}` },
             { k: 'activity', l: 'History' },
           ].map(t => {
             const is = section === t.k;
@@ -527,6 +596,13 @@ export default function PatientAuthDrawer({
             <div>
               <PatientNotesPanel patientName={patientName} maxHeight="55vh" />
             </div>
+          ) : section === 'requests' ? (
+            <RequestsSection
+              forms={authRequestForms}
+              onDownload={downloadRequestPdf}
+              onOpen={openRequestEditor}
+              onNew={newRequestForPatient}
+              saving={saving} />
           ) : (
             <ActivitySection activity={activity} />
           )}
@@ -869,6 +945,108 @@ function ActivitySection({ activity }) {
       ))}
     </div>
   );
+}
+
+// ----- 2026-06-03 Phase 2.5 - Authorization Requests section -----------------
+// Lists every auth_request_forms row for this patient. Each row has a
+// Download PDF (regenerates from form_data via authRequestPdf.js) and a
+// View/Edit link that deep-links into AuthRequestFormPage via axiom-navigate.
+function RequestsSection({ forms, onDownload, onOpen, onNew, saving }) {
+  if (!forms || forms.length === 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 30, gap: 12 }}>
+        <div style={{ fontSize: 12, color: 'var(--gray)', textAlign: 'center', lineHeight: 1.5 }}>
+          No authorization requests yet for this patient.
+        </div>
+        <button onClick={onNew} disabled={saving}
+          style={{ padding: '8px 16px', borderRadius: 7, border: 'none', background: '#D94F2B', color: '#fff', fontWeight: 700, fontSize: 12, cursor: saving ? 'wait' : 'pointer' }}>
+          + New Request
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {forms.length} request{forms.length === 1 ? '' : 's'} on file
+        </div>
+        <button onClick={onNew} disabled={saving}
+          style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #D94F2B', background: '#fff', color: '#D94F2B', fontWeight: 700, fontSize: 11, cursor: saving ? 'wait' : 'pointer' }}>
+          + New Request
+        </button>
+      </div>
+      {forms.map(req => {
+        const fd = req.form_data || {};
+        const cpts = Array.isArray(fd.cpt_codes) ? fd.cpt_codes : [];
+        const cats = Array.from(new Set(cpts.map(c => categoryLabel(c.category)))).filter(Boolean);
+        const created = req.created_at ? new Date(req.created_at) : null;
+        const sent    = req.sent_at    ? new Date(req.sent_at)    : null;
+        const status  = req.status || 'draft';
+        const isOrder = req.requires_prior_auth === false;
+        return (
+          <div key={req.id} style={{
+            background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 8,
+            padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--black)' }}>
+                {isOrder ? 'Service Order' : 'Auth Request'} v{req.version_number || 1}
+              </span>
+              <RequestStatusBadge status={status} />
+              <span style={{ fontSize: 10, color: 'var(--gray)' }}>
+                {req.insurance_name || '-'}{req.insurance_type ? ' (' + req.insurance_type + ')' : ''}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 10, color: 'var(--gray)' }}>
+              <span><strong style={{ color: '#374151' }}>Created:</strong> {created ? created.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-'}</span>
+              <span><strong style={{ color: '#374151' }}>Sent:</strong> {sent ? sent.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-'}</span>
+            </div>
+            <div style={{ fontSize: 11, color: '#374151' }}>
+              {cpts.length} CPT{cpts.length === 1 ? '' : 's'}{cats.length ? ' - ' + cats.join(', ') : ''}
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--gray)' }}>
+              by {req.created_by_name || '-'}
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button onClick={() => onDownload(req)} disabled={saving}
+                style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: '#D94F2B', color: '#fff', fontWeight: 700, fontSize: 11, cursor: saving ? 'wait' : 'pointer' }}>
+                Download PDF
+              </button>
+              <button onClick={() => onOpen(req)} disabled={saving}
+                style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--black)', fontWeight: 600, fontSize: 11, cursor: saving ? 'wait' : 'pointer' }}>
+                {status === 'sent' || status === 'superseded' ? 'View' : 'View / Edit'}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RequestStatusBadge({ status }) {
+  const cfg = {
+    draft:         { l: 'Draft',      c: '#D97706', bg: '#FEF3C7' },
+    ready_to_send: { l: 'Ready',      c: '#1565C0', bg: '#EFF6FF' },
+    sent:          { l: 'Sent',       c: '#065F46', bg: '#ECFDF5' },
+    superseded:    { l: 'Superseded', c: '#6B7280', bg: '#F3F4F6' },
+  }[status] || { l: status || '-', c: '#6B7280', bg: '#F3F4F6' };
+  return (
+    <span style={{ fontSize: 9, fontWeight: 700, color: cfg.c, background: cfg.bg, padding: '1px 6px', borderRadius: 999 }}>
+      {cfg.l}
+    </span>
+  );
+}
+
+function categoryLabel(c) {
+  switch (c) {
+    case 'wound_care': return 'Wound Care';
+    case 'lymphedema': return 'Lymphedema';
+    case 'pt':         return 'PT';
+    case 'ot':         return 'OT';
+    default:           return c || '';
+  }
 }
 
 // ----- tiny presentational helpers (no exports - drawer scope) --------------
