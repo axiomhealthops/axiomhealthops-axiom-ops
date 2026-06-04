@@ -121,21 +121,31 @@ export default function AuthRequestFormPage({ intent }) {
   })(); }, []);
 
   // ---- Load patient typeahead source ----------------------------------
-  // 2026-06-03 bug fix: fetchAllPages takes a (builder) - a Supabase query -
-  // not (table, fn). The earlier signature silently failed and left
-  // `patients` empty, which made the dropdown never appear.
-  // Sources merged for the typeahead, by precedence:
-  //   census_data (current census) > intake_referrals (referrals) >
-  //   auth_tracker (gives us insurance_type / plan info per patient).
+  // 2026-06-03 ROOT-CAUSE FIX (Kirk Jones case): the previous intake select
+  // included has_wound/wound_type which don't exist on intake_referrals -
+  // Postgres returned an error, fetchAllPages swallowed it and returned [],
+  // so the entire intake_referrals body (3K+ rows of DOB, address, phone,
+  // PCP info, dx) was missing from the merge. Census + auth_tracker carry
+  // almost no demographics, which is why autofill was producing blanks
+  // even on patients that DO have full records on file.
+  //
+  // Sources merged (by precedence after merge):
+  //   census_data       (897 rows)  - name, region, insurance, wounds, address
+  //   intake_referrals  (3K)        - dob, full address, phone, pcp, dx, sec ins
+  //   auth_tracker      (745)       - insurance_type, member_id, pcp_facility
+  //   patient_master    (~900)      - has_been_active flag, recent activity
+  //
+  // Merge key is normalized (sorted lowercase tokens) so 'Jones, Kirk' and
+  // 'Kirk Jones' link the same patient defensively.
   useEffect(() => { (async () => {
     const census = await fetchAllPages(
       supabase.from('census_data')
-        .select('patient_name, region, insurance, has_wound, wound_type')
+        .select('patient_name, region, insurance, address, has_wound, wound_type, current_visit_cadence, inferred_frequency')
         .not('patient_name', 'is', null)
     );
     const intake = await fetchAllPages(
       supabase.from('intake_referrals')
-        .select('patient_name, dob, region, insurance, policy_number, phone, contact_number, location, city, zip_code, county, pcp_name, pcp_phone, pcp_fax, diagnosis_clean, diagnosis, medicare_type, secondary_insurance, secondary_id, has_wound, wound_type')
+        .select('patient_name, dob, region, insurance, policy_number, phone, contact_number, location, city, zip_code, county, pcp_name, pcp_phone, pcp_fax, diagnosis_clean, diagnosis, medicare_type, secondary_insurance, secondary_id')
         .not('patient_name', 'is', null)
     );
     const auths = await fetchAllPages(
@@ -143,26 +153,34 @@ export default function AuthRequestFormPage({ intent }) {
         .select('patient_name, dob, region, insurance, insurance_type, member_id, phone, pcp_name, pcp_phone, pcp_fax, pcp_facility, diagnosis_code, requesting_provider, requesting_provider_npi')
         .not('patient_name', 'is', null)
     );
-    const byName = new Map();
+    const masters = await fetchAllPages(
+      supabase.from('patient_master')
+        .select('patient_name, region, insurance, has_wound, current_status')
+        .not('patient_name', 'is', null)
+    );
+    const byKey = new Map();
     function merge(row, defaults) {
       if (!row?.patient_name) return;
-      const key = row.patient_name.trim().toLowerCase();
-      const existing = byName.get(key) || { patient_name: row.patient_name };
-      // Keep the most-specific non-null value for each field.
+      const key = nameKey(row.patient_name);
+      if (!key) return;
+      const existing = byKey.get(key) || { patient_name: row.patient_name };
       const next = { ...defaults, ...existing };
       Object.entries(row).forEach(([k, v]) => {
-        if (v !== null && v !== undefined && v !== '' && (next[k] === null || next[k] === undefined || next[k] === '')) {
+        if (v !== null && v !== undefined && v !== '' &&
+            (next[k] === null || next[k] === undefined || next[k] === '')) {
           next[k] = v;
         }
       });
+      // Preserve the first non-empty display name we saw for the patient.
       next.patient_name = existing.patient_name || row.patient_name;
-      byName.set(key, next);
+      byKey.set(key, next);
     }
-    (census || []).forEach(r => merge(r, { source: 'census' }));
-    (intake || []).forEach(r => merge(r, { source: 'intake' }));
-    (auths  || []).forEach(r => merge(r, { source: 'auth_tracker' }));
+    (census  || []).forEach(r => merge(r, { source: 'census' }));
+    (intake  || []).forEach(r => merge(r, { source: 'intake' }));
+    (auths   || []).forEach(r => merge(r, { source: 'auth_tracker' }));
+    (masters || []).forEach(r => merge(r, { source: 'patient_master' }));
     setPatients(
-      Array.from(byName.values()).sort(
+      Array.from(byKey.values()).sort(
         (a, b) => (a.patient_name || '').localeCompare(b.patient_name || '')
       )
     );
@@ -259,40 +277,21 @@ export default function AuthRequestFormPage({ intent }) {
   }, [forms, draftData.patient_name]);
 
   // ---- Patient selection + autopopulate -------------------------------
-  // Patient is the PRIMARY input. Picking a patient overwrites the whole
-  // form scaffold with what we know about them across census / intake /
-  // auth_tracker, including the insurance carrier and plan type. The user
-  // can still adjust any field after autofill.
+  // Patient is the PRIMARY input. Picking a patient applies what we know
+  // about them across census / intake / auth_tracker / patient_master,
+  // including insurance carrier + plan type. Then we kick off an
+  // enrichment query that hits the DB directly for anything still blank
+  // (handles patients whose data lives in newer rows the typeahead
+  // didn't get a chance to merge, or in tables not in the typeahead set).
   function selectPatient(p) {
-    setDraftData(d => ({
-      ...d,
-      manual_patient:        false,
-      patient_name:          p.patient_name || '',
-      patient_dob:           p.dob || '',
-      address:               p.location || '',
-      city:                  p.city || '',
-      zip_code:              p.zip_code || '',
-      phone:                 p.phone || p.contact_number || '',
-      member_id:             p.member_id || p.policy_number || '',
-      region:                p.region || '',
-      pcp_name:              p.pcp_name || '',
-      pcp_phone:             p.pcp_phone || '',
-      pcp_fax:               p.pcp_fax || '',
-      pcp_facility:          p.pcp_facility || '',
-      diagnosis_code:        p.diagnosis_code || p.diagnosis_clean || '',
-      diagnosis_description: p.diagnosis || '',
-      medicare_type:         p.medicare_type || '',
-      secondary_insurance:   p.secondary_insurance || '',
-      secondary_id:          p.secondary_id || '',
-      wounds_present:        !!p.has_wound,
-      wound_type:            p.wound_type || '',
-      requesting_provider:     p.requesting_provider || '',
-      requesting_provider_npi: p.requesting_provider_npi || '',
-      // Align insurance carrier dropdown to the patient's carrier.
-      insurance_name: matchCarrier(p.insurance, d.insurance_name, carriers),
-      // Pull plan type from auth_tracker if we have it.
-      insurance_type: p.insurance_type || d.insurance_type || '',
-    }));
+    const base = applyPatientToDraft(p, draftData, carriers);
+    setDraftData(base);
+    // Fire-and-forget enrichment. If it finds more data, the form gets
+    // a second update without blocking selection.
+    enrichPatient(p.patient_name).then(extra => {
+      if (!extra) return;
+      setDraftData(d => mergeIntoDraftPreserveEdits(d, extra, carriers));
+    });
   }
 
   // ---- CPT picker handling --------------------------------------------
@@ -781,6 +780,177 @@ export default function AuthRequestFormPage({ intent }) {
 }
 
 // ===================== helpers =====================
+
+// Normalized name key for cross-table merging. Strips commas/punctuation,
+// splits into tokens, lowercases, sorts. So:
+//   "Jones, Kirk"  -> "jones kirk"
+//   "Kirk Jones"   -> "jones kirk"
+//   "JONES KIRK"   -> "jones kirk"
+// Keeps the typeahead robust against the inconsistent name formats across
+// census_data, intake_referrals, and auth_tracker.
+function nameKey(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/[,.;]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(w => w.toLowerCase())
+    .sort()
+    .join(' ');
+}
+
+// Build a complete draft from the merged patient option. Used on initial
+// selection; the enrichment call follows and fills any blanks.
+function applyPatientToDraft(p, d, carriers) {
+  return {
+    ...d,
+    manual_patient:          false,
+    patient_name:            p.patient_name || d.patient_name || '',
+    patient_dob:             p.dob || d.patient_dob || '',
+    address:                 p.location || p.address || d.address || '',
+    city:                    p.city || d.city || '',
+    zip_code:                p.zip_code || d.zip_code || '',
+    phone:                   p.phone || p.contact_number || d.phone || '',
+    member_id:               p.member_id || p.policy_number || d.member_id || '',
+    region:                  p.region || d.region || '',
+    pcp_name:                p.pcp_name || d.pcp_name || '',
+    pcp_phone:               p.pcp_phone || d.pcp_phone || '',
+    pcp_fax:                 p.pcp_fax || d.pcp_fax || '',
+    pcp_facility:            p.pcp_facility || d.pcp_facility || '',
+    diagnosis_code:          p.diagnosis_code || p.diagnosis_clean || d.diagnosis_code || '',
+    diagnosis_description:   p.diagnosis || d.diagnosis_description || '',
+    medicare_type:           p.medicare_type || d.medicare_type || '',
+    secondary_insurance:     p.secondary_insurance || d.secondary_insurance || '',
+    secondary_id:            p.secondary_id || d.secondary_id || '',
+    wounds_present:          d.wounds_present || !!p.has_wound,
+    wound_type:              p.wound_type || d.wound_type || '',
+    requesting_provider:     p.requesting_provider || d.requesting_provider || '',
+    requesting_provider_npi: p.requesting_provider_npi || d.requesting_provider_npi || '',
+    insurance_name:          matchCarrier(p.insurance, d.insurance_name, carriers),
+    insurance_type:          normalizePlan(p.insurance_type) || d.insurance_type || '',
+    frequency:               d.frequency || p.current_visit_cadence || p.inferred_frequency || '',
+  };
+}
+
+// Second-pass merge from enrichment query. Only fills BLANK fields - never
+// overwrites anything the user may have edited between selection and
+// enrichment landing.
+function mergeIntoDraftPreserveEdits(d, extra, carriers) {
+  const out = { ...d };
+  const tryFill = (k, v) => {
+    if (v === null || v === undefined || v === '') return;
+    if (out[k] === null || out[k] === undefined || out[k] === '') {
+      out[k] = v;
+    }
+  };
+  tryFill('patient_dob',           extra.dob);
+  tryFill('address',               extra.location || extra.address);
+  tryFill('city',                  extra.city);
+  tryFill('zip_code',              extra.zip_code);
+  tryFill('phone',                 extra.phone || extra.contact_number);
+  tryFill('member_id',             extra.member_id || extra.policy_number);
+  tryFill('region',                extra.region);
+  tryFill('pcp_name',              extra.pcp_name);
+  tryFill('pcp_phone',             extra.pcp_phone);
+  tryFill('pcp_fax',               extra.pcp_fax);
+  tryFill('pcp_facility',          extra.pcp_facility);
+  tryFill('diagnosis_code',        extra.diagnosis_code || extra.diagnosis_clean);
+  tryFill('diagnosis_description', extra.diagnosis);
+  tryFill('medicare_type',         extra.medicare_type);
+  tryFill('secondary_insurance',   extra.secondary_insurance);
+  tryFill('secondary_id',          extra.secondary_id);
+  tryFill('wound_type',            extra.wound_type);
+  tryFill('requesting_provider',   extra.requesting_provider);
+  tryFill('requesting_provider_npi', extra.requesting_provider_npi);
+  tryFill('frequency',             extra.current_visit_cadence || extra.inferred_frequency);
+  if (extra.has_wound && !out.wounds_present) out.wounds_present = true;
+  if (!out.insurance_name && extra.insurance) {
+    out.insurance_name = matchCarrier(extra.insurance, '', carriers);
+  }
+  if (!out.insurance_type && extra.insurance_type) {
+    out.insurance_type = normalizePlan(extra.insurance_type);
+  }
+  return out;
+}
+
+// Map auth_tracker's free-form insurance_type values onto our dropdown
+// values. auth_tracker has values like "standard" / "HMO" / "PPO" / "MA";
+// the dropdown understands HMO/PPO/MA/Medicaid/Original/Commercial.
+function normalizePlan(t) {
+  if (!t) return '';
+  const s = String(t).trim().toLowerCase();
+  if (!s) return '';
+  if (s === 'hmo') return 'HMO';
+  if (s === 'ppo') return 'PPO';
+  if (s === 'ma' || s.includes('medicare advantage')) return 'MA';
+  if (s.includes('medicaid')) return 'Medicaid';
+  if (s.includes('original') || s.includes('traditional')) return 'Original';
+  if (s.includes('commercial')) return 'Commercial';
+  if (s === 'standard') return 'HMO'; // auth_tracker default; HMO is the safe assumption
+  return '';
+}
+
+// On-pick enrichment: directly query the DB for any data we may not have
+// already merged into the typeahead option. Uses ilike with the exact
+// patient_name first, then a token-based fallback so 'Jones, Kirk' will
+// still hit rows stored as 'Kirk Jones'. Returns a single merged object
+// with the most-specific non-null value per field.
+async function enrichPatient(patientName) {
+  if (!patientName) return null;
+  const trimmed = patientName.trim();
+  if (!trimmed) return null;
+  const tokens = trimmed.replace(/[,.;]/g, ' ').split(/\s+/).filter(Boolean);
+  // Match patient_name that contains every token in any order.
+  const tokenFilter = tokens.length > 0
+    ? tokens.map(t => `patient_name.ilike.%${t}%`).join(',')
+    : `patient_name.ilike.%${trimmed}%`;
+
+  try {
+    const [intakeRes, authRes, censusRes] = await Promise.all([
+      supabase.from('intake_referrals')
+        .select('patient_name, dob, region, insurance, policy_number, phone, contact_number, location, city, zip_code, county, pcp_name, pcp_phone, pcp_fax, diagnosis_clean, diagnosis, medicare_type, secondary_insurance, secondary_id')
+        .or(tokenFilter).order('created_at', { ascending: false }).limit(5),
+      supabase.from('auth_tracker')
+        .select('patient_name, dob, region, insurance, insurance_type, member_id, phone, pcp_name, pcp_phone, pcp_fax, pcp_facility, diagnosis_code, requesting_provider, requesting_provider_npi')
+        .or(tokenFilter).order('updated_at', { ascending: false }).limit(5),
+      supabase.from('census_data')
+        .select('patient_name, region, insurance, address, has_wound, wound_type, current_visit_cadence, inferred_frequency')
+        .or(tokenFilter).limit(5),
+    ]);
+    // Confirm matches: all tokens present in returned name (avoid false
+    // positives like "Jones, Kirk" matching "Kirk Smith" via just "Kirk").
+    function isRealMatch(row) {
+      if (!row?.patient_name) return false;
+      const n = row.patient_name.toLowerCase();
+      return tokens.every(t => n.includes(t.toLowerCase()));
+    }
+    const intakeRows = (intakeRes.data || []).filter(isRealMatch);
+    const authRows   = (authRes.data   || []).filter(isRealMatch);
+    const censusRows = (censusRes.data || []).filter(isRealMatch);
+    if (intakeRows.length === 0 && authRows.length === 0 && censusRows.length === 0) {
+      return null;
+    }
+    // Collapse to one object, most-recent values winning.
+    const out = {};
+    function absorb(rows) {
+      rows.forEach(r => {
+        Object.entries(r).forEach(([k, v]) => {
+          if (v !== null && v !== undefined && v !== '' &&
+              (out[k] === null || out[k] === undefined || out[k] === '')) {
+            out[k] = v;
+          }
+        });
+      });
+    }
+    absorb(intakeRows);
+    absorb(authRows);
+    absorb(censusRows);
+    return out;
+  } catch (e) {
+    console.warn('[enrichPatient] failed', e?.message || e);
+    return null;
+  }
+}
 
 function matchCarrier(rawInsurance, current, carriers) {
   if (!rawInsurance) return current;
