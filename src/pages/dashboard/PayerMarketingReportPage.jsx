@@ -149,13 +149,19 @@ export default function PayerMarketingReportPage() {
         const [refResp, visitsResp, growthResp, territoriesResp, targetsResp] = await Promise.all([
           fetchAllPages(
             supabase.from('intake_referrals')
-              .select('id, region, referral_status, date_received')
+              // 2026-06-05 fix: drill drawer was showing patient/insurance
+              // as "—" because those columns weren't in the SELECT. Pull
+              // the human-readable fields so Yvonne can verify each row.
+              .select('id, region, referral_status, date_received, patient_name, insurance, referral_source, denial_reason')
               .gte('date_received', startStr)
               .lte('date_received', endStr)
           ),
           fetchAllPages(
             supabase.from('visit_schedule_data')
-              .select('id, patient_name, visit_date, region, status, event_type, staff_name_normalized, uploaded_at')
+              // Include insurance for the visit-drill drawer so we can
+              // verify payer mix at the visit level (matches what the
+              // referrals drawer shows).
+              .select('id, patient_name, visit_date, region, status, event_type, staff_name_normalized, insurance, uploaded_at')
               .gte('visit_date', startStr)
               .lte('visit_date', endStr)
           ),
@@ -379,7 +385,7 @@ export default function PayerMarketingReportPage() {
   // ── Drill-down column defs (shared) ─────────────────────────────────
   const REFERRAL_COLUMNS = useMemo(function() {
     return [
-      { key: 'date_received', label: 'Date',    width: 90,
+      { key: 'date_received', label: 'Date',    width: 86,
         render: r => r.date_received || '—' },
       { key: 'patient_name',  label: 'Patient',
         render: r => (
@@ -389,14 +395,22 @@ export default function PayerMarketingReportPage() {
         render: r => <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700 }}>{r.region || '—'}</span> },
       { key: 'insurance',     label: 'Insurance',
         render: r => <span style={{ color: '#4B5563' }}>{r.insurance || '—'}</span> },
+      { key: 'referral_source', label: 'Source',
+        render: r => <span style={{ color: '#6B7280', fontSize: 11 }}>{r.referral_source || '—'}</span> },
       { key: 'referral_status', label: 'Status', width: 80,
-        render: r => <StatusPill v={r.referral_status} /> },
+        // Denial reason surfaces as a tooltip on the Denied pill so Yvonne
+        // doesn't have to open a separate page to see why something was denied.
+        render: r => (
+          <span title={r.denial_reason ? 'Denial reason: ' + r.denial_reason : ''}>
+            <StatusPill v={r.referral_status} />
+          </span>
+        ) },
     ];
   }, []);
 
   const VISIT_COLUMNS = useMemo(function() {
     return [
-      { key: 'visit_date',   label: 'Date',     width: 90,
+      { key: 'visit_date',   label: 'Date',     width: 86,
         render: v => v.visit_date || '—' },
       { key: 'patient_name', label: 'Patient',
         render: v => <span style={{ fontWeight: 600, color: '#0F1117' }}>{v.patient_name || '—'}</span> },
@@ -404,8 +418,16 @@ export default function PayerMarketingReportPage() {
         render: v => <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700 }}>{v.region || '—'}</span> },
       { key: 'staff_name_normalized', label: 'Staff',
         render: v => <span style={{ color: '#4B5563' }}>{v.staff_name_normalized || '—'}</span> },
+      { key: 'insurance', label: 'Insurance',
+        render: v => <span style={{ color: '#4B5563', fontSize: 11 }}>{v.insurance || '—'}</span> },
       { key: 'status', label: 'Status', width: 120,
-        render: v => <VisitStatusPill v={v} /> },
+        // event_type as tooltip — gives the Pariox-level detail (e.g.
+        // "Lymphedema Visit - Level 3 *e* (PDF)") without cluttering the row.
+        render: v => (
+          <span title={v.event_type || ''}>
+            <VisitStatusPill v={v} />
+          </span>
+        ) },
     ];
   }, []);
 
@@ -545,17 +567,38 @@ export default function PayerMarketingReportPage() {
       // Apply the SAME filter the view uses so client + view counts stay in sync.
       const ACTIVE_SET = new Set(['Active', 'Active - Auth Pendin', 'Active - Auth Pending']);
       const isParserBug = s => /^\d{4}-\d{2}-\d{2}/.test(s || '') || /^\d{2}:\d{2}:\d{2}/.test(s || '');
-      const filtered = rows.filter(r => !isParserBug(r.new_status));
-      let final;
-      if (kind === 'gross')     final = filtered.filter(r => ACTIVE_SET.has(r.new_status));
-      else if (kind === 'disch') final = filtered.filter(r => (r.new_status || '').startsWith('Discharge') || r.new_status === 'Non-Admit');
-      else                       final = filtered; // 'net' or 'all' shows everything in the period
+      const filtered = rows.filter(r => !isParserBug(r.new_status) && r.patient_key);
+      let bucketed;
+      if (kind === 'gross')      bucketed = filtered.filter(r => ACTIVE_SET.has(r.new_status));
+      else if (kind === 'disch') bucketed = filtered.filter(r => (r.new_status || '').startsWith('Discharge') || r.new_status === 'Non-Admit');
+      else                       bucketed = filtered; // 'net' or 'all' shows everything
+
+      // 2026-06-05: Pariox re-logs the same status transition on every
+      // upload even when nothing actually changed. Rivera in Region B
+      // April had 38 rows for one logical discharge. Dedupe: keep the
+      // EARLIEST occurrence per patient_key as the representative — that
+      // tells Yvonne "when did this patient's status first show up in
+      // this bucket this month."
+      const seen = new Map();
+      // Order ascending by changed_at so the first occurrence wins.
+      bucketed.sort((a, b) => (a.changed_at || '').localeCompare(b.changed_at || ''));
+      const deduped = [];
+      for (const r of bucketed) {
+        if (!seen.has(r.patient_key)) {
+          seen.set(r.patient_key, true);
+          deduped.push(r);
+        }
+      }
+      // Display most recent first.
+      deduped.sort((a, b) => (b.changed_at || '').localeCompare(a.changed_at || ''));
 
       const labelMap = { gross: 'Gross Adds', disch: 'Discharges', net: 'All Status Changes' };
+      const dupedFromCount = bucketed.length - deduped.length;
       setDrill({ open: true, loading: false,
         title: `${labelMap[kind] || 'Status Changes'} — Region ${region}`,
-        subtitle: `${monthKey} · ${final.length} ${final.length === 1 ? 'change' : 'changes'}`,
-        columns: CENSUS_COLUMNS, rows: final,
+        subtitle: `${monthKey} · ${deduped.length} unique patient${deduped.length === 1 ? '' : 's'}`
+          + (dupedFromCount > 0 ? ` · ${dupedFromCount} duplicate log row${dupedFromCount === 1 ? '' : 's'} suppressed` : ''),
+        columns: CENSUS_COLUMNS, rows: deduped,
       });
     } catch (e) {
       console.error('[openCensusDrill]', e);
