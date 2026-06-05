@@ -642,7 +642,11 @@ export default function PayerMarketingReportPage() {
     try {
       const rows = await fetchAllPages(
         supabase.from('census_status_log')
-          .select('patient_name, region, old_status, new_status, changed_at')
+          // patient_key is REQUIRED — the dedup filter below drops rows
+          // where it's missing. Forgetting it in the SELECT was the 2026-
+          // 06-05 bug where the drawer showed "0 unique patients" despite
+          // the table cell showing real numbers.
+          .select('patient_name, patient_key, region, old_status, new_status, changed_at')
           .eq('region', region)
           .gte('changed_at', monthStart)
           .lt('changed_at', monthEnd)
