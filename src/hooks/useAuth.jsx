@@ -118,6 +118,10 @@ export function AuthProvider({ children }) {
         // 2026-05-30: HAE — marketing-primary role. Granted only on pages
         // where page_permissions.healthcare_account_executive=true.
         if (role === 'healthcare_account_executive') return p.healthcare_account_executive;
+        // 2026-06-05: Director of Payer Relations and Marketing (Yvonne).
+        // Narrower than admin — only the pages where director_payer_marketing
+        // is explicitly true. See docs/Yvonne_Payer_Marketing_Report_Design.md.
+        if (role === 'director_payer_marketing')      return p.director_payer_marketing;
         return false;
       }
 

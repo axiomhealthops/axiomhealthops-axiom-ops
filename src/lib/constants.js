@@ -205,6 +205,7 @@ export const ASSIGNMENT_ROLE_COLORS = {
 export const USER_MANAGEMENT_ROLE_KEYS = [
   'super_admin',
   'admin',
+  'director_payer_marketing',
   'assoc_director',
   'regional_manager',
   'healthcare_account_executive',
@@ -218,6 +219,7 @@ export const USER_MANAGEMENT_ROLE_KEYS = [
 export const ROLE_LABELS = {
   super_admin:                  'Super Admin',
   admin:                        'Director / Admin',
+  director_payer_marketing:     'Director of Payer Relations & Marketing',
   assoc_director:               'Assoc. Director of Clinical Ops',
   regional_manager:             'Regional Manager',
   healthcare_account_executive: 'Healthcare Account Executive (HAE)',
@@ -231,6 +233,7 @@ export const ROLE_LABELS = {
 export const ROLE_COLORS = {
   super_admin:                  '#DC2626',
   admin:                        '#7C3AED',
+  director_payer_marketing:     '#BE185D',
   assoc_director:               '#0369A1',
   regional_manager:             '#0E7490',
   healthcare_account_executive: '#9A3412',
@@ -244,6 +247,7 @@ export const ROLE_COLORS = {
 export const ROLE_BGS = {
   super_admin:                  '#FEF2F2',
   admin:                        '#F5F3FF',
+  director_payer_marketing:     '#FDF2F8',
   assoc_director:               '#E0F2FE',
   regional_manager:             '#ECFEFF',
   healthcare_account_executive: '#FFF7ED',

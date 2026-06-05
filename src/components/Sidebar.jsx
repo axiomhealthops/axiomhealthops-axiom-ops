@@ -49,6 +49,8 @@ const PAGE_ICONS = {
   // 2026-06-02 PAYROLL section
   'payroll-review':   '💵',
   'payroll-settings': '⚖',
+  // 2026-06-05 Yvonne's Payer + Marketing Report
+  'payer-marketing-report': '📊',
 };
 
 export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, alertBadges = {} }) {
@@ -89,6 +91,8 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
       if (role === 'team_member')        return p.team_member;
       if (role === 'marketing_rep')      return p.marketing_rep;
       if (role === 'healthcare_account_executive') return p.healthcare_account_executive;
+      // 2026-06-05: Director of Payer Relations and Marketing (Yvonne).
+      if (role === 'director_payer_marketing')      return p.director_payer_marketing;
       return false;
     }
 
@@ -123,6 +127,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
     clinician:           'Clinician',
     marketing_rep:       'Marketing Rep',
     healthcare_account_executive: 'Healthcare Account Executive',
+    director_payer_marketing:     'Director of Payer Relations and Marketing',
   }[profile?.role] || '';
 
   return (

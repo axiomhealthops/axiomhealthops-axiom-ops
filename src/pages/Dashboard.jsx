@@ -68,6 +68,9 @@ import AuthRequestFormPage from './dashboard/AuthRequestFormPage';
 // 2026-06-02 Phase 2A: Payroll Review & Audit (docs/Payroll_Review_Design.md rev 2)
 import PayrollReviewPage from './dashboard/PayrollReviewPage';
 import PayrollSettingsPage from './dashboard/PayrollSettingsPage';
+// 2026-06-05: Payer + Marketing Report (Yvonne Flores).
+// docs/Yvonne_Payer_Marketing_Report_Design.md.
+import PayerMarketingReportPage from './dashboard/PayerMarketingReportPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
@@ -133,6 +136,7 @@ const PAGE_COMPONENTS = {
   'auth-request-form':       AuthRequestFormPage,
   'payroll-review':          PayrollReviewPage,
   'payroll-settings':        PayrollSettingsPage,
+  'payer-marketing-report':  PayerMarketingReportPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 
@@ -170,6 +174,7 @@ export default function Dashboard() {
     if (r === 'pod_leader')         return 'intake-queue';
     if (r === 'clinician')          return 'visits';
     if (r === 'super_admin')        return 'director';
+    if (r === 'director_payer_marketing') return 'payer-marketing-report';
     return 'overview';
   })();
   const [activePage, setActivePage] = useState(defaultPage);

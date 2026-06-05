@@ -93,6 +93,71 @@ export function getWeekRange(date, weeksOffset = 0) {
   };
 }
  
+// =====================================================================
+// Multi-mode period range helper — added 2026-06-05 for the Payer +
+// Marketing Report (Yvonne Flores). Reused anywhere a dashboard needs
+// to swap between Week / Month / Quarter / YTD windows. Week mode
+// delegates to getWeekRange() to keep Sun-Sat semantics consistent.
+//
+// Returns { start, end, startStr, endStr, label, mode } where dates are
+// local-time and string forms are YYYY-MM-DD for SQL filters.
+// =====================================================================
+/**
+ * @param {'week'|'month'|'quarter'|'ytd'} mode
+ * @param {Date|string} anchor - date inside the desired window. Defaults to today.
+ */
+export function getPeriodRange(mode, anchor) {
+  const today = new Date();
+  const a = anchor instanceof Date
+    ? new Date(anchor.getTime())
+    : (anchor ? new Date(anchor + 'T00:00:00') : new Date(today.getTime()));
+
+  if (mode === 'week') {
+    return { ...getWeekRange(a, 0), mode: 'week' };
+  }
+
+  if (mode === 'month') {
+    const start = new Date(a.getFullYear(), a.getMonth(), 1);
+    const end = new Date(a.getFullYear(), a.getMonth() + 1, 0);
+    end.setHours(23, 59, 59, 999);
+    return {
+      start, end,
+      startStr: toDateStr(start),
+      endStr: toDateStr(end),
+      label: start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+      mode: 'month',
+    };
+  }
+
+  if (mode === 'quarter') {
+    const q = Math.floor(a.getMonth() / 3); // 0..3
+    const start = new Date(a.getFullYear(), q * 3, 1);
+    const end = new Date(a.getFullYear(), q * 3 + 3, 0);
+    end.setHours(23, 59, 59, 999);
+    return {
+      start, end,
+      startStr: toDateStr(start),
+      endStr: toDateStr(end),
+      label: `Q${q + 1} ${a.getFullYear()}`,
+      mode: 'quarter',
+    };
+  }
+
+  // ytd — Jan 1 of anchor year through today (or Dec 31 if anchor is past year)
+  const yStart = new Date(a.getFullYear(), 0, 1);
+  const isCurrentYear = a.getFullYear() === today.getFullYear();
+  const yEnd = isCurrentYear
+    ? new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999)
+    : new Date(a.getFullYear(), 11, 31, 23, 59, 59, 999);
+  return {
+    start: yStart, end: yEnd,
+    startStr: toDateStr(yStart),
+    endStr: toDateStr(yEnd),
+    label: isCurrentYear ? `${a.getFullYear()} YTD` : `${a.getFullYear()}`,
+    mode: 'ytd',
+  };
+}
+
 export function getMonthDays(anchor) {
   const start = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
   const end = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
