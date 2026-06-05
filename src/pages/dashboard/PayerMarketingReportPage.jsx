@@ -21,6 +21,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import TopBar from '../../components/TopBar';
 import PeriodSelector, { readPersistedPeriod } from '../../components/PeriodSelector';
+import DrillDownDrawer from '../../components/DrillDownDrawer';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { getPeriodRange, toDateStr } from '../../lib/dateUtils';
 import {
@@ -117,6 +118,13 @@ export default function PayerMarketingReportPage() {
   const [censusGrowth, setCensusGrowth] = useState([]);
   const [territories, setTerritories] = useState([]); // marketing_territories source of truth
   const [targets, setTargets] = useState([]);         // clinician_weekly_visit_targets
+
+  // ── Drill-down drawer state ─────────────────────────────────────────
+  // The drawer lazily reuses the in-memory referrals/visits arrays. For
+  // Section 2 (census growth) we issue an on-demand fetch since the raw
+  // status-log rows aren't already in client state. See openCensusDrill.
+  const [drill, setDrill] = useState({ open: false, title: '', subtitle: '', loading: false, columns: [], rows: [] });
+  const closeDrill = useCallback(function() { setDrill(prev => ({ ...prev, open: false })); }, []);
 
   // Derived period range
   const range = useMemo(function() { return getPeriodRange(period.mode, period.anchor); }, [period]);
@@ -368,6 +376,193 @@ export default function PayerMarketingReportPage() {
     return out;
   }, [targets, visits, range]);
 
+  // ── Drill-down column defs (shared) ─────────────────────────────────
+  const REFERRAL_COLUMNS = useMemo(function() {
+    return [
+      { key: 'date_received', label: 'Date',    width: 90,
+        render: r => r.date_received || '—' },
+      { key: 'patient_name',  label: 'Patient',
+        render: r => (
+          <span style={{ fontWeight: 600, color: '#0F1117' }}>{r.patient_name || '—'}</span>
+        ) },
+      { key: 'region',        label: 'Reg', width: 40, align: 'center',
+        render: r => <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700 }}>{r.region || '—'}</span> },
+      { key: 'insurance',     label: 'Insurance',
+        render: r => <span style={{ color: '#4B5563' }}>{r.insurance || '—'}</span> },
+      { key: 'referral_status', label: 'Status', width: 80,
+        render: r => <StatusPill v={r.referral_status} /> },
+    ];
+  }, []);
+
+  const VISIT_COLUMNS = useMemo(function() {
+    return [
+      { key: 'visit_date',   label: 'Date',     width: 90,
+        render: v => v.visit_date || '—' },
+      { key: 'patient_name', label: 'Patient',
+        render: v => <span style={{ fontWeight: 600, color: '#0F1117' }}>{v.patient_name || '—'}</span> },
+      { key: 'region',       label: 'Reg', width: 40, align: 'center',
+        render: v => <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700 }}>{v.region || '—'}</span> },
+      { key: 'staff_name_normalized', label: 'Staff',
+        render: v => <span style={{ color: '#4B5563' }}>{v.staff_name_normalized || '—'}</span> },
+      { key: 'status', label: 'Status', width: 120,
+        render: v => <VisitStatusPill v={v} /> },
+    ];
+  }, []);
+
+  const CENSUS_COLUMNS = useMemo(function() {
+    return [
+      { key: 'changed_at', label: 'When', width: 110,
+        render: r => r.changed_at ? new Date(r.changed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—' },
+      { key: 'patient_name', label: 'Patient',
+        render: r => <span style={{ fontWeight: 600, color: '#0F1117' }}>{r.patient_name || '—'}</span> },
+      { key: 'region', label: 'Reg', width: 40, align: 'center',
+        render: r => <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700 }}>{r.region || '—'}</span> },
+      { key: 'old_status', label: 'From',
+        render: r => <span style={{ color: '#6B7280', fontSize: 11 }}>{r.old_status || '—'}</span> },
+      { key: 'new_status', label: 'To',
+        render: r => <span style={{ color: '#0F1117', fontSize: 11, fontWeight: 600 }}>{r.new_status || '—'}</span> },
+    ];
+  }, []);
+
+  // ── Drill helpers ───────────────────────────────────────────────────
+  // Section 1: referrals filtered by region (or 'Other' bucket) and status.
+  const openReferralDrill = useCallback(function(opts) {
+    const { region, status } = opts; // region may be 'A'..'V' or 'Other'; status: 'Accepted' | 'Denied' | 'Other' | 'All'
+    const isOther = region === 'Other';
+    const rows = referrals
+      .filter(r => {
+        const reg = (r.region || '').toUpperCase();
+        const isCanonical = CANONICAL_REGIONS.includes(reg);
+        if (isOther) {
+          if (isCanonical) return false;
+        } else {
+          if (reg !== region) return false;
+        }
+        const s = (r.referral_status || '').toLowerCase();
+        if (status === 'All' || !status) return true;
+        if (status === 'Accepted') return s === 'accepted';
+        if (status === 'Denied')   return s === 'denied';
+        if (status === 'Other')    return s !== 'accepted' && s !== 'denied';
+        return false;
+      })
+      .sort((a, b) => (b.date_received || '').localeCompare(a.date_received || ''));
+    const subtitle = `Region ${region} · ${status} · ${range.label}`;
+    setDrill({ open: true, loading: false,
+      title: `${status === 'All' ? 'Referrals' : status + ' Referrals'} — ${region}`,
+      subtitle, columns: REFERRAL_COLUMNS, rows,
+    });
+  }, [referrals, range, REFERRAL_COLUMNS]);
+
+  // Section 1 TOTAL: same filter logic but across all selected regions.
+  const openReferralDrillAcrossRegions = useCallback(function(status) {
+    const inSelected = r => regionFilter.has((r.region || '').toUpperCase()) ||
+      (!CANONICAL_REGIONS.includes((r.region || '').toUpperCase()) && regionFilter.size === CANONICAL_REGIONS.length);
+    const rows = referrals
+      .filter(inSelected)
+      .filter(r => {
+        const s = (r.referral_status || '').toLowerCase();
+        if (status === 'All' || !status) return true;
+        if (status === 'Accepted') return s === 'accepted';
+        if (status === 'Denied')   return s === 'denied';
+        if (status === 'Other')    return s !== 'accepted' && s !== 'denied';
+        return false;
+      })
+      .sort((a, b) => (b.date_received || '').localeCompare(a.date_received || ''));
+    setDrill({ open: true, loading: false,
+      title: `${status === 'All' ? 'All Referrals' : status + ' Referrals'} — All Selected Regions`,
+      subtitle: range.label + ' · ' + rows.length + ' total',
+      columns: REFERRAL_COLUMNS, rows,
+    });
+  }, [referrals, regionFilter, range, REFERRAL_COLUMNS]);
+
+  // Section 3: visits filtered by region + month + classification (deduped).
+  const openVisitDrill = useCallback(function(opts) {
+    const { region, monthKey, kind } = opts; // kind: 'scheduled'|'completed'|'cancelled'|'missed'|'all'
+    const dedup = dedupVisitsByPatientDate(visits);
+    const rows = dedup
+      .filter(v => (v.region || '').toUpperCase() === region)
+      .filter(v => String(v.visit_date).slice(0, 7) === monthKey)
+      .filter(v => {
+        if (kind === 'all') return true;
+        if (kind === 'cancelled') return _isCancelledRow(v);
+        if (kind === 'completed') return _isCompletedRow(v);
+        if (kind === 'missed')    return _isMissedRow(v) && !_isCancelledRow(v);
+        if (kind === 'scheduled') return (v.status || '').toLowerCase() === 'scheduled';
+        return false;
+      })
+      .sort((a, b) => (b.visit_date || '').localeCompare(a.visit_date || ''));
+    const labelMap = { scheduled: 'Scheduled', completed: 'Completed', cancelled: 'Cancelled', missed: 'Missed', all: 'All' };
+    setDrill({ open: true, loading: false,
+      title: `${labelMap[kind]} Visits — Region ${region}`,
+      subtitle: `${monthKey} · ${rows.length} ${rows.length === 1 ? 'visit' : 'visits'}`,
+      columns: VISIT_COLUMNS, rows,
+    });
+  }, [visits, VISIT_COLUMNS]);
+
+  // Section 4: all visits for one RM/ADC inside the selected period, optional filter.
+  const openRMDrill = useCallback(function(opts) {
+    const { staffName, kind } = opts;
+    const dedup = dedupVisitsByPatientDate(visits);
+    const rows = dedup
+      .filter(v => v.staff_name_normalized === staffName)
+      .filter(v => {
+        if (!kind || kind === 'all') return true;
+        if (kind === 'cancelled') return _isCancelledRow(v);
+        if (kind === 'completed') return _isCompletedRow(v);
+        if (kind === 'missed')    return _isMissedRow(v) && !_isCancelledRow(v);
+        return false;
+      })
+      .sort((a, b) => (b.visit_date || '').localeCompare(a.visit_date || ''));
+    const labelMap = { completed: 'Completed', cancelled: 'Cancelled', missed: 'Missed', all: 'All' };
+    setDrill({ open: true, loading: false,
+      title: `${labelMap[kind] || 'All'} Visits — ${staffName}`,
+      subtitle: `${range.label} · ${rows.length} ${rows.length === 1 ? 'visit' : 'visits'}`,
+      columns: VISIT_COLUMNS, rows,
+    });
+  }, [visits, range, VISIT_COLUMNS]);
+
+  // Section 2: census status changes for a region + month + direction.
+  // Status-log rows aren't preloaded — fetch on demand. Pretty small set.
+  const openCensusDrill = useCallback(async function(opts) {
+    const { region, monthKey, kind } = opts; // kind: 'gross'|'disch'|'net'
+    const monthStart = monthKey + '-01';
+    const next = new Date(monthStart + 'T00:00:00');
+    next.setMonth(next.getMonth() + 1);
+    const monthEnd = toDateStr(next);
+
+    setDrill({ open: true, loading: true, title: `Loading…`, subtitle: '', columns: CENSUS_COLUMNS, rows: [] });
+
+    try {
+      const rows = await fetchAllPages(
+        supabase.from('census_status_log')
+          .select('patient_name, region, old_status, new_status, changed_at')
+          .eq('region', region)
+          .gte('changed_at', monthStart)
+          .lt('changed_at', monthEnd)
+          .order('changed_at', { ascending: false })
+      );
+
+      // Apply the SAME filter the view uses so client + view counts stay in sync.
+      const ACTIVE_SET = new Set(['Active', 'Active - Auth Pendin', 'Active - Auth Pending']);
+      const isParserBug = s => /^\d{4}-\d{2}-\d{2}/.test(s || '') || /^\d{2}:\d{2}:\d{2}/.test(s || '');
+      const filtered = rows.filter(r => !isParserBug(r.new_status));
+      let final;
+      if (kind === 'gross')     final = filtered.filter(r => ACTIVE_SET.has(r.new_status));
+      else if (kind === 'disch') final = filtered.filter(r => (r.new_status || '').startsWith('Discharge') || r.new_status === 'Non-Admit');
+      else                       final = filtered; // 'net' or 'all' shows everything in the period
+
+      const labelMap = { gross: 'Gross Adds', disch: 'Discharges', net: 'All Status Changes' };
+      setDrill({ open: true, loading: false,
+        title: `${labelMap[kind] || 'Status Changes'} — Region ${region}`,
+        subtitle: `${monthKey} · ${final.length} ${final.length === 1 ? 'change' : 'changes'}`,
+        columns: CENSUS_COLUMNS, rows: final,
+      });
+    } catch (e) {
+      console.error('[openCensusDrill]', e);
+      setDrill({ open: true, loading: false, title: 'Error', subtitle: e.message || String(e), columns: [], rows: [] });
+    }
+  }, [CENSUS_COLUMNS]);
+
   // ── XLSX export — single workbook, 5 sheets ─────────────────────────
   const handleExport = useCallback(function() {
     const wb = XLSX.utils.book_new();
@@ -532,10 +727,10 @@ export default function PayerMarketingReportPage() {
                         <tr key={'r1-' + letter}>
                           <td style={cellStyle}></td>
                           <td style={{ ...cellStyle, fontWeight: 700, fontFamily: 'DM Mono, monospace' }}>{letter}</td>
-                          <td style={cellStyle}>{fmtNum(c.accepted)}</td>
-                          <td style={cellStyle}>{fmtNum(c.denied)}</td>
-                          <td style={cellStyle}>{fmtNum(c.other)}</td>
-                          <td style={{ ...cellStyle, fontWeight: 700 }}>{fmtNum(c.total)}</td>
+                          <td style={cellStyle}><Num value={c.accepted} onClick={() => openReferralDrill({ region: letter, status: 'Accepted' })} /></td>
+                          <td style={cellStyle}><Num value={c.denied} onClick={() => openReferralDrill({ region: letter, status: 'Denied' })} /></td>
+                          <td style={cellStyle}><Num value={c.other} onClick={() => openReferralDrill({ region: letter, status: 'Other' })} /></td>
+                          <td style={{ ...cellStyle, fontWeight: 700 }}><Num value={c.total} onClick={() => openReferralDrill({ region: letter, status: 'All' })} bold /></td>
                           <td style={cellStyle}>{pct(c.accepted, c.total)}</td>
                         </tr>
                       );
@@ -546,20 +741,20 @@ export default function PayerMarketingReportPage() {
                   <tr>
                     <td style={cellStyle}>Other</td>
                     <td style={{ ...cellStyle, fontStyle: 'italic' }}>Other / Unknown</td>
-                    <td style={cellStyle}>{fmtNum(section1.byRegion['Other'].accepted)}</td>
-                    <td style={cellStyle}>{fmtNum(section1.byRegion['Other'].denied)}</td>
-                    <td style={cellStyle}>{fmtNum(section1.byRegion['Other'].other)}</td>
-                    <td style={{ ...cellStyle, fontWeight: 700 }}>{fmtNum(section1.byRegion['Other'].total)}</td>
+                    <td style={cellStyle}><Num value={section1.byRegion['Other'].accepted} onClick={() => openReferralDrill({ region: 'Other', status: 'Accepted' })} /></td>
+                    <td style={cellStyle}><Num value={section1.byRegion['Other'].denied} onClick={() => openReferralDrill({ region: 'Other', status: 'Denied' })} /></td>
+                    <td style={cellStyle}><Num value={section1.byRegion['Other'].other} onClick={() => openReferralDrill({ region: 'Other', status: 'Other' })} /></td>
+                    <td style={{ ...cellStyle, fontWeight: 700 }}><Num value={section1.byRegion['Other'].total} onClick={() => openReferralDrill({ region: 'Other', status: 'All' })} bold /></td>
                     <td style={cellStyle}>{pct(section1.byRegion['Other'].accepted, section1.byRegion['Other'].total)}</td>
                   </tr>
                 )}
                 <tr>
                   <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}></td>
                   <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}>TOTAL</td>
-                  <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}>{fmtNum(section1.totalA)}</td>
-                  <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}>{fmtNum(section1.totalD)}</td>
-                  <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}>{fmtNum(section1.totalAll - section1.totalA - section1.totalD)}</td>
-                  <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}>{fmtNum(section1.totalAll)}</td>
+                  <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}><NumAllRegions value={section1.totalA} status="Accepted" openDrill={openReferralDrillAcrossRegions} /></td>
+                  <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}><NumAllRegions value={section1.totalD} status="Denied" openDrill={openReferralDrillAcrossRegions} /></td>
+                  <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}><NumAllRegions value={section1.totalAll - section1.totalA - section1.totalD} status="Other" openDrill={openReferralDrillAcrossRegions} /></td>
+                  <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}><NumAllRegions value={section1.totalAll} status="All" openDrill={openReferralDrillAcrossRegions} /></td>
                   <td style={{ ...cellStyle, fontWeight: 700, background: BG_SUBTLE }}>{pct(section1.totalA, section1.totalAll)}</td>
                 </tr>
               </tbody>
@@ -606,9 +801,11 @@ export default function PayerMarketingReportPage() {
                               const c = section2.byRegion[letter]?.[m] || { gross: 0, disch: 0, net: 0 };
                               const netColor = c.net > 0 ? '#166534' : c.net < 0 ? '#991B1B' : '#6B7280';
                               return [
-                                <td key={m + 'g'} style={cellStyle}>{fmtNum(c.gross)}</td>,
-                                <td key={m + 'd'} style={cellStyle}>{fmtNum(c.disch)}</td>,
-                                <td key={m + 'n'} style={{ ...cellStyle, color: netColor, fontWeight: 700 }}>{fmtSigned(c.net)}</td>,
+                                <td key={m + 'g'} style={cellStyle}><Num value={c.gross} onClick={() => openCensusDrill({ region: letter, monthKey: m, kind: 'gross' })} /></td>,
+                                <td key={m + 'd'} style={cellStyle}><Num value={c.disch} onClick={() => openCensusDrill({ region: letter, monthKey: m, kind: 'disch' })} /></td>,
+                                <td key={m + 'n'} style={{ ...cellStyle, color: netColor, fontWeight: 700 }}>
+                                  <Num value={c.net} display={fmtSigned(c.net)} onClick={() => openCensusDrill({ region: letter, monthKey: m, kind: 'net' })} bold />
+                                </td>,
                               ];
                             })}
                           </tr>
@@ -663,10 +860,10 @@ export default function PayerMarketingReportPage() {
                               const c = section3.byRegion[letter]?.[m] || { scheduled: 0, completed: 0, cancelled: 0, missed: 0 };
                               const attempted = c.completed + c.cancelled + c.missed;
                               return [
-                                <td key={m + 's'} style={cellStyle}>{fmtNum(c.scheduled)}</td>,
-                                <td key={m + 'c'} style={{ ...cellStyle, fontWeight: 600, color: '#166534' }}>{fmtNum(c.completed)}</td>,
-                                <td key={m + 'x'} style={{ ...cellStyle, color: '#991B1B' }}>{fmtNum(c.cancelled)}</td>,
-                                <td key={m + 'm'} style={{ ...cellStyle, color: '#92400E' }}>{fmtNum(c.missed)}</td>,
+                                <td key={m + 's'} style={cellStyle}><Num value={c.scheduled} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'scheduled' })} /></td>,
+                                <td key={m + 'c'} style={{ ...cellStyle, fontWeight: 600, color: '#166534' }}><Num value={c.completed} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'completed' })} color="#166534" /></td>,
+                                <td key={m + 'x'} style={{ ...cellStyle, color: '#991B1B' }}><Num value={c.cancelled} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'cancelled' })} color="#991B1B" /></td>,
+                                <td key={m + 'm'} style={{ ...cellStyle, color: '#92400E' }}><Num value={c.missed} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'missed' })} color="#92400E" /></td>,
                                 <td key={m + 'r'} style={{ ...cellStyle, fontWeight: 600 }}>{pct(c.completed, attempted)}</td>,
                               ];
                             })}
@@ -704,15 +901,15 @@ export default function PayerMarketingReportPage() {
                           ? <span style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', fontStyle: 'italic' }}>Exempt</span>
                           : r.weekly_target}
                       </td>
-                      <td style={cellStyle}>{fmtNum(r.total_visits)}</td>
+                      <td style={cellStyle}><Num value={r.total_visits} onClick={() => openRMDrill({ staffName: r.staff_name_normalized, kind: 'all' })} /></td>
                       <td style={cellStyle}>{r.weeks_in_period.toFixed(2)}</td>
                       <td style={{ ...cellStyle, fontWeight: 700 }}>{r.weekly_avg.toFixed(1)}</td>
                       <td style={{ ...cellStyle, color: varColor, fontWeight: 600 }}>
                         {variance == null ? '—' : (variance > 0 ? '+' + variance.toFixed(1) : variance.toFixed(1))}
                       </td>
-                      <td style={{ ...cellStyle, color: '#166534' }}>{fmtNum(r.completed)}</td>
-                      <td style={{ ...cellStyle, color: '#991B1B' }}>{fmtNum(r.cancelled)}</td>
-                      <td style={{ ...cellStyle, color: '#92400E' }}>{fmtNum(r.missed)}</td>
+                      <td style={{ ...cellStyle, color: '#166534' }}><Num value={r.completed} onClick={() => openRMDrill({ staffName: r.staff_name_normalized, kind: 'completed' })} color="#166534" /></td>
+                      <td style={{ ...cellStyle, color: '#991B1B' }}><Num value={r.cancelled} onClick={() => openRMDrill({ staffName: r.staff_name_normalized, kind: 'cancelled' })} color="#991B1B" /></td>
+                      <td style={{ ...cellStyle, color: '#92400E' }}><Num value={r.missed} onClick={() => openRMDrill({ staffName: r.staff_name_normalized, kind: 'missed' })} color="#92400E" /></td>
                       <td style={cellStyle}>
                         <span style={{
                           display: 'inline-block', padding: '3px 10px', borderRadius: 999,
@@ -734,6 +931,17 @@ export default function PayerMarketingReportPage() {
           </div>
         </div>
       )}
+
+      {/* Drill-down side drawer (Section 1 / 2 / 3 / 4) */}
+      <DrillDownDrawer
+        open={drill.open}
+        onClose={closeDrill}
+        title={drill.title}
+        subtitle={drill.subtitle}
+        loading={drill.loading}
+        columns={drill.columns}
+        rows={drill.rows}
+      />
     </div>
   );
 }
@@ -778,3 +986,77 @@ const cellStyle = {
   padding: '8px 10px', borderBottom: '1px solid #F3F4F6',
   color: '#1F2937', fontSize: 12,
 };
+
+// ── Clickable number cell ──────────────────────────────────────────────
+// Zero values render as a dim, non-interactive dash so the user doesn't
+// click to discover an empty drawer. Non-zero values get an underline
+// hover so it's obvious you can click.
+function Num({ value, display, onClick, bold = false, color }) {
+  const n = Number(value) || 0;
+  if (n === 0 && (value === 0 || value == null)) {
+    return <span style={{ color: '#9CA3AF' }}>{display || '0'}</span>;
+  }
+  return (
+    <button type="button" onClick={onClick}
+      style={{
+        background: 'none', border: 'none', padding: 0, font: 'inherit',
+        cursor: 'pointer', color: color || '#0F1117',
+        fontWeight: bold ? 800 : 600,
+        textDecoration: 'underline', textDecorationStyle: 'dotted',
+        textDecorationColor: '#D1D5DB', textUnderlineOffset: 3,
+      }}
+      onMouseEnter={e => { e.currentTarget.style.textDecorationColor = color || '#0F1117'; }}
+      onMouseLeave={e => { e.currentTarget.style.textDecorationColor = '#D1D5DB'; }}
+      title="Click to see underlying rows">
+      {display != null ? display : (typeof value === 'number' ? value.toLocaleString() : value)}
+    </button>
+  );
+}
+
+function NumAllRegions({ value, status, openDrill }) {
+  const n = Number(value) || 0;
+  if (n === 0) return <span style={{ color: '#9CA3AF' }}>0</span>;
+  return (
+    <button type="button" onClick={() => openDrill(status)}
+      style={{
+        background: 'none', border: 'none', padding: 0, font: 'inherit',
+        cursor: 'pointer', color: '#0F1117', fontWeight: 800,
+        textDecoration: 'underline', textDecorationStyle: 'dotted',
+        textDecorationColor: '#D1D5DB', textUnderlineOffset: 3,
+      }}
+      title="Click to see underlying rows">
+      {n.toLocaleString()}
+    </button>
+  );
+}
+
+// ── Status pills used inside the drill drawer ─────────────────────────
+function StatusPill({ v }) {
+  const s = (v || '').toLowerCase();
+  let bg = '#F3F4F6', fg = '#374151';
+  if (s === 'accepted') { bg = '#DCFCE7'; fg = '#166534'; }
+  else if (s === 'denied') { bg = '#FEE2E2'; fg = '#991B1B'; }
+  else if (s === 'on hold') { bg = '#FEF3C7'; fg = '#92400E'; }
+  else if (s === 'pending') { bg = '#DBEAFE'; fg = '#1E40AF'; }
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999,
+      fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{v || '—'}</span>
+  );
+}
+
+function VisitStatusPill({ v }) {
+  // Use the same classification rules the page uses for counting so the
+  // pill label matches the bucket the user clicked from.
+  let label, bg, fg;
+  if (_isCancelledRow(v))        { label = 'Cancelled';  bg = '#FEE2E2'; fg = '#991B1B'; }
+  else if (_isCompletedRow(v))   { label = 'Completed';  bg = '#DCFCE7'; fg = '#166534'; }
+  else if (_isMissedRow(v))      { label = 'Missed';     bg = '#FEF3C7'; fg = '#92400E'; }
+  else if ((v.status || '').toLowerCase() === 'scheduled') { label = 'Scheduled'; bg = '#DBEAFE'; fg = '#1E40AF'; }
+  else                            { label = v.status || '—'; bg = '#F3F4F6'; fg = '#374151'; }
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999,
+      fontSize: 10, fontWeight: 700, background: bg, color: fg }} title={v.event_type || ''}>
+      {label}
+    </span>
+  );
+}
