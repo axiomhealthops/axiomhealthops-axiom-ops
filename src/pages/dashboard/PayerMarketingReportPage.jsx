@@ -78,6 +78,31 @@ function monthRange(startDate, endDate) {
   return out;
 }
 
+// Per-patient dedup for intake_referrals. Pariox + manual entry duplicate
+// referrals routinely (same patient sent via two efax channels, or re-typed
+// with different casing — e.g. "Patton, Marilyn" + "PATTON, MARILYN"). For
+// Yvonne's payer report the meaningful metric is "unique patients", not
+// "raw referral docs", so we dedupe before counting and before drilling.
+//
+// Key: patient_name_norm (already lowercase, comma-stripped, space-stripped
+// in DB). Falls back to LOWER(TRIM(patient_name)) when norm is empty.
+// Keeps the row with the LATEST date_received as the canonical representative
+// — Yvonne wants the most recent insurance/source on the visible row.
+function dedupReferralsByPatient(rows) {
+  if (!rows || rows.length === 0) return [];
+  const byKey = new Map();
+  for (const r of rows) {
+    const key = (r.patient_name_norm && r.patient_name_norm.trim())
+      || (r.patient_name || '').toLowerCase().trim();
+    if (!key) continue; // can't dedupe nameless rows; drop them
+    const cur = byKey.get(key);
+    if (!cur || (r.date_received || '') > (cur.date_received || '')) {
+      byKey.set(key, r);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
 // Per-(patient, date) latest-uploaded_at dedup (the 2026-06-03 fix). Keeps
 // co-treats (same uploaded_at, different staff) and the right historical
 // data on cross-staff reassignments. NEVER use the broken per-date latest-
@@ -152,7 +177,9 @@ export default function PayerMarketingReportPage() {
               // 2026-06-05 fix: drill drawer was showing patient/insurance
               // as "—" because those columns weren't in the SELECT. Pull
               // the human-readable fields so Yvonne can verify each row.
-              .select('id, region, referral_status, date_received, patient_name, insurance, referral_source, denial_reason')
+              // patient_name_norm enables per-patient dedup downstream so
+              // the same patient with multiple referral docs counts once.
+              .select('id, region, referral_status, date_received, patient_name, patient_name_norm, insurance, referral_source, denial_reason')
               .gte('date_received', startStr)
               .lte('date_received', endStr)
           ),
@@ -253,22 +280,36 @@ export default function PayerMarketingReportPage() {
   const clearRegions = useCallback(function() { setRegionFilter(new Set()); }, []);
 
   // ── Section 1: Referrals by region (within period) ──────────────────
+  // Dedupe by patient_name_norm WITHIN each (region, status) bucket so the
+  // same patient with multiple referrals counts once per bucket. A patient
+  // accepted AND denied in the same period still counts in BOTH buckets
+  // (those represent two real decisions). 2026-06-05 fix per Liam.
   const section1 = useMemo(function() {
     const rows = referrals.filter(r => regionFilter.has((r.region || '').toUpperCase()) || (!CANONICAL_REGIONS.includes((r.region || '').toUpperCase()) && regionFilter.size === CANONICAL_REGIONS.length));
     const byRegion = {};
+    const seen = {}; // bucket -> Set of patient keys
     let totalA = 0, totalD = 0, totalAll = 0;
+    let rawCount = 0, suppressedDups = 0;
     for (const r of rows) {
+      rawCount++;
       let region = (r.region || '').toUpperCase();
       if (!CANONICAL_REGIONS.includes(region)) region = 'Other';
-      if (!byRegion[region]) byRegion[region] = { accepted: 0, denied: 0, other: 0, total: 0 };
       const s = (r.referral_status || '').toLowerCase();
-      if (s === 'accepted') { byRegion[region].accepted++; totalA++; }
-      else if (s === 'denied') { byRegion[region].denied++; totalD++; }
+      const bucket = s === 'accepted' ? 'accepted' : s === 'denied' ? 'denied' : 'other';
+      const pkey = (r.patient_name_norm && r.patient_name_norm.trim()) || (r.patient_name || '').toLowerCase().trim();
+      const seenKey = region + '||' + bucket + '||' + pkey;
+      if (!pkey) { suppressedDups++; continue; }
+      if (seen[seenKey]) { suppressedDups++; continue; }
+      seen[seenKey] = true;
+
+      if (!byRegion[region]) byRegion[region] = { accepted: 0, denied: 0, other: 0, total: 0 };
+      if (bucket === 'accepted') { byRegion[region].accepted++; totalA++; }
+      else if (bucket === 'denied') { byRegion[region].denied++; totalD++; }
       else byRegion[region].other++;
       byRegion[region].total++;
       totalAll++;
     }
-    return { byRegion, totalA, totalD, totalAll };
+    return { byRegion, totalA, totalD, totalAll, rawCount, suppressedDups };
   }, [referrals, regionFilter]);
 
   // ── Section 2: Census MoM growth (region × month) ───────────────────
@@ -297,6 +338,18 @@ export default function PayerMarketingReportPage() {
   }, [censusGrowth, range]);
 
   // ── Section 3: Visit status by region per month (deduped) ───────────
+  // SCHEDULED semantics (2026-06-05 fix per Liam): "Scheduled" means
+  // every visit that was ever on the calendar (the denominator), NOT just
+  // the visits still in status='Scheduled'. You can't complete a visit
+  // without it being scheduled first, so Scheduled MUST be >= Completed.
+  // Past months always showed 0 scheduled before because Pariox flips the
+  // status to Completed/Cancelled/Missed once the visit resolves — there
+  // are no rows with literal status='Scheduled' for old months.
+  //
+  // Math: scheduled = completed + cancelled + missed + pending (anything
+  // currently sitting in 'Scheduled' that hasn't resolved yet). For past
+  // months pending is 0; for the current month it's the still-upcoming
+  // visits. Either way, scheduled = total visits in the period.
   const section3 = useMemo(function() {
     if (visits.length === 0) return { months: [], byRegion: {} };
     const dedup = dedupVisitsByPatientDate(visits);
@@ -305,7 +358,7 @@ export default function PayerMarketingReportPage() {
     const byRegion = {};
     for (const letter of CANONICAL_REGIONS) {
       byRegion[letter] = {};
-      for (const m of months) byRegion[letter][m] = { scheduled: 0, completed: 0, cancelled: 0, missed: 0 };
+      for (const m of months) byRegion[letter][m] = { scheduled: 0, completed: 0, cancelled: 0, missed: 0, pending: 0 };
     }
 
     for (const v of dedup) {
@@ -314,11 +367,16 @@ export default function PayerMarketingReportPage() {
       const monthKey = String(v.visit_date).slice(0, 7);
       if (!byRegion[letter][monthKey]) continue;
       const bucket = byRegion[letter][monthKey];
-      // Order matters: cancelled supersedes status='Completed' per Pariox quirk
+
+      // Every visit counts toward Scheduled — it's the denominator.
+      bucket.scheduled++;
+
+      // Classify the outcome. Order matters: cancelled supersedes
+      // status='Completed' per Pariox's known quirk.
       if (_isCancelledRow(v)) bucket.cancelled++;
       else if (_isCompletedRow(v)) bucket.completed++;
       else if (_isMissedRow(v)) bucket.missed++;
-      else if ((v.status || '').toLowerCase() === 'scheduled') bucket.scheduled++;
+      else if ((v.status || '').toLowerCase() === 'scheduled') bucket.pending++;
     }
     return { months, byRegion };
   }, [visits, range]);
@@ -341,7 +399,10 @@ export default function PayerMarketingReportPage() {
       const completed = theirVisits.filter(_isCompletedRow).length;
       const cancelled = theirVisits.filter(_isCancelledRow).length;
       const missed = theirVisits.filter(v => _isMissedRow(v) && !_isCancelledRow(v)).length;
-      const total = completed + cancelled + missed;
+      // total = every visit on the RM's calendar in the period, including
+      // pending/future-scheduled rows. Matches Section 3's "Scheduled"
+      // semantic so the report stays internally consistent.
+      const total = theirVisits.length;
       const weeklyAvg = total / weeks;
       const color = thresholdColor(weeklyAvg, t.weekly_target, t.is_exempt);
       // Variance only meaningful when not exempt and a target exists.
@@ -451,7 +512,7 @@ export default function PayerMarketingReportPage() {
   const openReferralDrill = useCallback(function(opts) {
     const { region, status } = opts; // region may be 'A'..'V' or 'Other'; status: 'Accepted' | 'Denied' | 'Other' | 'All'
     const isOther = region === 'Other';
-    const rows = referrals
+    const bucketed = referrals
       .filter(r => {
         const reg = (r.region || '').toUpperCase();
         const isCanonical = CANONICAL_REGIONS.includes(reg);
@@ -466,9 +527,13 @@ export default function PayerMarketingReportPage() {
         if (status === 'Denied')   return s === 'denied';
         if (status === 'Other')    return s !== 'accepted' && s !== 'denied';
         return false;
-      })
+      });
+    // Same dedup rule as the cell count: one row per unique patient.
+    const rows = dedupReferralsByPatient(bucketed)
       .sort((a, b) => (b.date_received || '').localeCompare(a.date_received || ''));
-    const subtitle = `Region ${region} · ${status} · ${range.label}`;
+    const dupCount = bucketed.length - rows.length;
+    const subtitle = `Region ${region} · ${status} · ${range.label} · ${rows.length} unique patient${rows.length === 1 ? '' : 's'}`
+      + (dupCount > 0 ? ` · ${dupCount} duplicate ref${dupCount === 1 ? '' : 's'} suppressed` : '');
     setDrill({ open: true, loading: false,
       title: `${status === 'All' ? 'Referrals' : status + ' Referrals'} — ${region}`,
       subtitle, columns: REFERRAL_COLUMNS, rows,
@@ -476,10 +541,14 @@ export default function PayerMarketingReportPage() {
   }, [referrals, range, REFERRAL_COLUMNS]);
 
   // Section 1 TOTAL: same filter logic but across all selected regions.
+  // Same per-patient dedup so the TOTAL row matches the sum of region rows.
+  // (A patient appearing in two different regions in the same period would
+  // still count twice — but that's a real-world edge case where Yvonne
+  // genuinely wants both data points.)
   const openReferralDrillAcrossRegions = useCallback(function(status) {
     const inSelected = r => regionFilter.has((r.region || '').toUpperCase()) ||
       (!CANONICAL_REGIONS.includes((r.region || '').toUpperCase()) && regionFilter.size === CANONICAL_REGIONS.length);
-    const rows = referrals
+    const bucketed = referrals
       .filter(inSelected)
       .filter(r => {
         const s = (r.referral_status || '').toLowerCase();
@@ -488,32 +557,48 @@ export default function PayerMarketingReportPage() {
         if (status === 'Denied')   return s === 'denied';
         if (status === 'Other')    return s !== 'accepted' && s !== 'denied';
         return false;
-      })
+      });
+    // Dedupe per (region, patient) so multi-region patients still count
+    // in each region but per-patient dups within a region collapse.
+    const byRegionPatient = new Map();
+    for (const r of bucketed) {
+      const reg = (r.region || '').toUpperCase();
+      const pkey = (r.patient_name_norm && r.patient_name_norm.trim()) || (r.patient_name || '').toLowerCase().trim();
+      if (!pkey) continue;
+      const key = reg + '||' + pkey;
+      const cur = byRegionPatient.get(key);
+      if (!cur || (r.date_received || '') > (cur.date_received || '')) byRegionPatient.set(key, r);
+    }
+    const rows = Array.from(byRegionPatient.values())
       .sort((a, b) => (b.date_received || '').localeCompare(a.date_received || ''));
+    const dupCount = bucketed.length - rows.length;
     setDrill({ open: true, loading: false,
       title: `${status === 'All' ? 'All Referrals' : status + ' Referrals'} — All Selected Regions`,
-      subtitle: range.label + ' · ' + rows.length + ' total',
+      subtitle: range.label + ' · ' + rows.length + ' unique (region, patient) row' + (rows.length === 1 ? '' : 's')
+        + (dupCount > 0 ? ` · ${dupCount} duplicate suppressed` : ''),
       columns: REFERRAL_COLUMNS, rows,
     });
   }, [referrals, regionFilter, range, REFERRAL_COLUMNS]);
 
   // Section 3: visits filtered by region + month + classification (deduped).
+  // 'scheduled' = all visits ever on the calendar (the denominator); use
+  // 'pending' if Yvonne specifically wants the not-yet-resolved subset.
   const openVisitDrill = useCallback(function(opts) {
-    const { region, monthKey, kind } = opts; // kind: 'scheduled'|'completed'|'cancelled'|'missed'|'all'
+    const { region, monthKey, kind } = opts; // kind: 'scheduled'|'completed'|'cancelled'|'missed'|'pending'|'all'
     const dedup = dedupVisitsByPatientDate(visits);
     const rows = dedup
       .filter(v => (v.region || '').toUpperCase() === region)
       .filter(v => String(v.visit_date).slice(0, 7) === monthKey)
       .filter(v => {
-        if (kind === 'all') return true;
+        if (kind === 'all' || kind === 'scheduled') return true; // Scheduled = denominator
         if (kind === 'cancelled') return _isCancelledRow(v);
         if (kind === 'completed') return _isCompletedRow(v);
         if (kind === 'missed')    return _isMissedRow(v) && !_isCancelledRow(v);
-        if (kind === 'scheduled') return (v.status || '').toLowerCase() === 'scheduled';
+        if (kind === 'pending')   return (v.status || '').toLowerCase() === 'scheduled';
         return false;
       })
       .sort((a, b) => (b.visit_date || '').localeCompare(a.visit_date || ''));
-    const labelMap = { scheduled: 'Scheduled', completed: 'Completed', cancelled: 'Cancelled', missed: 'Missed', all: 'All' };
+    const labelMap = { scheduled: 'Scheduled (all)', completed: 'Completed', cancelled: 'Cancelled', missed: 'Missed', pending: 'Pending', all: 'All' };
     setDrill({ open: true, loading: false,
       title: `${labelMap[kind]} Visits — Region ${region}`,
       subtitle: `${monthKey} · ${rows.length} ${rows.length === 1 ? 'visit' : 'visits'}`,
@@ -620,6 +705,8 @@ export default function PayerMarketingReportPage() {
       ['Generated', new Date().toLocaleString('en-US')],
       [],
       ['Notes'],
+      ['Referrals dedup: one row per unique patient per (region, status). Same-patient duplicates from multi-channel intake collapse.'],
+      ['Census growth: COUNT(DISTINCT patient_key). Pariox over-logs the same logical status change.'],
       ['Census growth data starts 2026-04-03 (earliest census_status_log row).'],
       ['Visit dedup rule: per (patient_name, visit_date), latest uploaded_at.'],
       ['Cancelled visits identified by event_type, not status (Pariox quirk).'],
@@ -661,15 +748,16 @@ export default function PayerMarketingReportPage() {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(csRows), 'Census Growth MoM');
 
     // Sheet 4: Visit Status by Region per Month
-    const vsRows = [['Region Group', 'Region', 'Month', 'Scheduled', 'Completed', 'Cancelled', 'Missed', 'Completion Rate']];
+    // Scheduled = every visit ever on the calendar (Liam, 2026-06-05).
+    // Completion Rate denominator = Scheduled, not Completed+Cancelled+Missed.
+    const vsRows = [['Region Group', 'Region', 'Month', 'Scheduled', 'Completed', 'Cancelled', 'Missed', 'Pending', 'Completion Rate']];
     for (const group of regionGroupOrder) {
       for (const letter of (regionsByGroup[group] || [])) {
         if (!regionFilter.has(letter)) continue;
         for (const m of section3.months) {
-          const cell = section3.byRegion[letter]?.[m] || { scheduled: 0, completed: 0, cancelled: 0, missed: 0 };
-          const totalAttempted = cell.completed + cell.cancelled + cell.missed;
-          const rate = totalAttempted ? Number((cell.completed / totalAttempted * 100).toFixed(1)) : 0;
-          vsRows.push([group, letter, m, cell.scheduled, cell.completed, cell.cancelled, cell.missed, rate]);
+          const cell = section3.byRegion[letter]?.[m] || { scheduled: 0, completed: 0, cancelled: 0, missed: 0, pending: 0 };
+          const rate = cell.scheduled ? Number((cell.completed / cell.scheduled * 100).toFixed(1)) : 0;
+          vsRows.push([group, letter, m, cell.scheduled, cell.completed, cell.cancelled, cell.missed, cell.pending || 0, rate]);
         }
       }
     }
@@ -753,7 +841,9 @@ export default function PayerMarketingReportPage() {
       {!loading && !error && (
         <div style={{ padding: '0 28px 40px' }}>
           {/* SECTION 1 — Referrals by Region */}
-          <Section title="1. Referrals by Region" subtitle={'Window: ' + range.label}>
+          <Section title="1. Referrals by Region"
+            subtitle={'Window: ' + range.label + ' · One row per unique patient per (region, status)'
+              + (section1.suppressedDups > 0 ? ` · ${section1.suppressedDups} duplicate referral${section1.suppressedDups === 1 ? '' : 's'} suppressed` : '')}>
             <Table>
               <THead cells={['Region Group', 'Region', 'Accepted', 'Denied', 'Other', 'Total', 'Accept Rate']} />
               <tbody>
@@ -863,7 +953,7 @@ export default function PayerMarketingReportPage() {
 
           {/* SECTION 3 — Visit Status by Region per Month */}
           <Section title="3. Visit Status by Region per Month"
-            subtitle="Per-(patient, date) latest-uploaded_at dedup applied. Cancelled detected via event_type.">
+            subtitle="Scheduled = every visit ever on the calendar (denominator). Completion % = Completed / Scheduled. Per-(patient, date) latest-uploaded_at dedup applied. Cancelled detected via event_type.">
             {section3.months.length === 0 ? (
               <Empty>No visits found in this period.</Empty>
             ) : (
@@ -901,13 +991,12 @@ export default function PayerMarketingReportPage() {
                             <td style={{ ...cellStyle, fontWeight: 700, fontFamily: 'DM Mono, monospace' }}>{letter}</td>
                             {section3.months.map(m => {
                               const c = section3.byRegion[letter]?.[m] || { scheduled: 0, completed: 0, cancelled: 0, missed: 0 };
-                              const attempted = c.completed + c.cancelled + c.missed;
                               return [
-                                <td key={m + 's'} style={cellStyle}><Num value={c.scheduled} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'scheduled' })} /></td>,
+                                <td key={m + 's'} style={{ ...cellStyle, fontWeight: 600 }}><Num value={c.scheduled} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'scheduled' })} bold /></td>,
                                 <td key={m + 'c'} style={{ ...cellStyle, fontWeight: 600, color: '#166534' }}><Num value={c.completed} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'completed' })} color="#166534" /></td>,
                                 <td key={m + 'x'} style={{ ...cellStyle, color: '#991B1B' }}><Num value={c.cancelled} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'cancelled' })} color="#991B1B" /></td>,
                                 <td key={m + 'm'} style={{ ...cellStyle, color: '#92400E' }}><Num value={c.missed} onClick={() => openVisitDrill({ region: letter, monthKey: m, kind: 'missed' })} color="#92400E" /></td>,
-                                <td key={m + 'r'} style={{ ...cellStyle, fontWeight: 600 }}>{pct(c.completed, attempted)}</td>,
+                                <td key={m + 'r'} style={{ ...cellStyle, fontWeight: 600 }}>{pct(c.completed, c.scheduled)}</td>,
                               ];
                             })}
                           </tr>
