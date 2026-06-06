@@ -7,6 +7,9 @@ import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 // so this page can never drift from DirectorDashboard / ReportsExportPage.
 import { BLENDED_RATE, WEEKLY_VISIT_CAPACITY as WEEKLY_CAPACITY, WEEKLY_VISIT_TARGET as WEEKLY_TARGET,
          isCancelled, isAttempted, isMissed, isCompleted, dedupEncounters } from '../../lib/visitMath';
+// 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup.
+// See src/lib/visitDedup.js for rationale.
+import { dedupVisitsByLatestUpload } from '../../lib/visitDedup';
 
 function fmt$(n) { return '$' + Math.round(n || 0).toLocaleString(); }
 function fmtPct(a, b) { return b > 0 ? Math.round((a / b) * 100) : 0; }
@@ -66,7 +69,7 @@ export default function ExecutiveReportPage() {
     const [v, c, a, i, r, cl] = await Promise.all([
       fetchAllPages(
         supabase.from('visit_schedule_data')
-          .select('patient_name,visit_date,status,event_type,staff_name,staff_name_normalized,region,insurance')
+          .select('patient_name,visit_date,status,event_type,staff_name,staff_name_normalized,region,insurance,uploaded_at')
           .gte('visit_date', prevWeek.start).lte('visit_date', week.end)
       ),
       fetchAllPages(
@@ -91,7 +94,10 @@ export default function ExecutiveReportPage() {
         supabase.from('clinicians').select('full_name,region,weekly_visit_target').eq('is_active', true)
       ),
     ]);
-    setVisits(v);
+    // 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup —
+    // strip Pariox ghost rows BEFORE classifyVisits/dedupEncounters.
+    // See src/lib/visitDedup.js.
+    setVisits(dedupVisitsByLatestUpload(v));
     setCensus(c);
     setAuths(a);
     setIntake(i);

@@ -68,6 +68,7 @@ export default function MyRegionPage() {
     if (myRegions.length === 0) { setLoading(false); return; }
     // 2026-05-17: paginated at-risk tables
     Promise.all([
+      // 2026-06-06: select('*') already includes uploaded_at — dedup applied at set time below.
       fetchAllPages(supabase.from('visit_schedule_data').select('*').in('region', myRegions).not('visit_date','is',null)),
       fetchAllPages(supabase.from('census_data').select('*').in('region', myRegions)),
       supabase.from('clinicians').select('*').eq('is_active', true),
@@ -84,7 +85,8 @@ export default function MyRegionPage() {
         if (c.region && c.region.includes(',')) return c.region.split(',').some(function(r) { return regionSet.has(r.trim()); });
         return false;
       });
-      setVisits(v||[]); setCensus(c||[]); setClinicians(filteredCl);
+      // 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup.
+      setVisits(dedupVisitsByLatestUpload(v||[])); setCensus(c||[]); setClinicians(filteredCl);
       setAuthData(a||[]); setIntake(i||[]); setOnHold(oh.data||[]);
       setLoading(false);
     });

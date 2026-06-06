@@ -5,6 +5,9 @@ import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 // 2026-05-17: use shared rate (was hardcoded $185 — drifted from $230)
 import { BLENDED_RATE } from '../../lib/visitMath';
+// 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup.
+// See src/lib/visitDedup.js for rationale.
+import { dedupVisitsByLatestUpload } from '../../lib/visitDedup';
 import { getWeekStart } from '../../lib/dateUtils';
 
 function fmtDate(d) {
@@ -51,7 +54,7 @@ export default function RMDailyDashboard() {
     // with a full week of visits across multiple regions can exceed 1000 rows.
     const [c, v, a, cl, oh] = await Promise.all([
       fetchAllPages(supabase.from('census_data').select('*').in('region', myRegions)),
-      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,discipline')
+      fetchAllPages(supabase.from('visit_schedule_data').select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region,discipline,uploaded_at')
         .in('region', myRegions).gte('visit_date', weekStartStr)),
       fetchAllPages(supabase.from('auth_tracker').select('patient_name,region,insurance,auth_status,auth_expiry_date,visits_authorized,visits_used,auth_number,assigned_to')
         .in('region', myRegions).eq('auth_status','active')),
@@ -59,7 +62,8 @@ export default function RMDailyDashboard() {
       supabase.from('on_hold_recovery').select('*').in('region', myRegions),
     ]);
     setCensus(c||[]);
-    setVisits(v||[]);
+    // 2026-06-06: dedup ghost rows BEFORE per-clinician productivity / revenue math.
+    setVisits(dedupVisitsByLatestUpload(v||[]));
     setAuths(a||[]);
     // Filter clinicians client-side for multi-region support
     var regionSet = new Set(myRegions);

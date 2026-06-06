@@ -453,13 +453,16 @@ export default function ClinicianAccountabilityPage() {
     const [cl, v, c] = await Promise.all([
       fetchAllPages(supabase.from('clinicians').select('*').eq('is_active', true)),
       fetchAllPages(supabase.from('visit_schedule_data')
-        .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region')
+        .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,region,uploaded_at')
         .gte('visit_date', fourteenDaysAgo)),
       fetchAllPages(supabase.from('census_data')
         .select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,last_visit_clinician,last_visit_type,inferred_frequency,overdue_threshold_days,days_overdue')),
     ]);
     setClinicians(cl);
-    setVisits(v);
+    // 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup —
+    // strip Pariox ghost rows before any per-clinician utilization math.
+    // See src/lib/visitDedup.js.
+    setVisits(dedupVisitsByLatestUpload(v));
     setCensus(c);
     setLoading(false);
   }, []);

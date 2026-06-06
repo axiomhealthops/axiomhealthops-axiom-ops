@@ -17,6 +17,9 @@ import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import PatientAuthDrawer from '../../components/PatientAuthDrawer';
+// 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup.
+// See src/lib/visitDedup.js for rationale.
+import { dedupVisitsByLatestUpload } from '../../lib/visitDedup';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
@@ -78,11 +81,13 @@ export default function VisitRunwayPage({ intent }) {
 
     // Visit cadence (last 30d) for days_to_exhaust estimate
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0,10);
-    const visits = await fetchAllPages(
+    const visitsRaw = await fetchAllPages(
       supabase.from('visit_schedule_data')
-        .select('patient_name, visit_date, status, event_type')
+        .select('patient_name, visit_date, status, event_type, uploaded_at')
         .gte('visit_date', thirtyDaysAgo)
     );
+    // 2026-06-06: dedup ghost rows so cadence (visits/30d) doesn't double-count.
+    const visits = dedupVisitsByLatestUpload(visitsRaw);
     const counts = {};
     (visits || []).forEach(v => {
       if (!/completed/i.test(v.status || '')) return;

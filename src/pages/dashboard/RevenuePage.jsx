@@ -2,6 +2,9 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+// 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup.
+// See src/lib/visitDedup.js for rationale.
+import { dedupVisitsByLatestUpload } from '../../lib/visitDedup';
 
 const RATE = 230; // $ per billable visit
 
@@ -43,10 +46,14 @@ export default function RevenuePage() {
     // the first 1000 rows.
     fetchAllPages(
       supabase.from('visit_schedule_data')
-        .select('patient_name,visit_date,discipline,event_type,status,staff_name,region,insurance')
+        .select('patient_name,visit_date,discipline,event_type,status,staff_name,region,insurance,uploaded_at')
         .not('visit_date', 'is', null)
         .order('visit_date', { ascending: false })
-    ).then((rows) => { setVisits(rows); setLoading(false); });
+    ).then((rows) => {
+      // 2026-06-06: dedup ghost rows BEFORE any revenue math.
+      setVisits(dedupVisitsByLatestUpload(rows));
+      setLoading(false);
+    });
   }
 
   useEffect(() => { load(); }, []);

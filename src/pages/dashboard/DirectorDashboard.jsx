@@ -17,6 +17,10 @@ import { EXPANSION } from '../../lib/constants';
 // Visit math from shared module (2026-05-17 refactor)
 import { BLENDED_RATE, WEEKLY_REVENUE_TARGET as REVENUE_TARGET,
          isCancelled, isAttempted, isMissed, isCompleted, dedupEncounters } from '../../lib/visitMath';
+// 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup. Drops
+// ghost rows that survive in visit_schedule_data when Pariox reassigns a slot
+// across uploads. See src/lib/visitDedup.js for the rationale.
+import { dedupVisitsByLatestUpload } from '../../lib/visitDedup';
 import { getWeekRange } from '../../lib/dateUtils';
 
 const WEEKLY_TARGET = 750;
@@ -585,9 +589,9 @@ export default function DirectorDashboard({ onNavigate }) {
     // tables are each capable of exceeding the 1000-row PostgREST cap.
     const [c, v, pv, ar, oh, wl, cl, dc, co, sl, al, ir, au] = await Promise.all([
       fetchAllPages(applyRegion(supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date,inferred_frequency,overdue_threshold_days,days_overdue,status_changed_at,pipeline_assigned_to'))),
-      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr))),
+      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,uploaded_at').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr))),
       // Prior-week visits — for week-over-week delta indicators on KPI tiles.
-      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region').gte('visit_date', prevWeekStartStr).lte('visit_date', prevWeekEndStr))),
+      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,uploaded_at').gte('visit_date', prevWeekStartStr).lte('visit_date', prevWeekEndStr))),
       fetchAllPages(applyRegion(supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")'))),
       fetchAllPages(applyRegion(supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold'))),
       fetchAllPages(applyRegion(supabase.from('waitlist_assignments').select('patient_name,region,assignment_status,assigned_clinician,waitlisted_since,priority'))),
@@ -606,8 +610,11 @@ export default function DirectorDashboard({ onNavigate }) {
     ]);
 
     setCensus(c);
-    setVisits(v);
-    setPrevVisits(pv);
+    // 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup —
+    // strip ghost rows BEFORE all downstream classifyVisits/dedupEncounters/
+    // revenue math. Same rule applied across all 8 reader pages this sweep.
+    setVisits(dedupVisitsByLatestUpload(v));
+    setPrevVisits(dedupVisitsByLatestUpload(pv));
     setAuthRenewals(ar);
     setOnHold(oh);
     setWaitlist(wl);
