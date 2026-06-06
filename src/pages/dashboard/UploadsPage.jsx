@@ -331,8 +331,54 @@ function UploadCard(props) {
             existingMap[k] = r;
           });
 
-          var rows = data.map(function(r) { return Object.assign({}, r, { batch_id: batchId, uploaded_at: now }); });
+          // 2026-06-06: DEDUPE BY CONFLICT KEY before upsert.
+          // Pariox sometimes ships the same slot twice — once as "Scheduled" and
+          // once as "Completed *e* (PDF)". Our parser strips the (PDF) suffix at
+          // line 177, collapsing both rows onto the SAME (patient, visit_date,
+          // event_type, staff_name) conflict key. Postgres then throws
+          // "ON CONFLICT DO UPDATE command cannot affect row a second time"
+          // for the whole 100-row upsert chunk, and the old `if (res.error)`
+          // silently swallowed the error. Result: hundreds of rows silently
+          // dropped per upload (diagnosed 2026-06-06 — 341 rows missing from
+          // the 6.6.26 9am upload). Fix: collapse dupes here, keeping the row
+          // with the most "advanced" status (Completed > Missed Active > Missed
+          // > Scheduled > Cancelled) so we never write back a regression.
+          function statusRank(s) {
+            var t = (s || '').toLowerCase();
+            if (t.indexOf('completed') >= 0)     return 5;
+            if (t === 'missed (active)')         return 4;
+            if (t.indexOf('missed') >= 0)        return 3;
+            if (t.indexOf('scheduled') >= 0)     return 2;
+            if (t.indexOf('cancelled') >= 0)     return 1;
+            return 0;
+          }
+          var preDedupeCount = data.length;
+          var dedupeMap = {};
+          data.forEach(function(r) {
+            var key = [
+              (r.patient_name || '').toLowerCase(),
+              r.visit_date || '',
+              (r.event_type || '').toLowerCase(),
+              (r.staff_name || '').toLowerCase(),
+            ].join('||');
+            var prev = dedupeMap[key];
+            if (!prev || statusRank(r.status) > statusRank(prev.status)) {
+              dedupeMap[key] = r;
+            }
+          });
+          var dataDeduped = Object.keys(dedupeMap).map(function(k) { return dedupeMap[k]; });
+          var dedupeDropped = preDedupeCount - dataDeduped.length;
+          if (dedupeDropped > 0) {
+            console.info('[upload] pre-upsert dedupe: collapsed ' + dedupeDropped +
+              ' duplicate conflict-key rows (Pariox Scheduled+Completed pattern).');
+          }
+
+          var rows = dataDeduped.map(function(r) { return Object.assign({}, r, { batch_id: batchId, uploaded_at: now }); });
           var newCount = 0, updatedCount = 0, unchangedCount = 0, errors = 0;
+          // 2026-06-06: per-row failure tracking. Surfaces silent
+          // Medicare-cap trigger violations (trg_enforce_medicare_visit_cap
+          // RAISES EXCEPTION on completed visits past the 20-visit episode cap).
+          var rowFailures = []; // { patient_name, visit_date, status, reason }
 
           // Classify each row before upsert
           rows.forEach(function(r) {
@@ -357,8 +403,39 @@ function UploadCard(props) {
               onConflict: 'patient_name,visit_date,event_type,staff_name',
               ignoreDuplicates: false,
             });
-            if (res.error) { errors++; console.warn('Upsert chunk error:', res.error.message); }
-            setMessage('Saving visits... ' + Math.min(i + 100, rows.length) + '/' + rows.length);
+            if (res.error) {
+              // 2026-06-06: PER-ROW FALLBACK. The previous code silently dropped
+              // 100 rows on any chunk error. Most common cause:
+              // trg_enforce_medicare_visit_cap raising "Medicare patient has
+              // reached 20-visit cap" on ONE completed-visit row, failing the
+              // whole chunk. Retry each row individually so the good 99 land
+              // and only the truly bad one is logged.
+              console.warn('Chunk ' + i + ' failed (' + res.error.message + ') — retrying per-row.');
+              for (var j = 0; j < chunk.length; j++) {
+                var oneRow = chunk[j];
+                var oneRes = await supabase.from('visit_schedule_data').upsert([oneRow], {
+                  onConflict: 'patient_name,visit_date,event_type,staff_name',
+                  ignoreDuplicates: false,
+                });
+                if (oneRes.error) {
+                  errors++;
+                  rowFailures.push({
+                    patient_name: oneRow.patient_name,
+                    visit_date: oneRow.visit_date,
+                    status: oneRow.status,
+                    event_type: oneRow.event_type,
+                    reason: oneRes.error.message,
+                  });
+                  if (errors <= 5) {
+                    console.warn('[upload] row failed:',
+                      oneRow.patient_name, oneRow.visit_date, oneRow.status,
+                      '->', oneRes.error.message);
+                  }
+                }
+              }
+            }
+            setMessage('Saving visits... ' + Math.min(i + 100, rows.length) + '/' + rows.length
+              + (errors > 0 ? ' (' + errors + ' row(s) flagged)' : ''));
           }
 
           // Count totals in DB now
@@ -420,7 +497,24 @@ function UploadCard(props) {
           }
 
           var replaceMsg = replacedCount > 0 ? ' · REPLACED ' + replacedCount + ' stale row(s)' : '';
-          setMessage('✓ Visits saved. ' + newCount + ' new · ' + updatedCount + ' updated · ' + unchangedCount + ' unchanged · ' + (count || '?') + ' total in history' + replaceMsg + lastVisitMsg + authSyncMsg + '.');
+          // 2026-06-06: surface dedupe + row-failure counts so silent loss can
+          // never recur without the user seeing it.
+          var dedupeMsg = dedupeDropped > 0
+            ? ' · collapsed ' + dedupeDropped + ' Pariox duplicate row(s)'
+            : '';
+          var failMsg = '';
+          if (errors > 0) {
+            var sampleReasons = {};
+            rowFailures.forEach(function(f) {
+              var key = (f.reason || '').slice(0, 60);
+              sampleReasons[key] = (sampleReasons[key] || 0) + 1;
+            });
+            var topReason = Object.keys(sampleReasons).sort(function(a,b) { return sampleReasons[b] - sampleReasons[a]; })[0];
+            failMsg = ' · WARNING: ' + errors + ' row(s) rejected by DB triggers (most common: '
+              + (topReason || 'unknown') + ')';
+            console.warn('[upload] ' + errors + ' rejected rows. Full list:', rowFailures);
+          }
+          setMessage('✓ Visits saved. ' + newCount + ' new · ' + updatedCount + ' updated · ' + unchangedCount + ' unchanged · ' + (count || '?') + ' total in history' + dedupeMsg + replaceMsg + failMsg + lastVisitMsg + authSyncMsg + '.');
           setCount(rows.length);
         }
 

@@ -238,3 +238,27 @@ supabase/migrations/
     `_visit_schedule_data_ghost_purge_2026_06_02` has 6/1 (134 Scheduled
     rows) but not 5/31, and the rows in it are pre-completion schedule
     snapshots — not useful for restoring billing data.
+12. **Silent chunked-upsert failures from Medicare-cap trigger** (2026-06-06).
+    `UploadsPage.jsx` was upserting visit rows in 100-row chunks with
+    `if (res.error) { errors++; console.warn(...) }` — swallowing the error
+    silently. Root cause: `trg_enforce_medicare_visit_cap` is a BEFORE INSERT
+    trigger that `RAISE EXCEPTION` when a completed visit pushes a Medicare
+    patient past the 20-visit episode cap. ONE bad row killed the entire
+    100-row chunk; user saw "✓ Visits saved" while losing 100 rows. The
+    Pariox 6.6.26 9am file (741 rows) landed only 400 — **341 rows silently
+    dropped**, including all of 5/31 and 6/1. Fix (now in `UploadsPage.jsx`):
+    (a) PRE-DEDUPE by `(patient, visit_date, event_type, staff_name)` before
+    upsert — Pariox sometimes ships the same slot twice (Scheduled +
+    Completed (PDF)) and the parser's PDF-suffix strip collapses them onto
+    the same conflict key, triggering Postgres
+    "ON CONFLICT cannot affect row twice"; (b) when a chunk upsert errors,
+    fall back to per-row upsert so the good 99 land and only the offending
+    row is logged into `rowFailures`; (c) the success message now surfaces
+    `dedupeDropped` count + `errors` count + the most common error reason
+    (typically the Medicare-cap message). Companion DB-side function
+    `public.bulk_upsert_visits(jsonb, uuid, timestamptz)` was created for
+    admin bulk loads — wraps each insert in BEGIN/EXCEPTION and returns
+    `{inserted, updated, failed, errors[]}`. Use it for backfills where
+    silent per-chunk loss would be catastrophic. **General rule for any
+    INSERT/UPSERT loop touching `visit_schedule_data`: never silently
+    swallow chunk errors. Either retry per-row or raise.**
