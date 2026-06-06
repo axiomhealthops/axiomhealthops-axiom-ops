@@ -51,6 +51,8 @@ const PAGE_ICONS = {
   'payroll-settings': '⚖',
   // 2026-06-05 Yvonne's Payer + Marketing Report
   'payer-marketing-report': '📊',
+  // 2026-06-05 Telehealth Team Monitor
+  'telehealth-monitor': '🎧',
 };
 
 export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, alertBadges = {} }) {

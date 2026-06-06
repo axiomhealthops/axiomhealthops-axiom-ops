@@ -71,6 +71,9 @@ import PayrollSettingsPage from './dashboard/PayrollSettingsPage';
 // 2026-06-05: Payer + Marketing Report (Yvonne Flores).
 // docs/Yvonne_Payer_Marketing_Report_Design.md.
 import PayerMarketingReportPage from './dashboard/PayerMarketingReportPage';
+// 2026-06-05: Telehealth Team Monitor (paired with R+E Monitor rebrand of
+// SchedulingAlertsPage). docs/Reassess_Eval_Telehealth_Design.md.
+import TelehealthMonitorPage from './dashboard/TelehealthMonitorPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
@@ -137,6 +140,7 @@ const PAGE_COMPONENTS = {
   'payroll-review':          PayrollReviewPage,
   'payroll-settings':        PayrollSettingsPage,
   'payer-marketing-report':  PayerMarketingReportPage,
+  'telehealth-monitor':      TelehealthMonitorPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 
