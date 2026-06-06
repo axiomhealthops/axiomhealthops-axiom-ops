@@ -210,13 +210,18 @@ function UploadCard(props) {
   // 2026-05-18: "Replace mode" — when uploading visits, delete existing rows
   // in the file's date range BEFORE upsert. Solves stale-row accumulation
   // (Pariox removes a visit from the schedule but the row stays in our DB).
-  // 2026-06-02: DEFAULTED ON for visits after the ghost-row diagnosis showed
-  // append-only upserts were inflating revenue by ~$89K YTD and overcounting
-  // 35/46 clinicians (24.7% inflation on the current week alone). One-time
-  // backfill purged 1,573 ghost rows; snapshot in
-  // _visit_schedule_data_ghost_purge_2026_06_02. Toggle stays visible so a
-  // user can opt out for a single upload if Pariox ever sends a partial file.
-  var [replaceMode, setReplaceMode] = useState(props.batchType === 'visits');
+  // 2026-06-02: briefly defaulted ON for visits after the ghost-row diagnosis.
+  // 2026-06-06: REVERTED TO DEFAULT OFF. Pariox's daily report is a rolling
+  // forward-looking window (today-3 days through today+7). Each Replace upload
+  // deleted everything in its range, but Pariox's older completed visits had
+  // already dropped off the schedule view — so they got wiped without being
+  // re-inserted. By Sat 6/6, 5/31 and 6/1 had ZERO rows; Director Command
+  // showed $60,720 instead of the true ~$150K+ for the week. Lesson: Replace
+  // mode that deletes Completed/Missed rows can never be a safe default for
+  // a rolling-window source. The delete now also preserves Completed/Missed
+  // statuses even if a user manually toggles Replace ON, so billing events
+  // can never be silently destroyed again.
+  var [replaceMode, setReplaceMode] = useState(false);
   var inputRef = useRef();
  
   useEffect(function() {
@@ -287,22 +292,32 @@ function UploadCard(props) {
               if (daysSpan > 60) {
                 throw new Error('Replace mode refused — file spans ' + daysSpan + ' days. Replace mode is meant for single-week uploads (≤60 days). Re-upload without replace mode, or trim the file.');
               }
-              var confirmMsg = 'REPLACE MODE: This will DELETE every existing visit row between '
+              var confirmMsg = 'REPLACE MODE: This will DELETE existing SCHEDULED/CANCELLED visit rows between '
                 + minDate + ' and ' + maxDate + ' (' + daysSpan + ' day' + (daysSpan===1?'':'s')
                 + ') and replace with ' + data.length + ' rows from this upload.\n\n'
+                + 'COMPLETED and MISSED rows in that range will be PRESERVED — those are billing events.\n\n'
                 + 'Proceed?';
               if (!window.confirm(confirmMsg)) {
                 throw new Error('Replace mode cancelled by user — nothing was changed.');
               }
-              setMessage('Deleting existing rows in ' + minDate + ' to ' + maxDate + '...');
+              setMessage('Deleting scheduled/cancelled rows in ' + minDate + ' to ' + maxDate + '...');
+              // 2026-06-06: never delete Completed or Missed rows. They're
+              // billing events; Pariox's rolling-window report may not include
+              // them again. The previous "delete every row in range" semantics
+              // silently destroyed historical revenue when the report stopped
+              // including older dates. Only scheduled/cancelled/blank rows get
+              // wiped here — completions stay forever, will be UPSERTed if
+              // re-included in a later upload.
               var delRes = await supabase.from('visit_schedule_data')
                 .delete()
                 .gte('visit_date', minDate)
                 .lte('visit_date', maxDate)
+                .not('status', 'ilike', 'Completed')
+                .not('status', 'ilike', 'Missed%')
                 .select('id'); // .select() so we get a count back
               if (delRes.error) throw new Error('Replace-mode delete failed: ' + delRes.error.message);
               replacedCount = (delRes.data || []).length;
-              setMessage('Deleted ' + replacedCount + ' stale rows. Inserting fresh data...');
+              setMessage('Deleted ' + replacedCount + ' scheduled/cancelled rows (completed preserved). Inserting fresh data...');
             }
           }
 
@@ -609,13 +624,16 @@ function UploadCard(props) {
           </div>
         )}
       </div>
-      {/* 2026-06-02: Replace mode toggle — visits-only. DEFAULT ON after the
-          ghost-row diagnosis. Stays toggleable for the rare partial-file case. */}
+      {/* 2026-06-06: Replace mode toggle — visits-only. DEFAULT OFF (reverted)
+          after we discovered the previous "default ON" silently wiped 5/31 and
+          6/1 data from a rolling-window Pariox report. The mode now ALSO
+          preserves Completed/Missed rows even when ON, so billing events can
+          never be destroyed again. */}
       {props.batchType === 'visits' && (
         <div onClick={function(e) { e.stopPropagation(); }}
           style={{
-            background: replaceMode ? '#ECFDF5' : '#FEF3C7',
-            border: '1px solid ' + (replaceMode ? '#A7F3D0' : '#FCD34D'),
+            background: replaceMode ? '#FEF3C7' : '#F9FAFB',
+            border: '1px solid ' + (replaceMode ? '#FCD34D' : 'var(--border)'),
             borderRadius: 8, padding: '10px 14px', marginBottom: 12,
             display: 'flex', gap: 10, alignItems: 'flex-start',
           }}>
@@ -624,17 +642,17 @@ function UploadCard(props) {
             onChange={function(e) { setReplaceMode(e.target.checked); }}
             style={{ marginTop: 2, cursor: 'pointer' }} />
           <label htmlFor={'replace-mode-' + props.batchType} style={{ flex: 1, cursor: 'pointer' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: replaceMode ? '#065F46' : '#92400E' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: replaceMode ? '#92400E' : 'var(--black)' }}>
               {replaceMode
-                ? 'Replace Mode ON (default) - clears stale rows in this file\'s date range before insert'
-                : 'Replace Mode OFF - WARNING: old rows will accumulate as ghosts. Only disable for partial-file uploads.'}
+                ? 'Replace Mode ON - will delete Scheduled/Cancelled rows in file range (Completed/Missed preserved)'
+                : 'Replace Mode OFF (default) - safe append + upsert'}
             </div>
             <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 3, lineHeight: 1.4 }}>
-              Replace Mode is the default for Pariox visit uploads. It auto-detects the date
-              range in your file and <strong>deletes every existing visit row in that range</strong>
-              before inserting, so reassigned or cancelled slots don't linger as ghosts (the
-              cause of the 6/2/26 phantom-revenue bug). A confirmation dialog runs before any
-              delete. Only turn this off if you're uploading a partial-week file on purpose.
+              Default behavior is now safe append. Only turn Replace Mode ON if you have a
+              specific reason — e.g. Pariox sent a corrected schedule and you want to clear
+              stale scheduled/cancelled rows. <strong>Completed and Missed visits will NEVER be
+              deleted</strong> even when this is ON; they are billing-event history and
+              survive any re-upload. A confirmation dialog runs before any delete.
             </div>
           </label>
         </div>

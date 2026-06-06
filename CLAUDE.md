@@ -211,3 +211,30 @@ supabase/migrations/
     the newer upload never covered those (patient, date) pairs. Any new
     consumer of `visit_schedule_data` for counting/billing MUST use this
     per-(patient, date) latest rule, NOT per-date latest batch.
+11. **Replace-mode default ON silently destroyed historical revenue** (2026-06-06).
+    The 2026-06-02 fix made Replace Mode = TRUE the default for visit uploads,
+    on the assumption Pariox's daily file was a full-week schedule. It is not.
+    Pariox's report is a rolling forward-looking window — roughly today-3 days
+    through today+7. Each Replace upload deleted EVERY row in the file's date
+    range, including Completed billing events. Because Pariox's older completed
+    visits had already dropped off the schedule view by the time the next
+    report was uploaded, the deletes wiped them and the re-insert never put
+    them back. By Sat 6/6, dates 5/31 and 6/1 had ZERO rows in
+    `visit_schedule_data` — Director Command read $60,720 of $200K target
+    instead of the true ~$150K+. **Permanent fix:**
+    (1) Replace Mode default reverted to FALSE in `UploadsPage.jsx`;
+    (2) when manually toggled ON, the delete now filters
+    `status NOT ILIKE 'Completed' AND status NOT ILIKE 'Missed%'` —
+    billing-event rows can never be deleted again, no matter what range
+    the file covers;
+    (3) confirmation dialog wording updated to make the new semantics
+    explicit. **General rule for any future "replace before insert" logic:
+    never delete rows that represent a recorded clinical or billing event
+    just because they're absent from the latest source file. The source may
+    be a rolling window; the database is the system of record.** To recover
+    the lost 5/31 / 6/1 / older data, Liam needs to re-upload his original
+    Pariox files for those days in non-Replace mode — the safe append+upsert
+    path will fill the missing rows. Snapshot
+    `_visit_schedule_data_ghost_purge_2026_06_02` has 6/1 (134 Scheduled
+    rows) but not 5/31, and the rows in it are pre-completion schedule
+    snapshots — not useful for restoring billing data.
