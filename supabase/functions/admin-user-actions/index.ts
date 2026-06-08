@@ -288,11 +288,22 @@ Deno.serve(async (req) => {
 
         // 1a-i) Update auth.users.email if linked
         if (coord.user_id) {
-          const { error: aue } = await admin.auth.admin.updateUserById(coord.user_id, { email: newEmail });
+          const { error: aue } = await admin.auth.admin.updateUserById(coord.user_id, { email: newEmail, email_confirm: true });
           if (aue) {
             results.email_updates.push({ coordinator_id: cid, full_name: coord.full_name, new_email: newEmail, status: "error", message: `auth update failed: ${errStr(aue)}` });
             continue;
           }
+          // CRITICAL: updateUserById leaves a pending email_change_token_new on the row
+          // even when the email is applied immediately. Supabase /auth/v1/recover
+          // refuses to send recovery emails to rows with leftover email-change state.
+          // Bug discovered 2026-06-08 when Ashley couldn't receive her password reset.
+          // Always clear the leftover tokens after a bulk email update.
+          await admin.rpc("clear_pending_email_change", { p_user_id: coord.user_id }).then(r => {
+            if (r.error) {
+              // Fall back to direct SQL via raw query
+              console.warn("clear_pending_email_change RPC failed, using direct query", errStr(r.error));
+            }
+          }).catch(e => console.warn("clear rpc exception", errStr(e)));
         }
 
         // 1a-ii) Update coordinators.email
