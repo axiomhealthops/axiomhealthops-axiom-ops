@@ -3,6 +3,7 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import UserBulkActions from '../../components/UserBulkActions';
 import {
   USER_MANAGEMENT_ROLE_KEYS as ROLES,
   ROLE_LABELS,
@@ -435,6 +436,7 @@ export default function UserManagementPage() {
         actions={
           <div style={{ display:'flex', gap:8, alignItems:'center' }}>
             {msg && <span style={{ fontSize:12, color:msg.startsWith('✓')?'#065F46':'#DC2626', fontWeight:500 }}>{msg}</span>}
+            {isAdmin && <UserBulkActions onComplete={loadData} />}
             {isAdmin && (
               <button onClick={() => setShowAdd(v=>!v)}
                 style={{ padding:'7px 14px', background:showAdd?'var(--border)':'var(--red)', color:showAdd?'var(--black)':'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer' }}>

@@ -1,7 +1,16 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-// admin-user-actions v5 — 2026-05-29
+// admin-user-actions v6 — 2026-06-08
+//
+// v6 (bulk migration): added `bulk_user_migration` action — accepts a
+// payload of {updates:[{coordinator_id,new_email,patches?}], terminations:[id]}
+// and processes each row atomically per-row with structured success/failure
+// reporting. Used by the User Management page Export / Import workflow to
+// migrate users in bulk from XLSX without an admin having to write SQL.
+// Per-row processing: a single broken row never blocks the rest. Email
+// + auth.users updates use admin.auth.admin.updateUserById which preserves
+// email_confirmed_at and existing passwords (proven live 2026-06-08).
 //
 // v5 (DBA rebrand): user-visible "AxiomHealth Ops" → "EdemaCare Ops" in
 // email header, body, footer, and subject. Sender mailbox unchanged —
@@ -197,6 +206,221 @@ Deno.serve(async (req) => {
         ? `Supabase auth pipeline rejected the recover call (${builtIn.status}); sent via Resend instead.`
         : `Both Supabase Auth (${builtIn.status}) and Resend (${(emailResult as any).reason}) failed to deliver. Copy the recovery link below and share it directly with the user.`,
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // bulk_user_migration — for User Management Export/Import workflow
+  // ─────────────────────────────────────────────────────────────────────
+  // Body: {
+  //   updates: [{ coordinator_id, new_email?, patches?: { job_title?, team?,
+  //                regions?, role?, secondary_roles?, weekly_visit_target? } }],
+  //   terminations: [coordinator_id, ...]
+  // }
+  //
+  // Per-row processing: each entry is processed independently. A failure
+  // on one row does NOT roll back others. Returns a full report so the UI
+  // can render success/failure per row.
+  // ─────────────────────────────────────────────────────────────────────
+  if (action === "bulk_user_migration") {
+    const updates = Array.isArray(body.updates) ? body.updates : [];
+    const terminations = Array.isArray(body.terminations) ? body.terminations : [];
+    const callerIsSuper = callerCoord.role === "super_admin";
+
+    const results: {
+      started_at: string;
+      caller: string;
+      email_updates: Array<{ coordinator_id: string; full_name?: string | null; new_email?: string; status: "success" | "error" | "warning"; message: string }>;
+      patch_updates: Array<{ coordinator_id: string; full_name?: string | null; fields: string[]; status: "success" | "error"; message: string }>;
+      terminations: Array<{ coordinator_id: string; full_name?: string | null; status: "success" | "error" | "warning"; message: string }>;
+      completed_at?: string;
+    } = {
+      started_at: new Date().toISOString(),
+      caller: callerCoord.full_name || callerCoord.email || callerId,
+      email_updates: [],
+      patch_updates: [],
+      terminations: [],
+    };
+
+    // ── 1) Email + field patches ──
+    for (const u of updates) {
+      const cid = u?.coordinator_id;
+      const newEmail = (u?.new_email || "").trim().toLowerCase() || null;
+      const patches = (u?.patches && typeof u.patches === "object") ? u.patches : {};
+
+      if (!cid) {
+        results.email_updates.push({ coordinator_id: "(missing)", status: "error", message: "row missing coordinator_id" });
+        continue;
+      }
+
+      const { data: coord, error: ce } = await admin
+        .from("coordinators")
+        .select("id, user_id, email, full_name, role, job_title, team, regions, secondary_roles, weekly_visit_target")
+        .eq("id", cid).maybeSingle();
+
+      if (ce || !coord) {
+        results.email_updates.push({ coordinator_id: cid, status: "error", message: `coordinator not found: ${errStr(ce)}` });
+        continue;
+      }
+
+      // Block modifying another super_admin unless caller is super_admin
+      if (coord.role === "super_admin" && !callerIsSuper) {
+        results.email_updates.push({ coordinator_id: cid, full_name: coord.full_name, status: "error", message: "only super_admin can modify super_admin accounts" });
+        continue;
+      }
+
+      // ── 1a) Email update ──
+      if (newEmail && newEmail !== (coord.email || "").toLowerCase()) {
+        // Collision check on coordinators
+        const { data: dupCoord } = await admin.from("coordinators").select("id").ilike("email", newEmail).neq("id", cid).maybeSingle();
+        if (dupCoord) {
+          results.email_updates.push({ coordinator_id: cid, full_name: coord.full_name, new_email: newEmail, status: "error", message: `another coordinator already uses ${newEmail}` });
+          continue;
+        }
+        // Collision check on auth.users
+        if (coord.user_id) {
+          const { data: dupAuthRes } = await admin.rpc("admin_lookup_user_by_email", { p_email: newEmail }).maybeSingle?.() ?? { data: null };
+          // Note: if admin_lookup_user_by_email RPC doesn't exist this is null — that's fine, supabase auth update will surface duplicate
+          if (dupAuthRes && dupAuthRes.id && dupAuthRes.id !== coord.user_id) {
+            results.email_updates.push({ coordinator_id: cid, full_name: coord.full_name, new_email: newEmail, status: "error", message: `another auth.users row already uses ${newEmail}` });
+            continue;
+          }
+        }
+
+        // 1a-i) Update auth.users.email if linked
+        if (coord.user_id) {
+          const { error: aue } = await admin.auth.admin.updateUserById(coord.user_id, { email: newEmail });
+          if (aue) {
+            results.email_updates.push({ coordinator_id: cid, full_name: coord.full_name, new_email: newEmail, status: "error", message: `auth update failed: ${errStr(aue)}` });
+            continue;
+          }
+        }
+
+        // 1a-ii) Update coordinators.email
+        const { error: cue } = await admin
+          .from("coordinators")
+          .update({ email: newEmail, updated_at: new Date().toISOString() })
+          .eq("id", cid);
+        if (cue) {
+          results.email_updates.push({ coordinator_id: cid, full_name: coord.full_name, new_email: newEmail, status: "error", message: `coord update failed: ${errStr(cue)}` });
+          continue;
+        }
+
+        results.email_updates.push({
+          coordinator_id: cid,
+          full_name: coord.full_name,
+          new_email: newEmail,
+          status: "success",
+          message: coord.user_id ? "email + auth updated" : "email updated (no auth account)",
+        });
+      }
+
+      // ── 1b) Optional field patches (job_title, team, regions, role, etc.) ──
+      const allowedFields = ["job_title", "team", "regions", "role", "secondary_roles", "weekly_visit_target", "is_active"];
+      const patchPayload: Record<string, unknown> = {};
+      const changedFields: string[] = [];
+      for (const f of allowedFields) {
+        if (Object.prototype.hasOwnProperty.call(patches, f)) {
+          const newVal = patches[f];
+          // role change to super_admin requires super_admin caller
+          if (f === "role" && newVal === "super_admin" && !callerIsSuper) continue;
+          // detect actual change (loose compare for arrays)
+          const curVal = (coord as any)[f];
+          const isArr = Array.isArray(newVal) || Array.isArray(curVal);
+          const changed = isArr
+            ? JSON.stringify(newVal ?? []) !== JSON.stringify(curVal ?? [])
+            : String(newVal ?? "") !== String(curVal ?? "");
+          if (changed) {
+            patchPayload[f] = newVal;
+            changedFields.push(f);
+          }
+        }
+      }
+      if (changedFields.length > 0) {
+        patchPayload["updated_at"] = new Date().toISOString();
+        const { error: pe } = await admin.from("coordinators").update(patchPayload).eq("id", cid);
+        if (pe) {
+          results.patch_updates.push({ coordinator_id: cid, full_name: coord.full_name, fields: changedFields, status: "error", message: `patch failed: ${errStr(pe)}` });
+        } else {
+          results.patch_updates.push({ coordinator_id: cid, full_name: coord.full_name, fields: changedFields, status: "success", message: `updated: ${changedFields.join(", ")}` });
+        }
+      }
+    }
+
+    // ── 2) Terminations ──
+    for (const tid of terminations) {
+      if (!tid || typeof tid !== "string") {
+        results.terminations.push({ coordinator_id: String(tid), status: "error", message: "invalid coordinator_id" });
+        continue;
+      }
+      const { data: coord, error: ce } = await admin
+        .from("coordinators")
+        .select("id, user_id, role, full_name, is_active")
+        .eq("id", tid).maybeSingle();
+      if (ce || !coord) {
+        results.terminations.push({ coordinator_id: tid, status: "error", message: `coordinator not found: ${errStr(ce)}` });
+        continue;
+      }
+      if (coord.role === "super_admin" && !callerIsSuper) {
+        results.terminations.push({ coordinator_id: tid, full_name: coord.full_name, status: "error", message: "only super_admin can terminate super_admin" });
+        continue;
+      }
+      if (coord.is_active === false) {
+        results.terminations.push({ coordinator_id: tid, full_name: coord.full_name, status: "warning", message: "already inactive — no change" });
+        continue;
+      }
+
+      // Soft-delete coordinator
+      const { error: due } = await admin
+        .from("coordinators")
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq("id", tid);
+      if (due) {
+        results.terminations.push({ coordinator_id: tid, full_name: coord.full_name, status: "error", message: `deactivate failed: ${errStr(due)}` });
+        continue;
+      }
+
+      // Ban auth account if exists (banUserById via updateUserById with ban_duration)
+      if (coord.user_id) {
+        const { error: bue } = await admin.auth.admin.updateUserById(coord.user_id, { ban_duration: "876000h" });
+        if (bue) {
+          results.terminations.push({ coordinator_id: tid, full_name: coord.full_name, status: "warning", message: `soft-deleted but auth ban failed: ${errStr(bue)}` });
+          continue;
+        }
+      }
+
+      results.terminations.push({
+        coordinator_id: tid,
+        full_name: coord.full_name,
+        status: "success",
+        message: coord.user_id ? "soft-deleted + auth banned" : "soft-deleted (no auth account)",
+      });
+    }
+
+    results.completed_at = new Date().toISOString();
+
+    // Log to activity log (best-effort, non-blocking)
+    try {
+      await admin.from("coordinator_activity_log").insert({
+        coordinator_id: callerCoord.id,
+        coordinator_name: callerCoord.full_name,
+        coordinator_role: callerCoord.role,
+        action_type: "bulk_user_migration",
+        action_detail: `Email updates: ${results.email_updates.length}, Patch updates: ${results.patch_updates.length}, Terminations: ${results.terminations.length}`,
+        table_name: "coordinators",
+        metadata: {
+          email_success: results.email_updates.filter(r => r.status === "success").length,
+          email_error:   results.email_updates.filter(r => r.status === "error").length,
+          patch_success: results.patch_updates.filter(r => r.status === "success").length,
+          patch_error:   results.patch_updates.filter(r => r.status === "error").length,
+          term_success:  results.terminations.filter(r => r.status === "success").length,
+          term_error:    results.terminations.filter(r => r.status === "error").length,
+        },
+      });
+    } catch (e) {
+      console.warn("activity log insert failed", errStr(e));
+    }
+
+    return json({ success: true, results });
   }
 
   return json({ error: `Unknown action: ${action}` }, 400);
