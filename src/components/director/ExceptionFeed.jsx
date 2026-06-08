@@ -20,6 +20,15 @@
 
 import { useMemo } from 'react';
 import { REGION_TO_AD, ASSOC_DIRECTORS } from '../../lib/constants';
+// 2026-06-08: engagement signal must come from v_coordinator_engagement
+// (6-source MAX), not raw coordinator_activity_log. Without this, frontline
+// coordinators who DO work but go through auth_tracker/care_coord_notes/
+// patient_notes get flagged as "no activity in 24h" — the exact bug Liam
+// flagged this morning for 8 coords (Gerilyn, Mary, April, Audrey, Gypsy,
+// Kiarra, Ethel, Jhon) all of whom had 50+ activity_log rows in last 24h.
+// The hook is the single source of truth — DO NOT inline an engagement
+// check anywhere else in the codebase.
+import { useCoordinatorEngagement, hoursInactiveFromEngagement } from '../../hooks/useCoordinatorEngagement';
 
 const STAGE_THRESHOLDS = [
   { test: function(s) { return /soc.*pending/i.test(s); }, days: 3, label: 'SOC Pending' },
@@ -143,11 +152,19 @@ function ExceptionRow({ exception, onJumpTo }) {
 // ─── Main export ────────────────────────────────────────────────────────
 export default function ExceptionFeed({ census, activityLog, coordinators, onJumpTo }) {
 
+  // 2026-06-08: load multi-source engagement once at the component boundary.
+  // Used for INACTIVE_COORDINATOR + VACANT_REGION flags below.
+  const { engagementMap } = useCoordinatorEngagement();
+
   const exceptions = useMemo(function() {
     var out = [];
     if (!census || census.length === 0) return out;
 
-    // Index: latest activity per coordinator and per patient (proxy)
+    // Index: latest activity per coordinator (for DEAD_SPOT owner check,
+    // which is still scoped to activity_log because dead spots are about
+    // a coordinator failing to advance a patient — activity_log is the
+    // right grain for that). INACTIVE_COORDINATOR + VACANT_REGION below
+    // use the multi-source engagementMap instead.
     var coordLastActionByName = {};
     activityLog.forEach(function(a) {
       var k = a.coordinator_name;
@@ -195,16 +212,20 @@ export default function ExceptionFeed({ census, activityLog, coordinators, onJum
     });
 
     // 2. INACTIVE COORDINATORS — frontline roles with no activity in 24h
+    // 2026-06-08 FIX: use engagementMap (6 sources) instead of activity_log
+    // alone. The old version flagged 8 coordinators who had 50+ activity_log
+    // rows in the last hour, because of a name-matching bug between
+    // `coordinators.full_name` and `coordinator_activity_log.coordinator_name`
+    // — case/whitespace differences silently caused Infinity lookups. The
+    // hook uses lowercased trimmed keys and falls back across 6 timestamp
+    // sources, so it can never silently mis-flag a working coordinator.
     var frontlineRoles = ['intake_coordinator', 'auth_coordinator', 'care_coordinator'];
     coordinators.forEach(function(c) {
       if (frontlineRoles.indexOf(c.role) < 0) return;
-      var lastAction = coordLastActionByName[c.full_name];
-      var hoursInactive;
-      if (!lastAction) {
-        hoursInactive = Infinity;
-      } else {
-        hoursInactive = Math.round((Date.now() - new Date(lastAction).getTime()) / 3600000);
-      }
+      var hoursInactive = hoursInactiveFromEngagement(engagementMap, c.full_name);
+      // If engagementMap hasn't loaded yet, skip rather than flag — better
+      // to under-report briefly than to incorrectly call someone inactive.
+      if (engagementMap.size === 0) return;
       if (hoursInactive >= 24) {
         out.push({
           type: 'INACTIVE_COORDINATOR',
@@ -227,13 +248,12 @@ export default function ExceptionFeed({ census, activityLog, coordinators, onJum
     var alreadyAlerted = {};
     Object.keys(actingRegions).forEach(function(rgn) {
       var actingAD = actingRegions[rgn];
-      var lastAction = coordLastActionByName[actingAD];
-      var hoursInactive;
-      if (!lastAction) {
-        hoursInactive = Infinity;
-      } else {
-        hoursInactive = Math.round((Date.now() - new Date(lastAction).getTime()) / 3600000);
-      }
+      // 2026-06-08: same engagement-source fix as above. ADs especially
+      // never write to activity_log directly (they touch patient_notes and
+      // auth_tracker.updated_by); the old activity_log-only check produced
+      // false "AD inactive" alerts every time Carla looked at this feed.
+      var hoursInactive = hoursInactiveFromEngagement(engagementMap, actingAD);
+      if (engagementMap.size === 0) return;
       // Only alert if 48h+ AND we haven't already added an alert for this AD
       // (one row per AD-acting situation, not one per region they cover)
       var key = actingAD + ':' + (hoursInactive >= 48 ? '48' : 'ok');
@@ -264,7 +284,7 @@ export default function ExceptionFeed({ census, activityLog, coordinators, onJum
     });
 
     return out;
-  }, [census, activityLog, coordinators]);
+  }, [census, activityLog, coordinators, engagementMap]);
 
   var p1Count = exceptions.filter(function(e) { return severityFor(e) === 'P1'; }).length;
   var p2Count = exceptions.filter(function(e) { return severityFor(e) === 'P2'; }).length;

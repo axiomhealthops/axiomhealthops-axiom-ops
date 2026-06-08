@@ -262,3 +262,34 @@ supabase/migrations/
     silent per-chunk loss would be catastrophic. **General rule for any
     INSERT/UPSERT loop touching `visit_schedule_data`: never silently
     swallow chunk errors. Either retry per-row or raise.**
+13. **Engagement-signal logic must go through `useCoordinatorEngagement`** (2026-06-08).
+    Three pages have now been bitten by the same bug pattern: each rolled
+    its own "is coordinator X active?" check using `coordinator_activity_log`
+    alone (or worse, `auth.users.last_sign_in_at`). The problem:
+    (a) managers (Carla, Hervylie, all ADs) rarely write to `activity_log` —
+    they work via `auth_tracker.updated_by`, `patient_notes`,
+    `care_coord_notes`. A page that reads `activity_log` alone shows
+    them as "no activity in 24h" forever, which is false. (b) Even for
+    frontline coordinators who DO log activity, a case-sensitivity or
+    whitespace mismatch between `coordinators.full_name` and
+    `coordinator_activity_log.coordinator_name` silently flips the lookup
+    to `Infinity`-hours-inactive. Liam flagged the same 8 frontline
+    coordinators in May (banner) and again in June (Live Exception Feed):
+    Gerilyn Bayson, Mary Imperio, April Manalo, Audrey Sarmiento, Gypsy
+    Renos, Kiarra Arabejo, Ethel Camposano, Jhon Padit — all had 50-500+
+    activity rows in the last 24h while the page said "no activity".
+    **Permanent fix:** the DB-side view `v_coordinator_engagement` MAXes
+    `last_active_utc` across SIX sources (`coordinator_activity_log`,
+    `coordinator_daily_metrics`, `auth_tracker.updated_by`, `patient_notes`,
+    `care_coord_notes`, `auth.users.last_sign_in_at`). The RPC
+    `get_coordinator_engagement` wraps it with a role-gated select. The
+    React hook `useCoordinatorEngagement()` in
+    `src/hooks/useCoordinatorEngagement.js` fetches the RPC once per
+    component, returns a lowercased-key Map for O(1) lookup, and exposes
+    the helper `hoursInactiveFromEngagement(map, fullName)` that any page
+    should use. **Pages updated to use the hook:** `EngagementAlertBanner`
+    (Carla), `ExceptionFeed` INACTIVE_COORDINATOR + VACANT_REGION (Liam's
+    Live Exception Feed), `ManagerScorecards` response_latency. **General
+    rule for any future engagement check: import the hook. Never inline
+    `activityLog.filter(a => a.coordinator_name === ...)` or read
+    `last_sign_in_at` directly.**

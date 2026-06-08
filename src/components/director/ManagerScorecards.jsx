@@ -29,6 +29,12 @@
 
 import { useMemo } from 'react';
 import { FL_PARENT_REGIONS, ASSOC_DIRECTORS, REGION_TO_PARENT } from '../../lib/constants';
+// 2026-06-08: managers (Carla, Hervylie, ADs) rarely write to
+// coordinator_activity_log directly — they touch auth_tracker.updated_by,
+// patient_notes, care_coord_notes. The old response_latency calculation
+// used activity_log alone and showed N/A for ALL managers as a result.
+// The hook reads v_coordinator_engagement which MAXes across 6 sources.
+import { useCoordinatorEngagement } from '../../hooks/useCoordinatorEngagement';
 
 // Stage thresholds (in calendar days) — must match Carla's Ops Dashboard so
 // "stuck" means the same thing across the org. Kept inline here rather than
@@ -223,6 +229,10 @@ function TierRow({ label, cards, onCardClick }) {
 // ─── Main export ────────────────────────────────────────────────────────
 export default function ManagerScorecards({ census, statusLog, activityLog, coordinators, onScorecardClick }) {
 
+  // 2026-06-08: multi-source engagement for managers, who rarely log to
+  // coordinator_activity_log. last_active_utc here MAXes across 6 sources.
+  const { engagementMap } = useCoordinatorEngagement();
+
   // Build scorecards by walking the org tree
   const tiers = useMemo(function() {
     if (!coordinators || coordinators.length === 0) {
@@ -253,31 +263,38 @@ export default function ManagerScorecards({ census, statusLog, activityLog, coor
         : null;
 
       // Response latency — for each stuck patient, find when the manager next
-      // logged an action on them after the SLA breach time. If they never did,
-      // count it as "no response" and exclude from latency average (but flag count).
-      // SLA breach time ≈ patient's status_changed_at + threshold days.
+      // took ANY action in the system after the SLA breach time. The action
+      // is "any activity captured by v_coordinator_engagement" (which MAXes
+      // across activity_log, daily_metrics, auth_tracker.updated_by,
+      // patient_notes, care_coord_notes, and last_sign_in_at). This is a
+      // proxy — it doesn't prove the manager acted on THIS patient
+      // specifically — but it's the best signal we have until we add a
+      // patient_name FK to those tables.
+      //
+      // 2026-06-08 FIX: previous version filtered activity_log alone, which
+      // is empty for managers who work via auth_tracker/care_coord_notes
+      // (Carla, Hervylie, all ADs). Result: N/A for every manager. The
+      // engagementMap-based check uses the true last-active timestamp.
+      var managerLastActiveIso = (function() {
+        var e = engagementMap.get((manager.name || '').toLowerCase().trim());
+        return e && e.last_active_utc ? e.last_active_utc : null;
+      })();
       var latencies = [];
       var noResponseCount = 0;
       stuckPatients.forEach(function(x) {
         var p = x.patient;
-        var breachIso = new Date(new Date(p.status_changed_at).getTime() + x.stage.days * 86400000).toISOString();
-        // Find activity entries by this manager on this patient after breach time.
-        // coordinator_activity_log doesn't always link by patient_name — we approximate
-        // by matching coordinator_name in records that mention the patient. Simpler proxy:
-        // count ANY activity by the manager after the breach as "they were active during
-        // the breach window" — this is admittedly noisy and we should refine if we add a
-        // patient_name FK to the activity log later.
-        var managerActions = activityLog.filter(function(a) {
-          return a.coordinator_name === manager.name && a.created_at > breachIso;
-        });
-        if (managerActions.length === 0) {
+        var breachMs = new Date(p.status_changed_at).getTime() + x.stage.days * 86400000;
+        if (!managerLastActiveIso) {
+          noResponseCount++;
+          return;
+        }
+        var lastActiveMs = new Date(managerLastActiveIso).getTime();
+        if (lastActiveMs <= breachMs) {
+          // Manager hasn't done anything in the system since this patient
+          // breached — definitively no response.
           noResponseCount++;
         } else {
-          // Earliest action after breach
-          var earliest = managerActions.reduce(function(min, a) {
-            return a.created_at < min ? a.created_at : min;
-          }, managerActions[0].created_at);
-          var hrs = (new Date(earliest).getTime() - new Date(breachIso).getTime()) / 3600000;
+          var hrs = (lastActiveMs - breachMs) / 3600000;
           if (hrs >= 0) latencies.push(Math.round(hrs));
         }
       });
@@ -309,6 +326,10 @@ export default function ManagerScorecards({ census, statusLog, activityLog, coor
         responseLatency: responseLatency,
         noResponseCount: noResponseCount,
         sparkline: sparkline,
+        // 2026-06-08: expose last-active timestamp so the scorecard can show
+        // "no activity since X" for engagement-stale managers without
+        // forcing the Live Exception Feed to be the only signal.
+        managerLastActiveUtc: managerLastActiveIso,
       };
     }
 
@@ -373,7 +394,7 @@ export default function ManagerScorecards({ census, statusLog, activityLog, coor
     tier3.sort(worstFirst);
 
     return { tier1: tier1, tier2: tier2, tier3: tier3 };
-  }, [census, statusLog, activityLog, coordinators]);
+  }, [census, statusLog, activityLog, coordinators, engagementMap]);
 
   return (
     <div style={{ marginBottom: 16 }}>
