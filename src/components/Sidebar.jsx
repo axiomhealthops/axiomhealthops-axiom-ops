@@ -37,6 +37,7 @@ const PAGE_ICONS = {
   'clinician-schedule': '📅',
   'marketing-team-directory': '👥',
   'marketing-referrals':      '🗂',
+  'marketing-referrals-ga':   '🍑',
   'ops-reports': '📊',
   'high-risk-patients': '⚠',
   'auth-over-limit': '🚨',

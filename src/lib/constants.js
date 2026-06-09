@@ -66,19 +66,47 @@ export const REGIONS = {
 // "Territory" naming). Single source of truth — pages should pull from here
 // rather than hardcoding strings. Liam confirmed these county groupings on
 // 2026-06-09 in the Marketing Referrals build.
+//
+// Two distinct lead roles per territory:
+//   - manager / managerRole = the CLINICAL lead. TM where dedicated, AD acting otherwise.
+//   - marketingLead         = the HAE / marketing lead (who brings in referrals + does
+//     referral source outreach). Often the same as manager for territories with a
+//     dedicated TM. For territories where an HAE has been assigned as marketing lead
+//     (Brian Roffe for Territory T), this differs from the clinical AD.
 export const TERRITORIES = {
-  A: { letter: 'A', counties: 'Osceola, Orange, Seminole',     manager: 'Uma Jacobs',      managerRole: 'TM' },
-  B: { letter: 'B', counties: 'Duval, Nassau, Clay',           manager: 'Lia Davis',       managerRole: 'AD' },
-  C: { letter: 'C', counties: "St. Johns, Flagler, Putnam",    manager: 'Earl Dimaano',    managerRole: 'TM' },
-  G: { letter: 'G', counties: 'Volusia',                       manager: 'Lia Davis',       managerRole: 'AD' },
-  H: { letter: 'H', counties: 'Lake, Sumter, Marion',          manager: 'Kaylee Ramsey',   managerRole: 'TM' },
-  J: { letter: 'J', counties: 'Brevard, Indian River',         manager: 'Hollie Fincher',  managerRole: 'TM' },
-  M: { letter: 'M', counties: 'Hillsborough, Pinellas',        manager: 'Ariel Maboudi',   managerRole: 'AD' },
-  N: { letter: 'N', counties: 'Polk, Manatee, Hardee',         manager: 'Ariel Maboudi',   managerRole: 'AD' },
-  T: { letter: 'T', counties: 'Palm Beach, St. Lucie, Martin', manager: 'Samantha Faliks', managerRole: 'AD' },
-  V: { letter: 'V', counties: 'Miami-Dade, Broward, Monroe',   manager: 'Samantha Faliks', managerRole: 'AD' },
+  A: { letter: 'A', counties: 'Osceola, Orange, Seminole',     manager: 'Uma Jacobs',      managerRole: 'TM', marketingLead: 'Uma Jacobs' },
+  B: { letter: 'B', counties: 'Duval, Nassau, Clay',           manager: 'Lia Davis',       managerRole: 'AD', marketingLead: 'Lia Davis' },
+  C: { letter: 'C', counties: "St. Johns, Flagler, Putnam",    manager: 'Earl Dimaano',    managerRole: 'TM', marketingLead: 'Earl Dimaano' },
+  G: { letter: 'G', counties: 'Volusia',                       manager: 'Lia Davis',       managerRole: 'AD', marketingLead: 'Lia Davis' },
+  H: { letter: 'H', counties: 'Lake, Sumter, Marion',          manager: 'Kaylee Ramsey',   managerRole: 'TM', marketingLead: 'Kaylee Ramsey' },
+  J: { letter: 'J', counties: 'Brevard, Indian River',         manager: 'Hollie Fincher',  managerRole: 'TM', marketingLead: 'Hollie Fincher' },
+  M: { letter: 'M', counties: 'Hillsborough, Pinellas',        manager: 'Ariel Maboudi',   managerRole: 'AD', marketingLead: 'Ariel Maboudi' },
+  N: { letter: 'N', counties: 'Polk, Manatee, Hardee',         manager: 'Ariel Maboudi',   managerRole: 'AD', marketingLead: 'Ariel Maboudi' },
+  T: { letter: 'T', counties: 'Palm Beach, St. Lucie, Martin', manager: 'Samantha Faliks', managerRole: 'AD', marketingLead: 'Brian Roffe', marketingLeadRole: 'HAE' },
+  V: { letter: 'V', counties: 'Miami-Dade, Broward, Monroe',   manager: 'Samantha Faliks', managerRole: 'AD', marketingLead: 'Samantha Faliks' },
 };
 export const TERRITORY_LETTERS = Object.keys(TERRITORIES);
+
+// 2026-06-09: Georgia is a separate expansion state with its own HAE lead.
+// Walter Holston is the HAE covering all of Georgia. Sub-territories will be
+// defined as the market builds out. For now the GA tracker treats Georgia
+// as a single coverage area.
+//
+// Tagging convention for Georgia referrals: intake_referrals.region IN
+// ('GA','GA-N','GA-C','GA-S') OR region LIKE 'GA%'. Anything starting with
+// 'GA' is Georgia. Florida region letters never start with 'GA' so the
+// regex is unambiguous.
+export const GA_TERRITORIES = {
+  GA: { letter: 'GA', counties: 'All Georgia (expansion - sub-territories TBD)', manager: 'Walter Holston', managerRole: 'HAE', marketingLead: 'Walter Holston', marketingLeadRole: 'HAE' },
+};
+export const GA_TERRITORY_LETTERS = Object.keys(GA_TERRITORIES);
+
+// Helper: does a region letter belong to the Georgia tracker?
+export function isGeorgiaRegion(region) {
+  if (!region) return false;
+  const r = String(region).trim().toUpperCase();
+  return r === 'GA' || r.startsWith('GA-');
+}
 
 // =====================================================================
 // EdemaCare regional structure (introduced 2026-05-15 reorganization)

@@ -1,25 +1,18 @@
 // =====================================================================
-// MarketingReferralsPage.jsx
+// MarketingReferralsGeorgiaPage.jsx
 //
-// Marketing-only view of intake referrals. The marketing team needs to
-// know how their region's referral pipeline is performing (acceptance
-// rate, denial reasons, source mix) but should NOT see the operational
-// Intake Dashboard — different scope, different action surface.
+// Walter Holston's Georgia referral tracker. Mirrors the Florida
+// Marketing Referrals page but scoped to GA expansion only.
 //
-// What this page does:
-//   - Per-region summary table: Accepted / Denied / Pending counts +
-//     acceptance rate, with the Regional Manager's name attached.
-//   - Click any count to open the drill-down panel with the patient
-//     list for that region + status combination.
-//   - Click any patient to expand the full referral detail (read-only).
+// Georgia is currently a single-coverage market (no sub-territories yet).
+// As the market grows, GA sub-territories can be added to the
+// GA_TERRITORIES map in constants.js — the page will pick them up
+// automatically.
 //
-// What this page deliberately does NOT do:
-//   - No Accept/Decline action buttons (that's Intake's job)
-//   - No edit / chart status fields
-//   - No bulk operations
-//   - No referral_document downloads (keep PHI surface minimal)
+// Tagging convention: intake_referrals.region IN ('GA','GA-N','GA-C','GA-S')
+// or anything matching /^GA/i. See isGeorgiaRegion() in constants.js.
 //
-// Built 2026-06-09 — Liam (Director of Ops).
+// Built 2026-06-09.
 // =====================================================================
 
 import { useState, useEffect, useMemo } from 'react';
@@ -27,12 +20,10 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-import { TERRITORIES, TERRITORY_LETTERS, isGeorgiaRegion } from '../../lib/constants';
+import { GA_TERRITORIES, GA_TERRITORY_LETTERS, isGeorgiaRegion } from '../../lib/constants';
 
-const ALL_REGIONS = TERRITORY_LETTERS;
 const STATUS_BUCKETS = ['Accepted', 'Denied', 'Pending'];
 
-// ─── Date helpers (Sun-Sat work week per project convention) ─────────────
 function daysAgo(n) {
   const d = new Date();
   d.setHours(0,0,0,0);
@@ -51,7 +42,6 @@ function fmtDate(s) {
   } catch { return s; }
 }
 
-// ─── Status normalization (handles Pariox label variants) ────────────────
 function bucketOf(status) {
   const s = String(status || '').trim().toLowerCase();
   if (s === 'accepted')      return 'Accepted';
@@ -66,15 +56,13 @@ const BUCKET_COLORS = {
   Pending:  { color: '#9C5700', bg: '#FFFBEB', border: '#F59E0B' },
 };
 
-// ─── Main page ───────────────────────────────────────────────────────────
-export default function MarketingReferralsPage() {
-  const { profile } = useAuth();
+export default function MarketingReferralsGeorgiaPage() {
   const [referrals, setReferrals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dateFrom, setDateFrom] = useState(daysAgo(30));
   const [dateTo, setDateTo] = useState(today());
   const [regionFilter, setRegionFilter] = useState('ALL');
-  const [drillDown, setDrillDown] = useState(null); // { region, bucket }
+  const [drillDown, setDrillDown] = useState(null);
   const [selectedPatient, setSelectedPatient] = useState(null);
 
   function loadData() {
@@ -83,18 +71,15 @@ export default function MarketingReferralsPage() {
         setReferrals(Array.isArray(rows) ? rows : []);
         setLoading(false);
       })
-      .catch(err => {
-        console.error('Failed to load referrals', err);
-        setLoading(false);
-      });
+      .catch(err => { console.error(err); setLoading(false); });
   }
   useEffect(() => { loadData(); }, []);
   useRealtimeTable(['intake_referrals'], loadData);
 
-  // ─── Apply date + region filter (Florida only — GA has its own tracker) ──
+  // Filter to Georgia only
   const filtered = useMemo(() => {
     return referrals.filter(r => {
-      if (isGeorgiaRegion(r.region)) return false;  // GA referrals belong on the Georgia tracker
+      if (!isGeorgiaRegion(r.region)) return false;
       const d = r.date_received || '';
       if (dateFrom && d && d < dateFrom) return false;
       if (dateTo && d && d > dateTo) return false;
@@ -103,14 +88,14 @@ export default function MarketingReferralsPage() {
     });
   }, [referrals, dateFrom, dateTo, regionFilter]);
 
-  // ─── Aggregate by region ───────────────────────────────────────────────
+  // Aggregate by GA sub-territory letter
   const byRegion = useMemo(() => {
     const acc = {};
-    ALL_REGIONS.forEach(r => {
+    GA_TERRITORY_LETTERS.forEach(r => {
       acc[r] = { Accepted: 0, Denied: 0, Pending: 0, Other: 0, total: 0 };
     });
     filtered.forEach(r => {
-      const region = r.region || 'UNKNOWN';
+      const region = String(r.region || '').toUpperCase();
       if (!acc[region]) acc[region] = { Accepted: 0, Denied: 0, Pending: 0, Other: 0, total: 0 };
       const b = bucketOf(r.referral_status);
       acc[region][b]++;
@@ -119,7 +104,6 @@ export default function MarketingReferralsPage() {
     return acc;
   }, [filtered]);
 
-  // ─── Headline totals ───────────────────────────────────────────────────
   const totals = useMemo(() => {
     const t = { Accepted: 0, Denied: 0, Pending: 0, total: filtered.length };
     filtered.forEach(r => {
@@ -131,18 +115,17 @@ export default function MarketingReferralsPage() {
 
   const acceptanceRate = totals.total > 0 ? Math.round(totals.Accepted / totals.total * 100) : 0;
 
-  // ─── Drill-down list ───────────────────────────────────────────────────
   const drillRows = useMemo(() => {
     if (!drillDown) return [];
     return filtered.filter(r => {
-      if (drillDown.region !== 'ALL' && r.region !== drillDown.region) return false;
+      if (drillDown.region !== 'ALL' && String(r.region || '').toUpperCase() !== drillDown.region) return false;
       return bucketOf(r.referral_status) === drillDown.bucket;
     }).sort((a, b) => (b.date_received || '').localeCompare(a.date_received || ''));
   }, [filtered, drillDown]);
 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
-      <TopBar title="Marketing Referrals" subtitle="Loading..." />
+      <TopBar title="Georgia Referrals" subtitle="Loading..." />
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading...</div>
     </div>
   );
@@ -150,10 +133,22 @@ export default function MarketingReferralsPage() {
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar
-        title="Marketing - Florida Referrals by Territory"
-        subtitle={`${totals.total} referrals in window - ${totals.Accepted} accepted, ${totals.Denied} denied, ${totals.Pending} pending - Georgia tracked separately`}
+        title="Marketing - Georgia Referrals (Walter Holston)"
+        subtitle={`${totals.total} GA referrals in window - ${totals.Accepted} accepted, ${totals.Denied} denied, ${totals.Pending} pending`}
       />
       <div style={{ flex:1, overflow:'auto', padding:20, display:'flex', flexDirection:'column', gap:16 }}>
+
+        {/* Expansion banner */}
+        {totals.total === 0 && (
+          <div style={{ background:'#F5F3FF', border:'1px solid #C4B5FD', borderLeft:'4px solid #7C3AED', borderRadius:10, padding:'14px 18px' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:'#5B21B6', marginBottom:4 }}>Georgia expansion in progress</div>
+            <div style={{ fontSize:12, color:'#5B21B6', lineHeight:1.5 }}>
+              No Georgia referrals in the selected window yet. Once Walter Holston starts bringing in GA referrals, they will appear here automatically.
+              <br/><br/>
+              <strong>Tagging convention:</strong> for an intake referral to show up here, its <code style={{ background:'#fff', padding:'1px 5px', borderRadius:3, border:'1px solid #C4B5FD' }}>region</code> column must be <code style={{ background:'#fff', padding:'1px 5px', borderRadius:3, border:'1px solid #C4B5FD' }}>GA</code> (or GA-N / GA-C / GA-S for future sub-territories).
+            </div>
+          </div>
+        )}
 
         {/* Filter bar */}
         <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, padding:16 }}>
@@ -164,12 +159,12 @@ export default function MarketingReferralsPage() {
             <FilterCell label="Date To">
               <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={inputStyle} />
             </FilterCell>
-            <FilterCell label="Territory">
+            <FilterCell label="GA Sub-Territory">
               <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)} style={inputStyle}>
-                <option value="ALL">All Territories</option>
-                {ALL_REGIONS.map(r => {
-                  const t = TERRITORIES[r];
-                  return <option key={r} value={r}>Territory {r} ({t.counties}) - {t.marketingLead}</option>;
+                <option value="ALL">All Georgia</option>
+                {GA_TERRITORY_LETTERS.map(r => {
+                  const t = GA_TERRITORIES[r];
+                  return <option key={r} value={r}>{r} - {t.counties}</option>;
                 })}
               </select>
             </FilterCell>
@@ -178,6 +173,7 @@ export default function MarketingReferralsPage() {
             <QuickPill label="Last 7 days" active={dateFrom === daysAgo(7) && dateTo === today()} onClick={() => { setDateFrom(daysAgo(7)); setDateTo(today()); }} />
             <QuickPill label="Last 30 days" active={dateFrom === daysAgo(30) && dateTo === today()} onClick={() => { setDateFrom(daysAgo(30)); setDateTo(today()); }} />
             <QuickPill label="Last 90 days" active={dateFrom === daysAgo(90) && dateTo === today()} onClick={() => { setDateFrom(daysAgo(90)); setDateTo(today()); }} />
+            <QuickPill label="Year to Date" active={dateFrom === new Date().getFullYear() + '-01-01' && dateTo === today()} onClick={() => { setDateFrom(new Date().getFullYear() + '-01-01'); setDateTo(today()); }} />
           </div>
         </div>
 
@@ -189,19 +185,18 @@ export default function MarketingReferralsPage() {
           <Stat label="Pending" value={totals.Pending} accent="#9C5700" sub="awaiting decision" />
         </div>
 
-        {/* Region table */}
+        {/* Sub-territory table */}
         <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
           <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10 }}>
-            <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Territory Breakdown</div>
+            <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Georgia Coverage</div>
             <div style={{ fontSize:12, color:'var(--gray)' }}>Click any number to drill into the patient list</div>
           </div>
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
             <thead>
               <tr style={{ background:'#FAFAFA', borderBottom:'2px solid var(--border)' }}>
-                <th style={th}>Territory</th>
+                <th style={th}>Coverage</th>
                 <th style={th}>Counties</th>
                 <th style={th}>Marketing Lead</th>
-                <th style={th}>Clinical Lead</th>
                 <th style={{ ...th, textAlign:'right' }}>Accepted</th>
                 <th style={{ ...th, textAlign:'right' }}>Denied</th>
                 <th style={{ ...th, textAlign:'right' }}>Pending</th>
@@ -210,15 +205,13 @@ export default function MarketingReferralsPage() {
               </tr>
             </thead>
             <tbody>
-              {ALL_REGIONS.map(region => {
-                const r = byRegion[region];
-                const t = TERRITORIES[region];
+              {GA_TERRITORY_LETTERS.map(region => {
+                const r = byRegion[region] || { Accepted: 0, Denied: 0, Pending: 0, total: 0 };
+                const t = GA_TERRITORIES[region];
                 const rate = r.total > 0 ? Math.round(r.Accepted / r.total * 100) : 0;
                 return (
                   <tr key={region} style={{ borderBottom:'1px solid var(--border)' }}>
-                    <td style={{ ...td, fontWeight:700, color:'var(--black)', whiteSpace:'nowrap' }}>
-                      Territory {region}
-                    </td>
+                    <td style={{ ...td, fontWeight:700, color:'var(--black)', whiteSpace:'nowrap' }}>{region === 'GA' ? 'All Georgia' : `Territory ${region}`}</td>
                     <td style={{ ...td, color:'var(--gray)', fontSize:12 }}>{t?.counties || '-'}</td>
                     <td style={{ ...td, color:'var(--black)' }}>
                       {t?.marketingLead || '-'}
@@ -227,22 +220,7 @@ export default function MarketingReferralsPage() {
                           marginLeft:6, fontSize:10, fontWeight:600,
                           color: '#9A3412', background: '#FFF7ED',
                           padding:'1px 6px', borderRadius:999,
-                        }}>
-                          {t.marketingLeadRole}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ ...td, color:'var(--black)' }}>
-                      {t?.manager || '-'}
-                      {t?.managerRole && (
-                        <span style={{
-                          marginLeft:6, fontSize:10, fontWeight:600,
-                          color: t.managerRole === 'AD' ? '#7C3AED' : '#1565C0',
-                          background: t.managerRole === 'AD' ? '#F5F3FF' : '#EFF6FF',
-                          padding:'1px 6px', borderRadius:999,
-                        }}>
-                          {t.managerRole}
-                        </span>
+                        }}>{t.marketingLeadRole}</span>
                       )}
                     </td>
                     {STATUS_BUCKETS.map(bucket => (
@@ -262,27 +240,11 @@ export default function MarketingReferralsPage() {
                   </tr>
                 );
               })}
-              {/* Totals row */}
-              <tr style={{ background:'#FAFAFA', fontWeight:700 }}>
-                <td style={td} colSpan={4}>All Territories (Florida)</td>
-                {STATUS_BUCKETS.map(bucket => (
-                  <td key={bucket} style={{ ...td, textAlign:'right' }}>
-                    <CountButton
-                      count={totals[bucket]}
-                      bucket={bucket}
-                      onClick={() => setDrillDown({ region: 'ALL', bucket })}
-                      active={drillDown?.region === 'ALL' && drillDown?.bucket === bucket}
-                    />
-                  </td>
-                ))}
-                <td style={{ ...td, textAlign:'right' }}>{totals.total}</td>
-                <td style={{ ...td, textAlign:'right' }}>{acceptanceRate}%</td>
-              </tr>
             </tbody>
           </table>
         </div>
 
-        {/* Drill-down panel */}
+        {/* Drill-down */}
         {drillDown && (
           <div style={{ background:'var(--card-bg)', border:`1px solid ${BUCKET_COLORS[drillDown.bucket].border}`, borderRadius:12, overflow:'hidden' }}>
             <div style={{
@@ -293,7 +255,7 @@ export default function MarketingReferralsPage() {
             }}>
               <div>
                 <div style={{ fontSize:14, fontWeight:700, color: BUCKET_COLORS[drillDown.bucket].color }}>
-                  {drillRows.length} {drillDown.bucket} - {drillDown.region === 'ALL' ? 'All Territories' : `Territory ${drillDown.region} (${TERRITORIES[drillDown.region]?.counties || ''})`}
+                  {drillRows.length} {drillDown.bucket} - Georgia {drillDown.region !== 'GA' && drillDown.region !== 'ALL' ? `(Territory ${drillDown.region})` : ''}
                 </div>
                 <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>Click any patient row to expand details</div>
               </div>
@@ -305,7 +267,7 @@ export default function MarketingReferralsPage() {
 
             {drillRows.length === 0 ? (
               <div style={{ padding:30, textAlign:'center', color:'var(--gray)', fontSize:13 }}>
-                No referrals in this region for this status in the selected date window.
+                No referrals matching this filter.
               </div>
             ) : (
               <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
@@ -313,7 +275,7 @@ export default function MarketingReferralsPage() {
                   <tr style={{ background:'#FAFAFA', borderBottom:'1px solid var(--border)' }}>
                     <th style={th}>Date</th>
                     <th style={th}>Patient</th>
-                    <th style={th}>Territory</th>
+                    <th style={th}>Region</th>
                     <th style={th}>Insurance</th>
                     <th style={th}>Source</th>
                     <th style={th}>PCP</th>
@@ -334,7 +296,7 @@ export default function MarketingReferralsPage() {
                           }}>
                           <td style={td}>{fmtDate(r.date_received)}</td>
                           <td style={{ ...td, fontWeight:600, color:'var(--black)' }}>{r.patient_name || '-'}</td>
-                          <td style={td}>{r.region ? `Territory ${r.region}` : '-'}</td>
+                          <td style={td}>{r.region || '-'}</td>
                           <td style={td}>{r.insurance || '-'}</td>
                           <td style={td}>{r.referral_source || '-'}</td>
                           <td style={td}>{r.pcp_name || '-'}</td>
@@ -361,7 +323,7 @@ export default function MarketingReferralsPage() {
   );
 }
 
-// ─── Component helpers ───────────────────────────────────────────────────
+// ─── Component helpers (copied from FL page for self-containment) ────────
 
 function Stat({ label, value, sub, accent }) {
   return (
@@ -429,15 +391,13 @@ function PatientDetail({ referral }) {
     ['Phone', r.phone || r.contact_number],
     ['Address', [r.location, r.city, r.zip_code].filter(Boolean).join(', ')],
     ['County', r.county],
-    ['Territory', r.region ? `${r.region} - ${TERRITORIES[r.region]?.counties || ''}` : ''],
+    ['Region', r.region],
     ['Date Received', fmtDate(r.date_received)],
     ['Referral Status', r.referral_status],
     ['Referral Type', r.referral_type],
     ['Insurance (Primary)', r.insurance],
     ['Policy Number', r.policy_number],
     ['Secondary Insurance', r.secondary_insurance],
-    ['Secondary ID', r.secondary_id],
-    ['Medicare Type', r.medicare_type],
     ['Diagnosis', r.diagnosis_clean || r.diagnosis],
     ['PCP Name', r.pcp_name],
     ['PCP Phone', r.pcp_phone],
@@ -466,7 +426,6 @@ function PatientDetail({ referral }) {
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────
 const inputStyle = {
   width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--bg)', boxSizing:'border-box',
 };
