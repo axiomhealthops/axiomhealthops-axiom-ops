@@ -27,7 +27,11 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-import { TERRITORIES, TERRITORY_LETTERS, isGeorgiaRegion } from '../../lib/constants';
+import {
+  TERRITORIES, TERRITORY_LETTERS,
+  GA_TERRITORIES, GA_TERRITORY_LETTERS,
+  isGeorgiaRegion,
+} from '../../lib/constants';
 
 const ALL_REGIONS = TERRITORY_LETTERS;
 const STATUS_BUCKETS = ['Accepted', 'Denied', 'Pending'];
@@ -91,10 +95,11 @@ export default function MarketingReferralsPage() {
   useEffect(() => { loadData(); }, []);
   useRealtimeTable(['intake_referrals'], loadData);
 
-  // ─── Apply date + region filter (Florida only — GA has its own tracker) ──
+  // ─── Apply date + region filter (FL + GA, both on this page) ──
+  // The region filter dropdown lets the user narrow to a specific
+  // Florida territory letter OR a specific GA sub-territory.
   const filtered = useMemo(() => {
     return referrals.filter(r => {
-      if (isGeorgiaRegion(r.region)) return false;  // GA referrals belong on the Georgia tracker
       const d = r.date_received || '';
       if (dateFrom && d && d < dateFrom) return false;
       if (dateTo && d && d > dateTo) return false;
@@ -103,13 +108,16 @@ export default function MarketingReferralsPage() {
     });
   }, [referrals, dateFrom, dateTo, regionFilter]);
 
-  // ─── Aggregate by region ───────────────────────────────────────────────
+  // Florida rows (everything that's NOT GA)
+  const filteredFL = useMemo(() => filtered.filter(r => !isGeorgiaRegion(r.region)), [filtered]);
+  // Georgia rows
+  const filteredGA = useMemo(() => filtered.filter(r => isGeorgiaRegion(r.region)),  [filtered]);
+
+  // ─── Aggregate FL by territory letter ──────────────────────────────────
   const byRegion = useMemo(() => {
     const acc = {};
-    ALL_REGIONS.forEach(r => {
-      acc[r] = { Accepted: 0, Denied: 0, Pending: 0, Other: 0, total: 0 };
-    });
-    filtered.forEach(r => {
+    ALL_REGIONS.forEach(r => { acc[r] = { Accepted: 0, Denied: 0, Pending: 0, Other: 0, total: 0 }; });
+    filteredFL.forEach(r => {
       const region = r.region || 'UNKNOWN';
       if (!acc[region]) acc[region] = { Accepted: 0, Denied: 0, Pending: 0, Other: 0, total: 0 };
       const b = bucketOf(r.referral_status);
@@ -117,28 +125,65 @@ export default function MarketingReferralsPage() {
       acc[region].total++;
     });
     return acc;
-  }, [filtered]);
+  }, [filteredFL]);
 
-  // ─── Headline totals ───────────────────────────────────────────────────
-  const totals = useMemo(() => {
-    const t = { Accepted: 0, Denied: 0, Pending: 0, total: filtered.length };
-    filtered.forEach(r => {
+  // ─── Aggregate GA by sub-territory ─────────────────────────────────────
+  const byRegionGA = useMemo(() => {
+    const acc = {};
+    GA_TERRITORY_LETTERS.forEach(r => { acc[r] = { Accepted: 0, Denied: 0, Pending: 0, Other: 0, total: 0 }; });
+    filteredGA.forEach(r => {
+      const region = String(r.region || '').toUpperCase();
+      if (!acc[region]) acc[region] = { Accepted: 0, Denied: 0, Pending: 0, Other: 0, total: 0 };
+      const b = bucketOf(r.referral_status);
+      acc[region][b]++;
+      acc[region].total++;
+    });
+    return acc;
+  }, [filteredGA]);
+
+  // ─── Headline totals (FL + GA combined) + per-state breakdown ──────────
+  function sumStatuses(rows) {
+    const t = { Accepted: 0, Denied: 0, Pending: 0, total: rows.length };
+    rows.forEach(r => {
       const b = bucketOf(r.referral_status);
       if (t[b] != null) t[b]++;
     });
     return t;
-  }, [filtered]);
+  }
+  const totals   = useMemo(() => sumStatuses(filtered),   [filtered]);
+  const totalsFL = useMemo(() => sumStatuses(filteredFL), [filteredFL]);
+  const totalsGA = useMemo(() => sumStatuses(filteredGA), [filteredGA]);
 
   const acceptanceRate = totals.total > 0 ? Math.round(totals.Accepted / totals.total * 100) : 0;
 
   // ─── Drill-down list ───────────────────────────────────────────────────
+  // drillDown.scope: 'FL_ALL' | 'GA_ALL' | 'TERRITORY'. 'TERRITORY' uses
+  // drillDown.region (the letter / 'GA' value).
   const drillRows = useMemo(() => {
     if (!drillDown) return [];
     return filtered.filter(r => {
-      if (drillDown.region !== 'ALL' && r.region !== drillDown.region) return false;
+      if (drillDown.scope === 'FL_ALL') {
+        if (isGeorgiaRegion(r.region)) return false;
+      } else if (drillDown.scope === 'GA_ALL') {
+        if (!isGeorgiaRegion(r.region)) return false;
+      } else {
+        // specific territory
+        if (String(r.region || '').toUpperCase() !== String(drillDown.region || '').toUpperCase()) return false;
+      }
       return bucketOf(r.referral_status) === drillDown.bucket;
     }).sort((a, b) => (b.date_received || '').localeCompare(a.date_received || ''));
   }, [filtered, drillDown]);
+
+  function drillLabel(d) {
+    if (!d) return '';
+    if (d.scope === 'FL_ALL') return 'All Florida Territories';
+    if (d.scope === 'GA_ALL') return 'All Georgia';
+    const fl = TERRITORIES[d.region];
+    const ga = GA_TERRITORIES[d.region];
+    if (fl) return `Territory ${d.region} (${fl.counties})`;
+    if (ga) return `Georgia${d.region === 'GA' ? '' : ' - ' + d.region}`;
+    return `Region ${d.region}`;
+  }
 
   if (loading) return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
@@ -150,8 +195,8 @@ export default function MarketingReferralsPage() {
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar
-        title="Marketing - Florida Referrals by Territory"
-        subtitle={`${totals.total} referrals in window - ${totals.Accepted} accepted, ${totals.Denied} denied, ${totals.Pending} pending - Georgia tracked separately`}
+        title="Marketing - Referrals by Territory"
+        subtitle={`${totals.total} referrals in window (FL ${totalsFL.total} / GA ${totalsGA.total}) - ${totals.Accepted} accepted, ${totals.Denied} denied, ${totals.Pending} pending`}
       />
       <div style={{ flex:1, overflow:'auto', padding:20, display:'flex', flexDirection:'column', gap:16 }}>
 
@@ -166,11 +211,19 @@ export default function MarketingReferralsPage() {
             </FilterCell>
             <FilterCell label="Territory">
               <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)} style={inputStyle}>
-                <option value="ALL">All Territories</option>
-                {ALL_REGIONS.map(r => {
-                  const t = TERRITORIES[r];
-                  return <option key={r} value={r}>Territory {r} ({t.counties}) - {t.marketingLead}</option>;
-                })}
+                <option value="ALL">All Territories (FL + GA)</option>
+                <optgroup label="Florida">
+                  {ALL_REGIONS.map(r => {
+                    const t = TERRITORIES[r];
+                    return <option key={r} value={r}>Territory {r} ({t.counties}) - {t.marketingLead}</option>;
+                  })}
+                </optgroup>
+                <optgroup label="Georgia">
+                  {GA_TERRITORY_LETTERS.map(r => {
+                    const t = GA_TERRITORIES[r];
+                    return <option key={r} value={r}>{r === 'GA' ? 'Georgia (all)' : r} - {t.marketingLead}</option>;
+                  })}
+                </optgroup>
               </select>
             </FilterCell>
           </div>
@@ -181,18 +234,20 @@ export default function MarketingReferralsPage() {
           </div>
         </div>
 
-        {/* Headline cards */}
+        {/* Headline cards (combined) */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12 }}>
-          <Stat label="Total Referrals" value={totals.total} accent="#1F4E78" />
+          <Stat label="Total Referrals" value={totals.total} accent="#1F4E78" sub={`FL ${totalsFL.total} - GA ${totalsGA.total}`} />
           <Stat label="Accepted" value={totals.Accepted} accent="#065F46" sub={`${acceptanceRate}% acceptance rate`} />
           <Stat label="Denied" value={totals.Denied} accent="#9C0006" sub={totals.total > 0 ? `${Math.round(totals.Denied / totals.total * 100)}% denial rate` : ''} />
           <Stat label="Pending" value={totals.Pending} accent="#9C5700" sub="awaiting decision" />
         </div>
 
         {/* Region table */}
+        {/* ── Florida table ── */}
         <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
           <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10 }}>
-            <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Territory Breakdown</div>
+            <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Florida Territories</div>
+            <span style={{ fontSize:10, fontWeight:700, color:'#0369A1', background:'#EFF6FF', padding:'2px 8px', borderRadius:999, textTransform:'uppercase', letterSpacing:0.3 }}>FL</span>
             <div style={{ fontSize:12, color:'var(--gray)' }}>Click any number to drill into the patient list</div>
           </div>
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
@@ -250,8 +305,8 @@ export default function MarketingReferralsPage() {
                         <CountButton
                           count={r[bucket]}
                           bucket={bucket}
-                          onClick={() => setDrillDown({ region, bucket })}
-                          active={drillDown?.region === region && drillDown?.bucket === bucket}
+                          onClick={() => setDrillDown({ scope:'TERRITORY', region, bucket })}
+                          active={drillDown?.scope === 'TERRITORY' && drillDown?.region === region && drillDown?.bucket === bucket}
                         />
                       </td>
                     ))}
@@ -262,21 +317,104 @@ export default function MarketingReferralsPage() {
                   </tr>
                 );
               })}
-              {/* Totals row */}
+              {/* Totals row for Florida */}
               <tr style={{ background:'#FAFAFA', fontWeight:700 }}>
-                <td style={td} colSpan={4}>All Territories (Florida)</td>
+                <td style={td} colSpan={4}>All Florida Territories</td>
                 {STATUS_BUCKETS.map(bucket => (
                   <td key={bucket} style={{ ...td, textAlign:'right' }}>
                     <CountButton
-                      count={totals[bucket]}
+                      count={totalsFL[bucket]}
                       bucket={bucket}
-                      onClick={() => setDrillDown({ region: 'ALL', bucket })}
-                      active={drillDown?.region === 'ALL' && drillDown?.bucket === bucket}
+                      onClick={() => setDrillDown({ scope:'FL_ALL', bucket })}
+                      active={drillDown?.scope === 'FL_ALL' && drillDown?.bucket === bucket}
                     />
                   </td>
                 ))}
-                <td style={{ ...td, textAlign:'right' }}>{totals.total}</td>
-                <td style={{ ...td, textAlign:'right' }}>{acceptanceRate}%</td>
+                <td style={{ ...td, textAlign:'right' }}>{totalsFL.total}</td>
+                <td style={{ ...td, textAlign:'right' }}>{totalsFL.total > 0 ? `${Math.round(totalsFL.Accepted / totalsFL.total * 100)}%` : '-'}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* ── Georgia table ── */}
+        <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
+          <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Georgia (Expansion)</div>
+            <span style={{ fontSize:10, fontWeight:700, color:'#9A3412', background:'#FFF7ED', padding:'2px 8px', borderRadius:999, textTransform:'uppercase', letterSpacing:0.3 }}>GA</span>
+            <div style={{ fontSize:12, color:'var(--gray)' }}>Walter Holston - HAE for all Georgia coverage</div>
+          </div>
+          {totalsGA.total === 0 && (
+            <div style={{ padding:'16px 18px', background:'#FFFBEB', borderBottom:'1px solid var(--border)', fontSize:12, color:'#92400E' }}>
+              <strong>No Georgia referrals yet.</strong> When Walter starts bringing them in, intake should tag <code style={{ background:'#fff', padding:'1px 4px', borderRadius:3 }}>region = 'GA'</code> (or GA-N / GA-C / GA-S for future sub-territories) and they will appear here automatically.
+            </div>
+          )}
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead>
+              <tr style={{ background:'#FAFAFA', borderBottom:'2px solid var(--border)' }}>
+                <th style={th}>Coverage</th>
+                <th style={th}>Counties</th>
+                <th style={th}>Marketing Lead</th>
+                <th style={th}>Clinical Lead</th>
+                <th style={{ ...th, textAlign:'right' }}>Accepted</th>
+                <th style={{ ...th, textAlign:'right' }}>Denied</th>
+                <th style={{ ...th, textAlign:'right' }}>Pending</th>
+                <th style={{ ...th, textAlign:'right' }}>Total</th>
+                <th style={{ ...th, textAlign:'right' }}>Acceptance %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {GA_TERRITORY_LETTERS.map(region => {
+                const r = byRegionGA[region] || { Accepted:0, Denied:0, Pending:0, total:0 };
+                const t = GA_TERRITORIES[region];
+                const rate = r.total > 0 ? Math.round(r.Accepted / r.total * 100) : 0;
+                return (
+                  <tr key={region} style={{ borderBottom:'1px solid var(--border)' }}>
+                    <td style={{ ...td, fontWeight:700, color:'var(--black)', whiteSpace:'nowrap' }}>
+                      {region === 'GA' ? 'All Georgia' : `Territory ${region}`}
+                    </td>
+                    <td style={{ ...td, color:'var(--gray)', fontSize:12 }}>{t?.counties || '-'}</td>
+                    <td style={{ ...td, color:'var(--black)' }}>
+                      {t?.marketingLead || '-'}
+                      {t?.marketingLeadRole && (
+                        <span style={{ marginLeft:6, fontSize:10, fontWeight:600, color:'#9A3412', background:'#FFF7ED', padding:'1px 6px', borderRadius:999 }}>
+                          {t.marketingLeadRole}
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ ...td, color:'var(--gray)' }}>—</td>
+                    {STATUS_BUCKETS.map(bucket => (
+                      <td key={bucket} style={{ ...td, textAlign:'right' }}>
+                        <CountButton
+                          count={r[bucket]}
+                          bucket={bucket}
+                          onClick={() => setDrillDown({ scope:'TERRITORY', region, bucket })}
+                          active={drillDown?.scope === 'TERRITORY' && drillDown?.region === region && drillDown?.bucket === bucket}
+                        />
+                      </td>
+                    ))}
+                    <td style={{ ...td, textAlign:'right', fontWeight:700, color:'var(--black)' }}>{r.total}</td>
+                    <td style={{ ...td, textAlign:'right', color: rate >= 60 ? '#065F46' : rate >= 40 ? '#9C5700' : '#9C0006', fontWeight:600 }}>
+                      {r.total > 0 ? `${rate}%` : '-'}
+                    </td>
+                  </tr>
+                );
+              })}
+              {/* Totals row for Georgia */}
+              <tr style={{ background:'#FAFAFA', fontWeight:700 }}>
+                <td style={td} colSpan={4}>All Georgia</td>
+                {STATUS_BUCKETS.map(bucket => (
+                  <td key={bucket} style={{ ...td, textAlign:'right' }}>
+                    <CountButton
+                      count={totalsGA[bucket]}
+                      bucket={bucket}
+                      onClick={() => setDrillDown({ scope:'GA_ALL', bucket })}
+                      active={drillDown?.scope === 'GA_ALL' && drillDown?.bucket === bucket}
+                    />
+                  </td>
+                ))}
+                <td style={{ ...td, textAlign:'right' }}>{totalsGA.total}</td>
+                <td style={{ ...td, textAlign:'right' }}>{totalsGA.total > 0 ? `${Math.round(totalsGA.Accepted / totalsGA.total * 100)}%` : '-'}</td>
               </tr>
             </tbody>
           </table>
@@ -293,7 +431,7 @@ export default function MarketingReferralsPage() {
             }}>
               <div>
                 <div style={{ fontSize:14, fontWeight:700, color: BUCKET_COLORS[drillDown.bucket].color }}>
-                  {drillRows.length} {drillDown.bucket} - {drillDown.region === 'ALL' ? 'All Territories' : `Territory ${drillDown.region} (${TERRITORIES[drillDown.region]?.counties || ''})`}
+                  {drillRows.length} {drillDown.bucket} - {drillLabel(drillDown)}
                 </div>
                 <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>Click any patient row to expand details</div>
               </div>
