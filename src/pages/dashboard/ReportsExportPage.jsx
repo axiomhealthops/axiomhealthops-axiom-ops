@@ -25,123 +25,65 @@ function isCompleted(s)    { return _isCompletedRow({ status: s, event_type: '' 
 function isEval(e)         { return _isEvalRow({ event_type: e }); }
 function fmtDate(d) { return d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}) : '' ; }
  
+// ─── Report taxonomy (2026-06-09 reorganization) ─────────────────────────
+// Before: 12 inconsistent categories with "Clinical" vs "Clinical Dept",
+// "Auth" vs "Auth Dept" duplicates, cards in one big undifferentiated grid.
+// Now: 6 clean buckets + section headers + pinned high-priority reports.
+// The category drives both filter dropdown labels AND the visual section
+// the report renders into.
+const CATEGORY_META = {
+  'Executive & Revenue': { color: '#7C3AED', bg: '#F5F3FF', desc: 'Leadership-facing snapshots — KPIs, revenue, cross-department accountability' },
+  'Intake':              { color: '#0369A1', bg: '#EFF6FF', desc: 'Referral funnel — sources, conversions, this-week activity' },
+  'Authorization':       { color: '#1565C0', bg: '#EFF6FF', desc: 'Auth inventory — active, pending, stalled, renewal, expiring' },
+  'Care Coordination':   { color: '#0E7490', bg: '#ECFEFF', desc: 'Patient pipeline health — scheduling, frequency, notes, on-hold' },
+  'Clinical':            { color: '#D97706', bg: '#FFFBEB', desc: 'Patient-level clinical performance, discipline mix, risk roster' },
+  'Operations':          { color: '#065F46', bg: '#ECFDF5', desc: 'Census, masters, missed/cancelled, clinician productivity, regional rollups' },
+};
+const CATEGORY_ORDER = Object.keys(CATEGORY_META);
+
 const REPORTS = [
-  {
-    id: 'kpi_summary',
-    icon: '📊',
-    title: 'Company KPI Summary',
-    desc: 'High-level KPIs: visits, revenue, intake conversion, auth approval rate. Ideal for leadership presentations.',
-    formats: ['xlsx','csv'],
-    category: 'Executive',
-  },
-  {
-    id: 'patient_performance',
-    icon: '👤',
-    title: 'Patient Performance Report',
-    desc: 'Per-patient visit history with completed, cancelled, missed counts. Share with Regional Managers for PCP updates.',
-    formats: ['xlsx','csv'],
-    category: 'Clinical',
-  },
-  {
-    id: 'non_compliance',
-    icon: '🚫',
-    title: 'Non-Compliance Report',
-    desc: 'Patients with 2+ cancellations — evidence of non-compliance for clinical and payer documentation.',
-    formats: ['xlsx','csv'],
-    category: 'Clinical',
-  },
-  {
-    id: 'intake_referrals',
-    icon: '📥',
-    title: 'Intake Referrals Export',
-    desc: 'Full referral log with patient, insurance, diagnosis, status, PCP, and denial reason.',
-    formats: ['xlsx','csv'],
-    category: 'Intake',
-  },
-  {
-    id: 'auth_status',
-    icon: '🔐',
-    title: 'Authorization Status Report',
-    desc: 'All auths with visits authorized/used/remaining, expiry dates, and alert flags.',
-    formats: ['xlsx','csv'],
-    category: 'Authorization',
-  },
-  {
-    id: 'revenue_by_region',
-    icon: '💰',
-    title: 'Revenue by Region',
-    desc: 'Completed visits and estimated revenue broken down by region and regional manager.',
-    formats: ['xlsx','csv'],
-    category: 'Financial',
-  },
-  {
-    id: 'clinician_productivity',
-    icon: '📈',
-    title: 'Clinician Productivity Report',
-    desc: 'Per-clinician visit counts (completed, cancelled, missed), revenue contribution, and target attainment.',
-    formats: ['xlsx','csv'],
-    category: 'Operations',
-  },
-  {
-    id: 'expiring_auths',
-    icon: '⏰',
-    title: 'Expiring Authorizations',
-    desc: 'Patients whose auth expires within 30 days or have ≤5 visits remaining. Action list for auth team.',
-    formats: ['xlsx','csv'],
-    category: 'Authorization',
-  },
-  {
-    id: 'regional_manager_summary',
-    icon: '🗺',
-    title: 'Regional Manager Summary',
-    desc: 'Patient list per region with insurance, visit totals, and auth status. Ready to share with each RM.',
-    formats: ['xlsx','csv'],
-    category: 'Operations',
-  },
-  {
-    id: 'frequency_review',
-    icon: '⚖',
-    title: 'Frequency Review Queue',
-    desc: 'Active patients with visit frequency, last visit date, visits used vs authorized, and days since last seen. Flags patients overdue for frequency review.',
-    formats: ['xlsx','csv'],
-    category: 'Clinical',
-  },
-  {
-    id: 'patient_census',
-    icon: '🩺',
-    title: 'Patient Census Export',
-    desc: 'Current census snapshot — Summary, Full Census, Active Only, and a Status Drift audit (cases where census_data and patient_master disagree). Template is the blank Pariox-format upload sheet for audits and bulk re-imports.',
-    formats: ['xlsx','csv','template'],
-    category: 'Operations',
-  },
+  // ── EXECUTIVE & REVENUE (5) — leadership / board / cross-cutting ──
+  { id: 'kpi_summary',              icon: '📊', title: 'Company KPI Summary',                desc: 'High-level KPIs: visits, revenue, intake conversion, auth approval rate. Ideal for leadership presentations.', formats: ['xlsx','csv'], category: 'Executive & Revenue', pinned: true },
+  { id: 'revenue_by_region',        icon: '💰', title: 'Revenue by Region',                  desc: 'Completed visits and estimated revenue broken down by region and regional manager.', formats: ['xlsx','csv'], category: 'Executive & Revenue', pinned: true },
+  { id: 'payer_performance',        icon: '🏦', title: 'Payer Performance Report',           desc: 'Per-payer revenue, visit volume, completion rate, auth approval rate, days-to-approve. Strategic input for renegotiation conversations.', formats: ['xlsx','csv'], category: 'Executive & Revenue', pinned: true },
+  { id: 'conversion_funnel',        icon: '🔻', title: 'Conversion Funnel (by month)',       desc: 'Referral → Accepted → On Census → SOC → Active. Monthly cohort drop-off analysis with region slice. Shows where patients leak out.', formats: ['xlsx','csv'], category: 'Executive & Revenue', pinned: true },
+  { id: 'ops_stuck',                icon: '⚠️', title: 'Stuck Patients (all stages)',        desc: 'Every patient past their stage threshold — cross-department accountability list.', formats: ['xlsx','csv'], category: 'Executive & Revenue' },
 
-  // ── 2026-05-17 consolidation: moved 14 dept reports + Missed/Cancelled here
-  //    from DepartmentReportsPage.jsx + MissedCancelledReportPage.jsx so all
-  //    exports live in one place. Categories use a "Dept · X" prefix to group
-  //    them visually in the category filter.
+  // ── INTAKE (3) — funnel top, referral sources ──
+  { id: 'intake_this_week',         icon: '📥', title: "This Week's Referrals",              desc: 'New referrals received in the last 7 days — with welcome call + accept/decline status.', formats: ['xlsx','csv'], category: 'Intake', pinned: true },
+  { id: 'intake_referrals',         icon: '🗂', title: 'Intake Referrals Export (full log)', desc: 'Full referral log with patient, insurance, diagnosis, status, PCP, and denial reason.', formats: ['xlsx','csv'], category: 'Intake' },
+  { id: 'intake_ref_sources',       icon: '📊', title: 'Referral Source Breakdown',          desc: 'Which Pariox codes are sending referrals, mapped to insurance + accept rate.', formats: ['xlsx','csv'], category: 'Intake' },
 
-  // AUTHORIZATION DEPARTMENT
-  { id: 'auth_all',             icon: '🔐', title: 'All Active Authorizations',           desc: 'Every currently-active auth with PPO?, dates, visit counts, status, and assigned auth coordinator.', formats: ['xlsx','csv'], category: 'Auth Dept' },
-  { id: 'auth_pending_active',  icon: '⏳', title: 'Active - Auth Pending Patients',      desc: 'Patients currently being seen with status "Active - Auth Pending" — owe an auth, still seeing them.', formats: ['xlsx','csv'], category: 'Auth Dept' },
-  { id: 'auth_stalled',         icon: '🪦', title: 'Stalled Auths (Submitted >5d)',       desc: 'Auths submitted more than 5 days ago that still have no approval — action list for the Auth team.', formats: ['xlsx','csv'], category: 'Auth Dept' },
-  { id: 'auth_ppo',             icon: '💳', title: 'PPO Patients',                        desc: 'Every patient on a PPO plan — different auth rules apply. Pulls from audit-imported is_ppo OR existing insurance_type match.', formats: ['xlsx','csv'], category: 'Auth Dept' },
-  { id: 'auth_renewal',         icon: '🔄', title: 'Renewal Pipeline (≤30 days)',         desc: 'Auths expiring in the next 30 days — sorted by days remaining.', formats: ['xlsx','csv'], category: 'Auth Dept' },
-  // CARE COORDINATION DEPARTMENT
-  { id: 'cc_not_scheduled',     icon: '📅', title: 'Patients Not Scheduled (next 14d)',   desc: 'Active patients with NO scheduled visits in the next 14 days. Uses real visit_schedule_data — more accurate than the audit flag.', formats: ['xlsx','csv'], category: 'Care Coord' },
-  { id: 'cc_frequency_missing', icon: '⚖', title: 'Frequency Missing / Needs Review',     desc: 'Active patients with no frequency set or marked for review.', formats: ['xlsx','csv'], category: 'Care Coord' },
-  { id: 'cc_notes_log',         icon: '📝', title: 'CC Notes Log (30 days)',              desc: 'All care coordination notes incl. audit imports — chronological view.', formats: ['xlsx','csv'], category: 'Care Coord' },
-  { id: 'cc_on_hold_waitlist',  icon: '⏸', title: 'On Hold + Waitlist Active List',      desc: 'Patients on hold or waitlisted — sorted by days inactive (recovery candidates).', formats: ['xlsx','csv'], category: 'Care Coord' },
-  // CLINICAL DEPARTMENT
-  { id: 'clinical_discipline',  icon: '🩺', title: 'Discipline Breakdown (PT vs OT)',    desc: 'How patients split between Lymphedema PT and OT, by region — capacity planning input. Multi-sheet (Summary + All Patients).', formats: ['xlsx','csv'], category: 'Clinical Dept' },
-  { id: 'clinical_eval_pending',icon: '⏱', title: 'Eval Pending Backlog',                desc: 'Patients awaiting clinical evaluation — 48h SLA.', formats: ['xlsx','csv'], category: 'Clinical Dept' },
-  { id: 'clinical_high_risk',   icon: '⚠', title: 'High Risk Patients (LOC + CareMap)',  desc: 'Full high-risk roster with CareMap, LOC level, wounds, comorbidities, falls, compliance & environmental risk. Multi-sheet (LOC 4+5 first, then full list).', formats: ['xlsx','csv'], category: 'Clinical Dept' },
-  // INTAKE DEPARTMENT
-  { id: 'intake_this_week',     icon: '📥', title: 'This Week\'s Referrals',              desc: 'New referrals received in the last 7 days — with welcome call + accept/decline status.', formats: ['xlsx','csv'], category: 'Intake Dept' },
-  { id: 'intake_ref_sources',   icon: '📊', title: 'Referral Source Breakdown',           desc: 'Which Pariox codes are sending referrals, mapped to insurance + accept rate.', formats: ['xlsx','csv'], category: 'Intake Dept' },
-  // OPERATIONS (cross-dept)
-  { id: 'ops_master',           icon: '📋', title: 'Full Patient Master',                 desc: 'Mirrors the original audit XLSX — every column for every active patient. Use this for the next round of the weekly audit.', formats: ['xlsx','csv'], category: 'Operations' },
-  { id: 'ops_stuck',            icon: '⚠️', title: 'Stuck Patients (all stages)',         desc: 'Every patient past their stage threshold — cross-department accountability list.', formats: ['xlsx','csv'], category: 'Operations' },
-  { id: 'ops_missed_cancelled', icon: '📉', title: 'Missed & Cancelled Visits',           desc: 'All missed and cancelled visits from visit_schedule_data — replaces the standalone Missed/Cancelled page.', formats: ['xlsx','csv'], category: 'Operations' },
+  // ── AUTHORIZATION (7) — full lifecycle: active, pending, stalled, renewal, expiring ──
+  { id: 'auth_status',              icon: '🔐', title: 'Authorization Status (all)',         desc: 'All auths with visits authorized/used/remaining, expiry dates, and alert flags.', formats: ['xlsx','csv'], category: 'Authorization' },
+  { id: 'auth_all',                 icon: '✅', title: 'All Active Authorizations',          desc: 'Every currently-active auth with PPO?, dates, visit counts, status, and assigned auth coordinator.', formats: ['xlsx','csv'], category: 'Authorization' },
+  { id: 'auth_pending_active',      icon: '⏳', title: 'Active - Auth Pending Patients',     desc: 'Patients currently being seen with status "Active - Auth Pending" — owe an auth, still seeing them.', formats: ['xlsx','csv'], category: 'Authorization', pinned: true },
+  { id: 'auth_stalled',             icon: '🪦', title: 'Stalled Auths (Submitted >5d)',      desc: 'Auths submitted more than 5 days ago that still have no approval — action list for the Auth team.', formats: ['xlsx','csv'], category: 'Authorization', pinned: true },
+  { id: 'expiring_auths',           icon: '⏰', title: 'Expiring Authorizations (≤30d)',     desc: 'Patients whose auth expires within 30 days or have ≤5 visits remaining. Action list for auth team.', formats: ['xlsx','csv'], category: 'Authorization' },
+  { id: 'auth_renewal',             icon: '🔄', title: 'Renewal Pipeline (≤30 days)',        desc: 'Auths expiring in the next 30 days — sorted by days remaining.', formats: ['xlsx','csv'], category: 'Authorization' },
+  { id: 'auth_ppo',                 icon: '💳', title: 'PPO Patients',                       desc: 'Every patient on a PPO plan — different auth rules apply. Pulls from audit-imported is_ppo OR existing insurance_type match.', formats: ['xlsx','csv'], category: 'Authorization' },
+
+  // ── CARE COORDINATION (4) — scheduling, frequency, notes, on-hold ──
+  { id: 'cc_not_scheduled',         icon: '📅', title: 'Patients Not Scheduled (next 14d)',  desc: 'Active patients with NO scheduled visits in the next 14 days. Uses real visit_schedule_data — more accurate than the audit flag.', formats: ['xlsx','csv'], category: 'Care Coordination', pinned: true },
+  { id: 'frequency_review',         icon: '⚖', title: 'Frequency Review Queue',              desc: 'Active patients with visit frequency, last visit date, visits used vs authorized, and days since last seen. Flags patients overdue for frequency review.', formats: ['xlsx','csv'], category: 'Care Coordination' },
+  { id: 'cc_frequency_missing',     icon: '🛠', title: 'Frequency Missing / Needs Review',   desc: 'Active patients with no frequency set or marked for review.', formats: ['xlsx','csv'], category: 'Care Coordination' },
+  { id: 'cc_on_hold_waitlist',      icon: '⏸', title: 'On Hold + Waitlist Active List',     desc: 'Patients on hold or waitlisted — sorted by days inactive (recovery candidates).', formats: ['xlsx','csv'], category: 'Care Coordination' },
+  { id: 'cc_notes_log',             icon: '📝', title: 'CC Notes Log (30 days)',             desc: 'All care coordination notes incl. audit imports — chronological view.', formats: ['xlsx','csv'], category: 'Care Coordination' },
+
+  // ── CLINICAL (5) — patient performance, discipline mix, risk roster ──
+  { id: 'patient_performance',      icon: '👤', title: 'Patient Performance Report',         desc: 'Per-patient visit history with completed, cancelled, missed counts. Share with Regional Managers for PCP updates.', formats: ['xlsx','csv'], category: 'Clinical', pinned: true },
+  { id: 'non_compliance',           icon: '🚫', title: 'Non-Compliance Patients (2+ cancels)', desc: 'Patients with 2+ cancellations — evidence of non-compliance for clinical and payer documentation.', formats: ['xlsx','csv'], category: 'Clinical' },
+  { id: 'clinical_discipline',      icon: '🩺', title: 'Discipline Breakdown (PT vs OT)',    desc: 'How patients split between Lymphedema PT and OT, by region — capacity planning input. Multi-sheet (Summary + All Patients).', formats: ['xlsx','csv'], category: 'Clinical' },
+  { id: 'clinical_eval_pending',    icon: '⏱', title: 'Eval Pending Backlog',                desc: 'Patients awaiting clinical evaluation — 48h SLA.', formats: ['xlsx','csv'], category: 'Clinical' },
+  { id: 'clinical_high_risk',       icon: '⚠', title: 'High Risk Patients (LOC + CareMap)',  desc: 'Full high-risk roster with CareMap, LOC level, wounds, comorbidities, falls, compliance & environmental risk. Multi-sheet (LOC 4+5 first, then full list).', formats: ['xlsx','csv'], category: 'Clinical' },
+
+  // ── OPERATIONS (6) — census, masters, missed/cancelled, productivity, RM rollup ──
+  { id: 'patient_census',           icon: '🏥', title: 'Patient Census Export',              desc: 'Current census snapshot — Summary, Full Census, Active Only, and a Status Drift audit (cases where census_data and patient_master disagree). Template is the blank Pariox-format upload sheet for audits and bulk re-imports.', formats: ['xlsx','csv','template'], category: 'Operations', pinned: true },
+  { id: 'ops_doc_lag',              icon: '⏱', title: 'Documentation Lag Report',            desc: 'Per-clinician: visits with past visit_dates that are still marked Scheduled in Pariox. Catches the "Monday visits not documented" lag that hides revenue.', formats: ['xlsx','csv'], category: 'Operations', pinned: true },
+  { id: 'ops_master',               icon: '📋', title: 'Full Patient Master',                desc: 'Mirrors the original audit XLSX — every column for every active patient. Use this for the next round of the weekly audit.', formats: ['xlsx','csv'], category: 'Operations' },
+  { id: 'ops_missed_cancelled',     icon: '📉', title: 'Missed & Cancelled Visits',          desc: 'All missed and cancelled visits from visit_schedule_data — replaces the standalone Missed/Cancelled page.', formats: ['xlsx','csv'], category: 'Operations', pinned: true },
+  { id: 'clinician_productivity',   icon: '📈', title: 'Clinician Productivity Report',      desc: 'Per-clinician visit counts (completed, cancelled, missed), revenue contribution, and target attainment.', formats: ['xlsx','csv'], category: 'Operations' },
+  { id: 'regional_manager_summary', icon: '🗺', title: 'Regional Manager Summary',           desc: 'Patient list per region with insurance, visit totals, and auth status. Ready to share with each RM.', formats: ['xlsx','csv'], category: 'Operations' },
 ];
  
 export default function ReportsExportPage() {
@@ -1083,6 +1025,377 @@ export default function ReportsExportPage() {
           format === 'xlsx' ? exportXLSX(data, 'Missed & Cancelled', 'Missed_Cancelled'+suffix) : exportCSV(data, 'Missed_Cancelled'+suffix);
           break;
         }
+
+        // ── NEW (2026-06-09): Documentation Lag Report ────────────────────
+        // Catches the "visit happened but isn't marked Completed in Pariox yet"
+        // pattern. We learned this matters the hard way when Monday 6/8 showed
+        // $0 revenue on Director Command because 181 of 195 actual visits were
+        // still status='Scheduled' from the clinician's lagging documentation.
+        case 'ops_doc_lag': {
+          const fv = applyFilters(visits);
+          const today = new Date(); today.setHours(0,0,0,0);
+          const tStr = today.toISOString().slice(0,10);
+
+          // Apply the per-(patient,visit_date,staff) latest-uploaded_at dedup
+          // (same rule as ProductivityPage — see CLAUDE.md #10).
+          const latestByKey = new Map();
+          fv.forEach(v => {
+            const k = (v.patient_name||'') + '|' + (v.visit_date||'') + '|' + (v.staff_name||'');
+            const existing = latestByKey.get(k);
+            if (!existing || (v.uploaded_at && (!existing.uploaded_at || v.uploaded_at > existing.uploaded_at))) {
+              latestByKey.set(k, v);
+            }
+          });
+          const deduped = Array.from(latestByKey.values());
+
+          // Lagging = visit_date in the past AND status='Scheduled' AND not a cancel
+          const lagging = deduped.filter(v => {
+            if (!v.visit_date || v.visit_date >= tStr) return false;
+            if ((v.status||'').toLowerCase() !== 'scheduled') return false;
+            if (isCancelled(v.event_type, v.status)) return false;
+            return true;
+          });
+
+          // Summary: per clinician
+          const byStaff = {};
+          lagging.forEach(v => {
+            const s = v.staff_name || 'UNKNOWN';
+            if (!byStaff[s]) byStaff[s] = { rows: [], oldestDate: '9999-12-31' };
+            byStaff[s].rows.push(v);
+            if (v.visit_date < byStaff[s].oldestDate) byStaff[s].oldestDate = v.visit_date;
+          });
+          const summaryRows = Object.entries(byStaff).map(([staff, info]) => {
+            const oldest = new Date(info.oldestDate + 'T00:00:00');
+            const oldestLagDays = Math.floor((today - oldest) / 86400000);
+            return {
+              'Clinician': staff,
+              'Lagging Visits': info.rows.length,
+              'Revenue at Risk ($)': info.rows.length * RATE,
+              'Oldest Lag (days)': oldestLagDays,
+              'Oldest Visit Date': fmtDate(info.oldestDate),
+              'Regions Affected': Array.from(new Set(info.rows.map(r => r.region).filter(Boolean))).sort().join(', '),
+            };
+          }).sort((a,b) => b['Lagging Visits'] - a['Lagging Visits']);
+
+          // Detail: every lagging row
+          const detailRows = lagging.map(v => {
+            const days = Math.floor((today - new Date(v.visit_date + 'T00:00:00')) / 86400000);
+            return {
+              'Visit Date': fmtDate(v.visit_date),
+              'Lag (days)': days,
+              'Clinician': v.staff_name || '',
+              'Patient': v.patient_name || '',
+              'Region': v.region || '',
+              'Discipline': v.discipline || '',
+              'Event Type': v.event_type || '',
+              'Status (current)': v.status || '',
+              'Insurance': v.insurance || '',
+              'Revenue if Completed ($)': RATE,
+            };
+          }).sort((a,b) => b['Lag (days)'] - a['Lag (days)']);
+
+          const totalRevAtRisk = lagging.length * RATE;
+          const totalsRow = [{
+            'Report Date': fmtDate(tStr),
+            'Total Lagging Visits': lagging.length,
+            'Total Revenue at Risk ($)': totalRevAtRisk,
+            'Clinicians Affected': Object.keys(byStaff).length,
+            'Avg Lag (days)': lagging.length ? Math.round(lagging.reduce((s,v) => s + Math.floor((today - new Date(v.visit_date + 'T00:00:00'))/86400000), 0) / lagging.length) : 0,
+          }];
+
+          if (format === 'xlsx') {
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(totalsRow), 'Headline');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'By Clinician');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailRows), 'Every Lagging Visit');
+            XLSX.writeFile(wb, 'Documentation_Lag'+suffix+'.xlsx');
+          } else {
+            exportCSV(detailRows, 'Documentation_Lag'+suffix);
+          }
+          break;
+        }
+
+        // ── NEW (2026-06-09): Payer Performance Report ────────────────────
+        // Per-payer revenue, visit volume, completion rate, auth metrics.
+        // Strategic input for Yvonne's payer renegotiation conversations.
+        case 'payer_performance': {
+          const fv = applyFilters(visits);
+
+          // Deduplicate visits the same way the dashboard does
+          const latestByKey = new Map();
+          fv.forEach(v => {
+            const k = (v.patient_name||'') + '|' + (v.visit_date||'') + '|' + (v.staff_name||'');
+            const existing = latestByKey.get(k);
+            if (!existing || (v.uploaded_at && (!existing.uploaded_at || v.uploaded_at > existing.uploaded_at))) {
+              latestByKey.set(k, v);
+            }
+          });
+          const deduped = Array.from(latestByKey.values());
+
+          // Aggregate visits by insurance — fall back to census insurance if visit row missing it
+          const censusInsByPatient = new Map();
+          census.forEach(c => { if (c.patient_name) censusInsByPatient.set(c.patient_name.trim(), c.insurance); });
+          const payerStats = {};
+          deduped.forEach(v => {
+            const payer = (v.insurance || censusInsByPatient.get((v.patient_name||'').trim()) || 'Unknown').trim();
+            if (!payerStats[payer]) {
+              payerStats[payer] = { completed:0, cancelled:0, missed:0, scheduled:0, total:0, patients:new Set() };
+            }
+            const ps = payerStats[payer];
+            ps.total++;
+            if (v.patient_name) ps.patients.add(v.patient_name);
+            if (isCancelled(v.event_type, v.status)) ps.cancelled++;
+            else if (isCompleted(v.status)) ps.completed++;
+            else if (/missed/i.test(v.status||'')) ps.missed++;
+            else if ((v.status||'').toLowerCase() === 'scheduled') ps.scheduled++;
+          });
+
+          // Aggregate auth metrics by insurance
+          const authStats = {};
+          auth.forEach(a => {
+            const payer = (a.insurance || 'Unknown').trim();
+            if (!authStats[payer]) {
+              authStats[payer] = {
+                total:0, active:0, pending:0, approved:0, submitted:0, denied:0, expired:0,
+                visits_authorized:0, visits_used:0,
+                daysToApproveTotal:0, daysToApproveCount:0,
+                ppoCount:0,
+              };
+            }
+            const as = authStats[payer];
+            as.total++;
+            const st = (a.auth_status||'').toLowerCase();
+            if (st === 'active') as.active++;
+            else if (st === 'pending') as.pending++;
+            else if (st === 'approved') as.approved++;
+            else if (st === 'submitted') as.submitted++;
+            else if (st === 'denied') as.denied++;
+            else if (st === 'expired') as.expired++;
+            if (a.is_ppo) as.ppoCount++;
+            as.visits_authorized += (a.visits_authorized || 0);
+            as.visits_used += (a.visits_used || 0);
+            if (a.auth_submitted_date && a.auth_approved_date) {
+              const sd = new Date(a.auth_submitted_date);
+              const ad = new Date(a.auth_approved_date);
+              const days = Math.floor((ad - sd) / 86400000);
+              if (days >= 0 && days < 90) {
+                as.daysToApproveTotal += days;
+                as.daysToApproveCount++;
+              }
+            }
+          });
+
+          const allPayers = new Set([...Object.keys(payerStats), ...Object.keys(authStats)]);
+          const rows = Array.from(allPayers).map(payer => {
+            const ps = payerStats[payer] || { completed:0, cancelled:0, missed:0, scheduled:0, total:0, patients:new Set() };
+            const as = authStats[payer] || { total:0, active:0, pending:0, approved:0, submitted:0, denied:0, expired:0, visits_authorized:0, visits_used:0, daysToApproveTotal:0, daysToApproveCount:0, ppoCount:0 };
+            const completedRevenue = ps.completed * RATE;
+            const lostRevenue = (ps.cancelled + ps.missed) * RATE;
+            const outcomes = ps.completed + ps.cancelled + ps.missed;
+            const completionPct = outcomes > 0 ? Math.round(ps.completed / outcomes * 100) : 0;
+            const approvalDenom = as.approved + as.active + as.denied;
+            const approvalPct = approvalDenom > 0 ? Math.round(((as.approved + as.active) / approvalDenom) * 100) : 0;
+            const avgDaysToApprove = as.daysToApproveCount > 0 ? Math.round(as.daysToApproveTotal / as.daysToApproveCount) : null;
+            return {
+              'Payer': payer,
+              'Unique Patients': ps.patients.size,
+              'Visits Completed': ps.completed,
+              'Completed Revenue ($)': completedRevenue,
+              'Visits Cancelled': ps.cancelled,
+              'Visits Missed': ps.missed,
+              'Lost Revenue ($)': lostRevenue,
+              'Completion Rate %': completionPct,
+              'Total Auths': as.total,
+              'Active Auths': as.active,
+              'Pending Auths': as.pending,
+              'Submitted Auths': as.submitted,
+              'Approved Auths': as.approved,
+              'Denied Auths': as.denied,
+              'Expired Auths': as.expired,
+              'PPO Auths': as.ppoCount,
+              'Auth Approval Rate %': approvalPct,
+              'Avg Days to Approve': avgDaysToApprove ?? '—',
+              'Visits Authorized (sum)': as.visits_authorized,
+              'Visits Used (sum)': as.visits_used,
+              'Auth Utilization %': as.visits_authorized > 0 ? Math.round(as.visits_used / as.visits_authorized * 100) : 0,
+            };
+          }).sort((a,b) => b['Completed Revenue ($)'] - a['Completed Revenue ($)']);
+
+          // Totals row
+          const tot = rows.reduce((acc, r) => {
+            acc.patients += r['Unique Patients'];
+            acc.completed += r['Visits Completed'];
+            acc.completedRev += r['Completed Revenue ($)'];
+            acc.lostRev += r['Lost Revenue ($)'];
+            acc.cancelled += r['Visits Cancelled'];
+            acc.missed += r['Visits Missed'];
+            return acc;
+          }, { patients:0, completed:0, completedRev:0, lostRev:0, cancelled:0, missed:0 });
+          rows.push({
+            'Payer': 'TOTAL',
+            'Unique Patients': tot.patients,
+            'Visits Completed': tot.completed,
+            'Completed Revenue ($)': tot.completedRev,
+            'Visits Cancelled': tot.cancelled,
+            'Visits Missed': tot.missed,
+            'Lost Revenue ($)': tot.lostRev,
+            'Completion Rate %': (tot.completed + tot.cancelled + tot.missed) > 0 ? Math.round(tot.completed / (tot.completed + tot.cancelled + tot.missed) * 100) : 0,
+          });
+
+          format === 'xlsx' ? exportXLSX(rows, 'Payer Performance', 'Payer_Performance'+suffix) : exportCSV(rows, 'Payer_Performance'+suffix);
+          break;
+        }
+
+        // ── NEW (2026-06-09): Conversion Funnel Report ────────────────────
+        // Monthly cohort funnel: Referral → Accepted → On Census → SOC → Active
+        // Shows drop-off rate at each stage with by-month and by-region slices.
+        case 'conversion_funnel': {
+          const fi = applyFilters(intake, 'date_received');
+
+          // Build patient lookup map
+          const censusByName = new Map();
+          census.forEach(c => {
+            const k = (c.patient_name||'').trim().toLowerCase();
+            if (k) censusByName.set(k, c);
+          });
+          const socByName = new Map();
+          auth.forEach(a => {
+            const k = (a.patient_name||'').trim().toLowerCase();
+            if (k && a.soc_date && !socByName.has(k)) socByName.set(k, a.soc_date);
+          });
+
+          const ACTIVE_STATUSES = new Set(['Active','active','Active - Auth Pending','Active - Auth Pendin']);
+
+          // Helper: classify each referral row through the funnel
+          const classify = (r) => {
+            const key = (r.patient_name||'').trim().toLowerCase();
+            const accepted = (r.referral_status||'').toLowerCase() === 'accepted';
+            const onCensus = censusByName.has(key);
+            const hasSOC = socByName.has(key) || (onCensus && censusByName.get(key)?.first_seen_date);
+            const censusRow = censusByName.get(key);
+            const isActive = onCensus && ACTIVE_STATUSES.has(censusRow?.status);
+            return { accepted, onCensus, hasSOC, isActive };
+          };
+
+          // ── Sheet 1: Funnel by Month ──
+          const byMonth = {};
+          fi.forEach(r => {
+            const d = r.date_received || '';
+            const monthKey = d ? d.slice(0,7) : 'UNKNOWN';
+            if (!byMonth[monthKey]) byMonth[monthKey] = { received:0, accepted:0, onCensus:0, hasSOC:0, isActive:0 };
+            const c = classify(r);
+            byMonth[monthKey].received++;
+            if (c.accepted) byMonth[monthKey].accepted++;
+            if (c.onCensus) byMonth[monthKey].onCensus++;
+            if (c.hasSOC) byMonth[monthKey].hasSOC++;
+            if (c.isActive) byMonth[monthKey].isActive++;
+          });
+          const monthRows = Object.keys(byMonth).sort().map(month => {
+            const s = byMonth[month];
+            const pct = (a,b) => b > 0 ? Math.round(a/b*100) : 0;
+            return {
+              'Month': month,
+              'Referrals Received': s.received,
+              'Accepted': s.accepted,
+              'Acceptance Rate %': pct(s.accepted, s.received),
+              'On Census': s.onCensus,
+              'Accept→Census %': pct(s.onCensus, s.accepted),
+              'Has SOC': s.hasSOC,
+              'Census→SOC %': pct(s.hasSOC, s.onCensus),
+              'Currently Active': s.isActive,
+              'SOC→Active %': pct(s.isActive, s.hasSOC),
+              'Overall Conversion % (Referral→Active)': pct(s.isActive, s.received),
+              'Drop-off: Reject ($ lost est.)': (s.received - s.accepted) * RATE * 5, // est 5 visits/patient lost
+              'Drop-off: Post-Accept ($ lost est.)': (s.accepted - s.isActive) * RATE * 5,
+            };
+          });
+
+          // ── Sheet 2: Funnel by Region ──
+          const byRegion = {};
+          fi.forEach(r => {
+            const region = r.region || 'UNKNOWN';
+            if (!byRegion[region]) byRegion[region] = { received:0, accepted:0, onCensus:0, hasSOC:0, isActive:0 };
+            const c = classify(r);
+            byRegion[region].received++;
+            if (c.accepted) byRegion[region].accepted++;
+            if (c.onCensus) byRegion[region].onCensus++;
+            if (c.hasSOC) byRegion[region].hasSOC++;
+            if (c.isActive) byRegion[region].isActive++;
+          });
+          const regionRows = Object.keys(byRegion).sort().map(region => {
+            const s = byRegion[region];
+            const pct = (a,b) => b > 0 ? Math.round(a/b*100) : 0;
+            return {
+              'Region': region,
+              'Regional Manager': REGIONAL_MANAGERS[region] || '—',
+              'Referrals Received': s.received,
+              'Accepted': s.accepted,
+              'Acceptance Rate %': pct(s.accepted, s.received),
+              'On Census': s.onCensus,
+              'Has SOC': s.hasSOC,
+              'Currently Active': s.isActive,
+              'Overall Conversion %': pct(s.isActive, s.received),
+            };
+          });
+
+          // ── Sheet 3: Funnel by Payer ──
+          const byPayer = {};
+          fi.forEach(r => {
+            const payer = (r.insurance || 'Unknown').trim();
+            if (!byPayer[payer]) byPayer[payer] = { received:0, accepted:0, onCensus:0, hasSOC:0, isActive:0 };
+            const c = classify(r);
+            byPayer[payer].received++;
+            if (c.accepted) byPayer[payer].accepted++;
+            if (c.onCensus) byPayer[payer].onCensus++;
+            if (c.hasSOC) byPayer[payer].hasSOC++;
+            if (c.isActive) byPayer[payer].isActive++;
+          });
+          const payerRows = Object.entries(byPayer).map(([payer, s]) => {
+            const pct = (a,b) => b > 0 ? Math.round(a/b*100) : 0;
+            return {
+              'Payer': payer,
+              'Referrals Received': s.received,
+              'Accepted': s.accepted,
+              'Acceptance Rate %': pct(s.accepted, s.received),
+              'On Census': s.onCensus,
+              'Has SOC': s.hasSOC,
+              'Currently Active': s.isActive,
+              'Overall Conversion %': pct(s.isActive, s.received),
+            };
+          }).sort((a,b) => b['Referrals Received'] - a['Referrals Received']);
+
+          // ── Sheet 4: Per-Patient Trace (for debugging / drill-down) ──
+          const traceRows = fi.map(r => {
+            const c = classify(r);
+            const censusRow = censusByName.get((r.patient_name||'').trim().toLowerCase());
+            return {
+              'Date Received': fmtDate(r.date_received),
+              'Patient': r.patient_name || '',
+              'Region': r.region || '',
+              'Insurance': r.insurance || '',
+              'Referral Status': r.referral_status || '',
+              'Accepted?': c.accepted ? 'Yes' : 'No',
+              'On Census?': c.onCensus ? 'Yes' : 'No',
+              'Has SOC?': c.hasSOC ? 'Yes' : 'No',
+              'Is Active?': c.isActive ? 'Yes' : 'No',
+              'Current Census Status': censusRow?.status || '—',
+              'Denial Reason (if denied)': r.denial_reason || '',
+              'Furthest Stage Reached': c.isActive ? 'Active' : c.hasSOC ? 'SOC' : c.onCensus ? 'Census' : c.accepted ? 'Accepted' : 'Referral Only',
+            };
+          }).sort((x,y) => (y['Date Received']||'').localeCompare(x['Date Received']||''));
+
+          if (format === 'xlsx') {
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(monthRows), 'Funnel by Month');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(regionRows), 'Funnel by Region');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(payerRows), 'Funnel by Payer');
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(traceRows), 'Per-Patient Trace');
+            XLSX.writeFile(wb, 'Conversion_Funnel'+suffix+'.xlsx');
+          } else {
+            exportCSV(monthRows, 'Conversion_Funnel'+suffix);
+          }
+          break;
+        }
       }
 
       setSuccess(reportId + '_' + format);
@@ -1094,8 +1407,18 @@ export default function ReportsExportPage() {
     setGenerating(null);
   }
  
-  const categories = ['ALL', ...new Set(REPORTS.map(r => r.category))];
-  const filtered = REPORTS.filter(r => categoryFilter === 'ALL' || r.category === categoryFilter);
+  const categories = ['ALL', 'Pinned', ...CATEGORY_ORDER];
+  const filtered = REPORTS.filter(r => {
+    if (categoryFilter === 'ALL') return true;
+    if (categoryFilter === 'Pinned') return r.pinned;
+    return r.category === categoryFilter;
+  });
+  const pinnedReports = REPORTS.filter(r => r.pinned);
+  const grouped = CATEGORY_ORDER.map(cat => ({
+    category: cat,
+    meta: CATEGORY_META[cat],
+    items: filtered.filter(r => r.category === cat),
+  })).filter(g => g.items.length > 0);
  
   useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_tracker', 'clinicians', 'intake_referrals', 'care_coord_notes'], loadData);
 
@@ -1153,49 +1476,115 @@ export default function ReportsExportPage() {
           )}
         </div>
  
-        {/* Report cards */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(340px, 1fr))', gap:16 }}>
-          {filtered.map(report => {
-            const isGen = generating?.startsWith(report.id);
-            const isDone = success?.startsWith(report.id);
-            return (
-              <div key={report.id} style={{ background:'var(--card-bg)', border:`1px solid ${isDone?'#10B981':'var(--border)'}`, borderRadius:12, padding:20, display:'flex', flexDirection:'column', gap:12, transition:'border-color 0.3s' }}>
-                <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
-                  <div style={{ fontSize:28, lineHeight:1 }}>{report.icon}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
-                      <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>{report.title}</div>
-                      <span style={{ fontSize:9, fontWeight:700, color:'#7C3AED', background:'#F5F3FF', padding:'1px 6px', borderRadius:999, textTransform:'uppercase', letterSpacing:'0.05em' }}>{report.category}</span>
-                    </div>
-                    <div style={{ fontSize:12, color:'var(--gray)', lineHeight:1.5 }}>{report.desc}</div>
-                  </div>
-                </div>
-                {isDone && (
-                  <div style={{ fontSize:12, color:'#065F46', fontWeight:600, background:'#ECFDF5', padding:'6px 10px', borderRadius:6 }}>
-                    ✓ Downloaded successfully
-                  </div>
-                )}
-                <div style={{ display:'flex', gap:8 }}>
-                  {report.formats.map(fmt => (
-                    <button key={fmt} onClick={() => generate(report.id, fmt)}
-                      disabled={!!generating}
-                      style={{ flex:1, padding:'8px 12px', background:fmt==='xlsx'?'#065F46':fmt==='template'?'#7C3AED':'#1565C0', color:'#fff', border:'none', borderRadius:7, fontSize:12, fontWeight:600, cursor:generating?'wait':'pointer', opacity:generating?0.6:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-                      {isGen && generating?.endsWith(fmt) ? (
-                        <><span style={{ display:'inline-block', width:12, height:12, border:'2px solid rgba(255,255,255,0.4)', borderTopColor:'#fff', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} /> Generating…</>
-                      ) : fmt === 'template' ? (
-                        <>📋 Template</>
-                      ) : (
-                        <>{fmt === 'xlsx' ? '📊' : '📄'} Export {fmt.toUpperCase()}</>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {/* ── PINNED / MOST USED — only when not filtering to a single category ── */}
+        {categoryFilter === 'ALL' && pinnedReports.length > 0 && (
+          <SectionBlock
+            title="Most Used"
+            subtitle={`Quick access to the ${pinnedReports.length} reports run most often`}
+            color="#7C3AED"
+            bg="#F5F3FF"
+            icon="⭐"
+            items={pinnedReports}
+            generating={generating}
+            success={success}
+            generate={generate}
+          />
+        )}
+
+        {/* ── GROUPED BY DEPARTMENT BUCKET ── */}
+        {grouped.map(group => (
+          <SectionBlock
+            key={group.category}
+            title={group.category}
+            subtitle={group.meta.desc}
+            color={group.meta.color}
+            bg={group.meta.bg}
+            icon=""
+            count={group.items.length}
+            items={group.items}
+            generating={generating}
+            success={success}
+            generate={generate}
+          />
+        ))}
+
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// ─── SectionBlock: renders one department bucket with a header + card grid ──
+function SectionBlock({ title, subtitle, color, bg, icon, count, items, generating, success, generate }) {
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, paddingLeft:4 }}>
+        {icon && <div style={{ fontSize:18 }}>{icon}</div>}
+        <div style={{ fontSize:14, fontWeight:700, color:'var(--black)', letterSpacing:'-0.01em' }}>{title}</div>
+        <div style={{
+          fontSize:11, fontWeight:700, color, background:bg,
+          padding:'2px 9px', borderRadius:999, textTransform:'uppercase', letterSpacing:'0.04em',
+        }}>
+          {count != null ? `${count} report${count === 1 ? '' : 's'}` : 'Pinned'}
+        </div>
+        {subtitle && <div style={{ fontSize:12, color:'var(--gray)', marginLeft:6 }}>{subtitle}</div>}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(340px, 1fr))', gap:14 }}>
+        {items.map(report => {
+          const isGen = generating?.startsWith(report.id);
+          const isDone = success?.startsWith(report.id);
+          return (
+            <div key={report.id} style={{
+              background:'var(--card-bg)',
+              border:`1px solid ${isDone ? '#10B981' : 'var(--border)'}`,
+              borderLeft:`4px solid ${color}`,
+              borderRadius:10,
+              padding:'16px 18px',
+              display:'flex', flexDirection:'column', gap:11,
+              transition:'border-color 0.3s',
+            }}>
+              <div style={{ display:'flex', alignItems:'flex-start', gap:11 }}>
+                <div style={{ fontSize:24, lineHeight:1 }}>{report.icon}</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:'var(--black)', marginBottom:3, lineHeight:1.3 }}>
+                    {report.title}
+                    {report.pinned && <span style={{ marginLeft:6, fontSize:11 }}>{'⭐'}</span>}
+                  </div>
+                  <div style={{ fontSize:12, color:'var(--gray)', lineHeight:1.45 }}>{report.desc}</div>
+                </div>
+              </div>
+              {isDone && (
+                <div style={{ fontSize:12, color:'#065F46', fontWeight:600, background:'#ECFDF5', padding:'5px 9px', borderRadius:6 }}>
+                  Downloaded
+                </div>
+              )}
+              <div style={{ display:'flex', gap:6 }}>
+                {report.formats.map(fmt => (
+                  <button key={fmt} onClick={() => generate(report.id, fmt)} disabled={!!generating}
+                    style={{
+                      flex:1, padding:'7px 10px',
+                      background: fmt === 'xlsx' ? color : fmt === 'template' ? '#7C3AED' : 'var(--card-bg)',
+                      color: fmt === 'csv' ? color : '#fff',
+                      border: fmt === 'csv' ? `1px solid ${color}` : 'none',
+                      borderRadius:6, fontSize:11.5, fontWeight:600,
+                      cursor: generating ? 'wait' : 'pointer',
+                      opacity: generating ? 0.6 : 1,
+                      display:'flex', alignItems:'center', justifyContent:'center', gap:5,
+                    }}>
+                    {isGen && generating?.endsWith(fmt) ? (
+                      <><span style={{ display:'inline-block', width:11, height:11, border:'2px solid rgba(255,255,255,0.4)', borderTopColor:'#fff', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} /> Working...</>
+                    ) : fmt === 'template' ? (
+                      <>Template</>
+                    ) : (
+                      <>Export {fmt.toUpperCase()}</>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
