@@ -27,9 +27,9 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
-import { REGIONS } from '../../lib/constants';
+import { TERRITORIES, TERRITORY_LETTERS } from '../../lib/constants';
 
-const ALL_REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
+const ALL_REGIONS = TERRITORY_LETTERS;
 const STATUS_BUCKETS = ['Accepted', 'Denied', 'Pending'];
 
 // ─── Date helpers (Sun-Sat work week per project convention) ─────────────
@@ -149,7 +149,7 @@ export default function MarketingReferralsPage() {
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar
-        title="Marketing - Referrals by Region"
+        title="Marketing - Referrals by Territory"
         subtitle={`${totals.total} referrals in window - ${totals.Accepted} accepted, ${totals.Denied} denied, ${totals.Pending} pending`}
       />
       <div style={{ flex:1, overflow:'auto', padding:20, display:'flex', flexDirection:'column', gap:16 }}>
@@ -163,10 +163,13 @@ export default function MarketingReferralsPage() {
             <FilterCell label="Date To">
               <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={inputStyle} />
             </FilterCell>
-            <FilterCell label="Region">
+            <FilterCell label="Territory">
               <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)} style={inputStyle}>
-                <option value="ALL">All Regions</option>
-                {ALL_REGIONS.map(r => <option key={r} value={r}>Region {r} - {REGIONS[r] || ''}</option>)}
+                <option value="ALL">All Territories</option>
+                {ALL_REGIONS.map(r => {
+                  const t = TERRITORIES[r];
+                  return <option key={r} value={r}>Territory {r} ({t.counties}) - {t.manager}</option>;
+                })}
               </select>
             </FilterCell>
           </div>
@@ -188,14 +191,15 @@ export default function MarketingReferralsPage() {
         {/* Region table */}
         <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
           <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10 }}>
-            <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Region Breakdown</div>
+            <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Territory Breakdown</div>
             <div style={{ fontSize:12, color:'var(--gray)' }}>Click any number to drill into the patient list</div>
           </div>
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
             <thead>
               <tr style={{ background:'#FAFAFA', borderBottom:'2px solid var(--border)' }}>
-                <th style={th}>Region</th>
-                <th style={th}>Regional Manager</th>
+                <th style={th}>Territory</th>
+                <th style={th}>Counties</th>
+                <th style={th}>Manager</th>
                 <th style={{ ...th, textAlign:'right' }}>Accepted</th>
                 <th style={{ ...th, textAlign:'right' }}>Denied</th>
                 <th style={{ ...th, textAlign:'right' }}>Pending</th>
@@ -206,11 +210,27 @@ export default function MarketingReferralsPage() {
             <tbody>
               {ALL_REGIONS.map(region => {
                 const r = byRegion[region];
+                const t = TERRITORIES[region];
                 const rate = r.total > 0 ? Math.round(r.Accepted / r.total * 100) : 0;
                 return (
                   <tr key={region} style={{ borderBottom:'1px solid var(--border)' }}>
-                    <td style={{ ...td, fontWeight:700, color:'var(--black)' }}>{region}</td>
-                    <td style={{ ...td, color:'var(--gray)' }}>{REGIONS[region] || '-'}</td>
+                    <td style={{ ...td, fontWeight:700, color:'var(--black)', whiteSpace:'nowrap' }}>
+                      Territory {region}
+                    </td>
+                    <td style={{ ...td, color:'var(--gray)', fontSize:12 }}>{t?.counties || '-'}</td>
+                    <td style={{ ...td, color:'var(--black)' }}>
+                      {t?.manager || '-'}
+                      {t?.managerRole && (
+                        <span style={{
+                          marginLeft:6, fontSize:10, fontWeight:600,
+                          color: t.managerRole === 'AD' ? '#7C3AED' : '#1565C0',
+                          background: t.managerRole === 'AD' ? '#F5F3FF' : '#EFF6FF',
+                          padding:'1px 6px', borderRadius:999,
+                        }}>
+                          {t.managerRole}
+                        </span>
+                      )}
+                    </td>
                     {STATUS_BUCKETS.map(bucket => (
                       <td key={bucket} style={{ ...td, textAlign:'right' }}>
                         <CountButton
@@ -230,7 +250,7 @@ export default function MarketingReferralsPage() {
               })}
               {/* Totals row */}
               <tr style={{ background:'#FAFAFA', fontWeight:700 }}>
-                <td style={td} colSpan={2}>All Regions</td>
+                <td style={td} colSpan={3}>All Territories</td>
                 {STATUS_BUCKETS.map(bucket => (
                   <td key={bucket} style={{ ...td, textAlign:'right' }}>
                     <CountButton
@@ -259,7 +279,7 @@ export default function MarketingReferralsPage() {
             }}>
               <div>
                 <div style={{ fontSize:14, fontWeight:700, color: BUCKET_COLORS[drillDown.bucket].color }}>
-                  {drillRows.length} {drillDown.bucket} - {drillDown.region === 'ALL' ? 'All Regions' : `Region ${drillDown.region}`}
+                  {drillRows.length} {drillDown.bucket} - {drillDown.region === 'ALL' ? 'All Territories' : `Territory ${drillDown.region} (${TERRITORIES[drillDown.region]?.counties || ''})`}
                 </div>
                 <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>Click any patient row to expand details</div>
               </div>
@@ -279,7 +299,7 @@ export default function MarketingReferralsPage() {
                   <tr style={{ background:'#FAFAFA', borderBottom:'1px solid var(--border)' }}>
                     <th style={th}>Date</th>
                     <th style={th}>Patient</th>
-                    <th style={th}>Region</th>
+                    <th style={th}>Territory</th>
                     <th style={th}>Insurance</th>
                     <th style={th}>Source</th>
                     <th style={th}>PCP</th>
@@ -300,7 +320,7 @@ export default function MarketingReferralsPage() {
                           }}>
                           <td style={td}>{fmtDate(r.date_received)}</td>
                           <td style={{ ...td, fontWeight:600, color:'var(--black)' }}>{r.patient_name || '-'}</td>
-                          <td style={td}>{r.region || '-'}</td>
+                          <td style={td}>{r.region ? `Territory ${r.region}` : '-'}</td>
                           <td style={td}>{r.insurance || '-'}</td>
                           <td style={td}>{r.referral_source || '-'}</td>
                           <td style={td}>{r.pcp_name || '-'}</td>
@@ -395,7 +415,7 @@ function PatientDetail({ referral }) {
     ['Phone', r.phone || r.contact_number],
     ['Address', [r.location, r.city, r.zip_code].filter(Boolean).join(', ')],
     ['County', r.county],
-    ['Region', r.region],
+    ['Territory', r.region ? `${r.region} - ${TERRITORIES[r.region]?.counties || ''}` : ''],
     ['Date Received', fmtDate(r.date_received)],
     ['Referral Status', r.referral_status],
     ['Referral Type', r.referral_type],

@@ -61,6 +61,25 @@ export const REGIONS = {
   V: 'Samantha Faliks',     // AD acting
 };
 
+// 2026-06-09: Territory metadata for the Marketing Referrals page (and any
+// future page that needs the county breakdown / proper EdemaCare-branded
+// "Territory" naming). Single source of truth — pages should pull from here
+// rather than hardcoding strings. Liam confirmed these county groupings on
+// 2026-06-09 in the Marketing Referrals build.
+export const TERRITORIES = {
+  A: { letter: 'A', counties: 'Osceola, Orange, Seminole',     manager: 'Uma Jacobs',      managerRole: 'TM' },
+  B: { letter: 'B', counties: 'Duval, Nassau, Clay',           manager: 'Lia Davis',       managerRole: 'AD' },
+  C: { letter: 'C', counties: "St. Johns, Flagler, Putnam",    manager: 'Earl Dimaano',    managerRole: 'TM' },
+  G: { letter: 'G', counties: 'Volusia',                       manager: 'Lia Davis',       managerRole: 'AD' },
+  H: { letter: 'H', counties: 'Lake, Sumter, Marion',          manager: 'Kaylee Ramsey',   managerRole: 'TM' },
+  J: { letter: 'J', counties: 'Brevard, Indian River',         manager: 'Hollie Fincher',  managerRole: 'TM' },
+  M: { letter: 'M', counties: 'Hillsborough, Pinellas',        manager: 'Ariel Maboudi',   managerRole: 'AD' },
+  N: { letter: 'N', counties: 'Polk, Manatee, Hardee',         manager: 'Ariel Maboudi',   managerRole: 'AD' },
+  T: { letter: 'T', counties: 'Palm Beach, St. Lucie, Martin', manager: 'Samantha Faliks', managerRole: 'AD' },
+  V: { letter: 'V', counties: 'Miami-Dade, Broward, Monroe',   manager: 'Samantha Faliks', managerRole: 'AD' },
+};
+export const TERRITORY_LETTERS = Object.keys(TERRITORIES);
+
 // =====================================================================
 // EdemaCare regional structure (introduced 2026-05-15 reorganization)
 //
