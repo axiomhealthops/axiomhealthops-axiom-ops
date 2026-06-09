@@ -35,6 +35,7 @@ import MyRegionPage from './dashboard/MyRegionPage';
 import MedicareTrackerPage from './dashboard/MedicareTrackerPage';
 import MarketingCRMPage from './dashboard/MarketingCRMPage';
 import MarketingTeamDirectoryPage from './dashboard/MarketingTeamDirectoryPage';
+import MarketingReferralsPage from './dashboard/MarketingReferralsPage';
 import WaitlistPage from './dashboard/WaitlistPage';
 import AuthRenewalsPage from './dashboard/AuthRenewalsPage';
 import DirectorDashboard from './dashboard/DirectorDashboard';
@@ -108,6 +109,7 @@ const PAGE_COMPONENTS = {
   'medicare-tracker':       MedicareTrackerPage,
   'marketing-crm':          MarketingCRMPage,
   'marketing-team-directory': MarketingTeamDirectoryPage,
+  'marketing-referrals':    MarketingReferralsPage,
   'waitlist':                WaitlistPage,
   'director':                DirectorDashboard,
   'clinician-accountability': ClinicianAccountabilityPage,

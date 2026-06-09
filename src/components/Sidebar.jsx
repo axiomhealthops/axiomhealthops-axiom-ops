@@ -36,6 +36,7 @@ const PAGE_ICONS = {
   staff: '👤', regions: '🗺', 'daily-reports': '📋', 'stale-frequency': '⏱', 'frequency-review': '⚖', 'exec-report': '📊', reports: '📤', 'rm-dashboard': '🎯', 'ad-dashboard': '🎖', 'ops-dashboard': '🚦', hospitalizations: '🏥', 'missed-cancelled': '📉', 'my-region': '🗺', 'medicare-tracker': '🏥', 'marketing-crm': '📣', 'waitlist': '⏳', 'director': '⚡', 'clinician-accountability': '👤', 'clinician-assignment': '↔', 'pipeline': '🔀', 'auth-coordinator': '🔐', 'care-coord-patients': '👥', 'intake-queue': '📥', 'rm-daily': '📋', 'scheduling-alerts': '📅', 'swift-team': '🩹', 'auth-renewals': '🔄', 'discharges': '📤',
   'clinician-schedule': '📅',
   'marketing-team-directory': '👥',
+  'marketing-referrals':      '🗂',
   'ops-reports': '📊',
   'high-risk-patients': '⚠',
   'auth-over-limit': '🚨',
