@@ -8,6 +8,16 @@ Deploys to Vercel automatically from the `main` branch within ~60 seconds of a p
 
 ## Brand naming conventions — read before renaming anything
 
+**Brand palette (2026-06-09):** EdemaCare adopted the official cool teal/navy/indigo
+palette. CSS variables in `src/index.css` (and the `B` / `EC` constants in
+`src/lib/constants.js`) now map to these brand colors. Use `var(--ec-teal)`,
+`var(--ec-navy)`, `var(--ec-indigo)`, etc. for new code. Legacy `--red` / `--black`
+variable NAMES are preserved (so existing pages keep rendering unchanged) but their
+VALUES are now the EdemaCare palette. Signature gradient: `--ec-gradient` =
+linear from `#06B6D4` (Teal) → `#6366F1` (Indigo), which mirrors the heart-mark
+gradient inside the EdemaCare logo. Logo assets live in `public/`
+(`logo.png`, `logo-dark.png`, `icon-192.png`, `icon-512.png`).
+
 The 2026-06-01 rebrand was a **DBA only** — AxiomHealth Management LLC remains the legal
 entity. That means there are three distinct ways the old name still appears in this
 codebase, and they have different rules:
@@ -135,7 +145,13 @@ CLINICAL DEPARTMENT · MARKETING · PERFORMANCE · ADMIN
 | Productivity Tracker | Care coords | Per-clinician scheduled vs target capacity |
 | Clinician Accountability | Director/RM | Per-clinician metrics for accountability |
 | Audit Import | Admin | Weekly audit XLSX → preview → apply with audit log |
-| Reports & Export | Admin/AD/RM | 27 reports grouped by department |
+| Reports & Export | Admin/AD/RM | 30 reports in 6 buckets (Executive, Intake, Auth, Care Coord, Clinical, Operations) + "Most Used" pinned row |
+| User Management | Admin | Per-user role + page access + Export/Import bulk XLSX flow |
+| Marketing Team Directory | Marketing team | Org structure of who's on the marketing team |
+| Marketing CRM | Marketing team | Provider/contact relationships + outreach encounter log |
+| Marketing Referrals by Territory | Yvonne + marketing team | Read-only referrals view by territory, FL + GA on one page |
+| Marketing Luncheon Requests | Marketing field + Liam/Yvonne | Provider lunch/in-service approval workflow |
+| Payer + Marketing Report | Yvonne | Per-payer revenue + productivity breakdown |
 
 ---
 
@@ -293,3 +309,115 @@ supabase/migrations/
     rule for any future engagement check: import the hook. Never inline
     `activityLog.filter(a => a.coordinator_name === ...)` or read
     `last_sign_in_at` directly.**
+14. **Email migration shape-mismatch broke logins for 10 users** (2026-06-08/09).
+    During the EdemaCare email rebrand we migrated 23 auth.users rows from
+    `@axiomhealthmanagement.com` to `@edemacare.com`. For 4 users with no
+    existing auth account (Walter, Abi, Liz, Marzina) we created rows via
+    raw SQL INSERT using `crypt('temp', gen_salt('bf'))` — which defaults
+    to **bcrypt cost 6** vs Supabase's cost 10. The cost is valid bcrypt
+    so login worked... except for two row-shape issues that made the
+    recovery flow silently fail:
+    (a) `confirmation_token`, `email_change`, `email_change_token_new`
+    were left as NULL while existing rows store empty string `''` —
+    Supabase's GoTrue `/auth/v1/verify` filters on `= ''` so the recovery
+    submit silently dropped without updating the password. Result: users
+    typed their chosen password into the reset form, the system accepted
+    the form, but the DB never received the new hash. They then tried to
+    log in with the password they thought they'd set, and bcrypt.compare
+    failed against the leftover `temp_xxx` hash.
+    (b) Additionally, `updateUserById({ email })` left
+    `email_change_token_new` populated on all 23 migrated users, which
+    blocks `/auth/v1/recover` from sending recovery emails at all.
+    **Permanent fixes:**
+    - `clear_pending_email_change(user_id)` RPC (in
+      `supabase/migrations/`) zeroes email_change fields after any email
+      update. Called automatically by `bulk_user_migration` in
+      `admin-user-actions/index.ts` (Edge Function v7).
+    - `admin-user-actions` v7 surfaces full diagnostic block in the
+      send_reset response so future email-send failures show the actual
+      `builtin_status`, `resend_reason`, and whether `RESEND_API_KEY` is set.
+    - `User Management → Manage → Password` Edge Function path is now the
+      ONLY blessed way to provision passwords for new auth accounts. Do
+      NOT use raw SQL INSERT on auth.users — it bypasses Supabase's
+      password and shape conventions.
+    - **Diagnostic check before declaring a user "fixed":** verify
+      `crypt('chosen_password', encrypted_password) = encrypted_password`
+      against the actual DB hash. If FALSE the recovery flow didn't
+      persist, no matter what the user clicked. Sandbox SQL:
+      `SELECT crypt('pwd', encrypted_password) = encrypted_password FROM
+      auth.users WHERE email = '...'`.
+
+15. **Marketing CRM silent save failures** (2026-06-09). Three RLS bugs
+    blocked Lia Davis, Brian Roffe, and Yvonne Flores from logging
+    outreach in the Marketing CRM:
+    (a) `can_access_marketing_region()` required region to be in the
+    user's `coordinators.regions` array. Brian Roffe's regions was `[]`
+    so EVERY region check denied him. **Fix:** field-marketing roles
+    (HAE, marketing_rep + marketing_rep secondary) now roam without a
+    region gate. AD/RM stay gated to assigned regions for territorial
+    accountability. director_payer_marketing (Yvonne) added to the
+    director tier with full access.
+    (b) `is_marketing_admin()` missed `director_payer_marketing` so
+    Yvonne couldn't manage Special Projects. **Fix:** added.
+    (c) **The React save function silently swallowed errors** — used
+    `await supabase.from(...).insert(...)` without checking `error`.
+    RLS denials closed the modal as if successful. **Fix:** explicit
+    error capture in `MarketingCRMPage.jsx OutreachModal` surfaces a
+    red banner with an actionable message. **General rule for any
+    future RLS-gated write: capture and surface `error` from the
+    Supabase response. Never trust silent success.**
+
+16. **Replace mode + my own SQL insert bypassed Supabase password
+    conventions** (general lesson, repeated bites). When creating
+    `auth.users` rows or pre-existing-user fixes via raw SQL,
+    `crypt(text, gen_salt('bf'))` defaults to cost 6 — works for login
+    but causes the broader shape-mismatch problem documented in #14.
+    **General rule:** use `crypt('pwd', gen_salt('bf', 10))` if you
+    MUST use raw SQL. Better: use the admin-user-actions Edge Function
+    or User Management page UI.
+
+17. **Marketing page taxonomy:** four marketing pages, two of which run
+    on territorial RLS via `can_access_marketing_region`:
+    - `marketing-team-directory` — read-only org chart
+    - `marketing-crm` — provider/contact + outreach encounter log (RLS gated)
+    - `marketing-referrals` — read-only intake referral view by territory,
+      FL + GA tracked together (filter dropdown shows both, tables hide
+      when filter is scoped to one state)
+    - `marketing-luncheon-requests` — approval workflow for provider
+      luncheons/in-services. Field reps submit; ONLY Liam (super_admin)
+      and Yvonne (director_payer_marketing) approve. admins (Carla,
+      Ashley, Dustin, Randi) can VIEW everything but cannot approve.
+      Form clinic-name field is a CRM-aware typeahead that searches
+      `marketing_contacts` and auto-fills region + event address +
+      provider_id FK when a CRM provider is picked.
+
+## Territory model (2026-06-09)
+
+`TERRITORIES` in `src/lib/constants.js` is the single source of truth
+for the EdemaCare territory structure. Each territory has:
+- `letter` — single letter (A, B, C, G, H, J, M, N, T, V)
+- `counties` — comma-separated string for display
+- `manager` — clinical lead (TM where dedicated, AD acting otherwise)
+- `managerRole` — 'TM' or 'AD'
+- `marketingLead` — HAE / marketing lead who owns the referral pipeline
+- `marketingLeadRole` — set to 'HAE' when marketing lead differs from manager
+
+`GA_TERRITORIES` is the parallel Georgia structure. Walter Holston is the
+sole HAE for GA. Tagging convention: `intake_referrals.region = 'GA'` (or
+`GA-N`/`GA-C`/`GA-S` for future sub-territories). Helper
+`isGeorgiaRegion(region)` accepts any value matching `/^GA/i`.
+
+Brian Roffe is the marketing lead for Territory T (Samantha Faliks is the
+clinical AD). When showing "who's responsible" on marketing pages, use
+`marketingLead`; on clinical/operations pages, use `manager`.
+
+## Claude Code setup (2026-06-09)
+
+Liam runs Claude Code at this repo as the primary development tool.
+Key MCPs configured: Supabase (project `kndiyailsqrialgbozac`), Vercel,
+Gmail (Liam's), Calendar, Google Drive. See `docs/CLAUDE_CODE_SETUP.md`
+for the bootstrap checklist.
+
+When picking up a session: read this CLAUDE.md fully, then check
+`git log -20` for recent commits. The `ship "msg"` shell function on
+Liam's Mac handles commit + push; Vercel auto-deploys main in ~60s.
