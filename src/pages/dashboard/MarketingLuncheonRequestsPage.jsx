@@ -65,6 +65,7 @@ export default function MarketingLuncheonRequestsPage() {
   const isApprover = ['super_admin', 'director_payer_marketing'].includes(profile?.role);
 
   const [requests, setRequests] = useState([]);
+  const [providers, setProviders] = useState([]);  // marketing_contacts from CRM
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState(isApprover ? 'pending' : 'all');
   const [view, setView] = useState(isApprover ? 'all' : 'mine');  // 'all' | 'mine' | 'region'
@@ -73,15 +74,20 @@ export default function MarketingLuncheonRequestsPage() {
   const [reviewingRequest, setReviewingRequest] = useState(null);
 
   function loadData() {
-    fetchAllPages(supabase.from('marketing_luncheon_requests').select('*').order('created_at', { ascending: false }))
-      .then(rows => {
-        setRequests(Array.isArray(rows) ? rows : []);
-        setLoading(false);
-      })
-      .catch(err => { console.error(err); setLoading(false); });
+    Promise.all([
+      fetchAllPages(supabase.from('marketing_luncheon_requests').select('*').order('created_at', { ascending: false })),
+      // Pull active CRM providers so the New Request form can autocomplete from them.
+      // Tying this form to the CRM ensures clinic/region/address stay consistent
+      // with what reps have already logged, and links the request via provider_id.
+      fetchAllPages(supabase.from('marketing_contacts').select('id, practice_name, contact_name, address, city, state, zip, region, phone').eq('is_active', true).order('practice_name')),
+    ]).then(([reqs, provs]) => {
+      setRequests(Array.isArray(reqs) ? reqs : []);
+      setProviders(Array.isArray(provs) ? provs : []);
+      setLoading(false);
+    }).catch(err => { console.error(err); setLoading(false); });
   }
   useEffect(() => { loadData(); }, []);
-  useRealtimeTable(['marketing_luncheon_requests'], loadData);
+  useRealtimeTable(['marketing_luncheon_requests', 'marketing_contacts'], loadData);
 
   const filtered = useMemo(() => {
     return requests.filter(r => {
@@ -195,7 +201,13 @@ export default function MarketingLuncheonRequestsPage() {
                       </td>
                       <td style={td}>{fmtDate(r.event_date)}</td>
                       <td style={td}>{EVENT_TYPE_LABEL[r.event_type] || r.event_type}</td>
-                      <td style={{ ...td, fontWeight: 600, color: 'var(--black)' }}>{r.clinic_or_provider_name}</td>
+                      <td style={{ ...td, fontWeight: 600, color: 'var(--black)' }}>
+                        {r.clinic_or_provider_name}
+                        {r.provider_id && (
+                          <span title="Linked to a CRM provider record"
+                            style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#065F46', background: '#ECFDF5', padding: '1px 6px', borderRadius: 999, textTransform: 'uppercase', letterSpacing: 0.3, verticalAlign: 'middle' }}>CRM</span>
+                        )}
+                      </td>
                       <td style={td}>{r.region || '-'}</td>
                       <td style={td}>{r.requested_by_name}</td>
                       <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{fmtMoney(r.estimated_cost)}</td>
@@ -219,6 +231,7 @@ export default function MarketingLuncheonRequestsPage() {
       {showNewModal && (
         <RequestModal
           profile={profile}
+          providers={providers}
           onClose={() => setShowNewModal(false)}
           onSaved={() => { setShowNewModal(false); loadData(); }}
         />
@@ -226,6 +239,7 @@ export default function MarketingLuncheonRequestsPage() {
       {editingRequest && (
         <RequestModal
           profile={profile}
+          providers={providers}
           request={editingRequest}
           onClose={() => setEditingRequest(null)}
           onSaved={() => { setEditingRequest(null); loadData(); }}
@@ -234,6 +248,7 @@ export default function MarketingLuncheonRequestsPage() {
       {reviewingRequest && (
         <ReviewModal
           profile={profile}
+          providers={providers}
           isApprover={isApprover}
           request={reviewingRequest}
           onClose={() => setReviewingRequest(null)}
@@ -246,10 +261,11 @@ export default function MarketingLuncheonRequestsPage() {
 
 // ─── New / Edit request modal ────────────────────────────────────────────
 
-function RequestModal({ profile, request, onClose, onSaved }) {
+function RequestModal({ profile, providers = [], request, onClose, onSaved }) {
   const isEdit = !!request;
   const [form, setForm] = useState({
     event_type:               request?.event_type               || 'luncheon',
+    provider_id:              request?.provider_id              || '',
     clinic_or_provider_name:  request?.clinic_or_provider_name  || '',
     region:                   request?.region                   || profile?.regions?.[0] || '',
     event_address:            request?.event_address            || '',
@@ -262,10 +278,44 @@ function RequestModal({ profile, request, onClose, onSaved }) {
     topic:                    request?.topic                    || '',
     notes:                    request?.notes                    || '',
   });
+  const [providerSearch, setProviderSearch] = useState(request?.clinic_or_provider_name || '');
+  const [showProviderDropdown, setShowProviderDropdown] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+
+  // Filter providers by typed search text (practice name OR contact name)
+  const providerMatches = useMemo(() => {
+    const q = providerSearch.trim().toLowerCase();
+    if (!q || q.length < 2) return providers.slice(0, 8);  // show first 8 if empty
+    return providers
+      .filter(p =>
+        (p.practice_name || '').toLowerCase().includes(q)
+        || (p.contact_name  || '').toLowerCase().includes(q)
+        || (p.city          || '').toLowerCase().includes(q)
+      )
+      .slice(0, 8);
+  }, [providers, providerSearch]);
+
+  const linkedProvider = providers.find(p => p.id === form.provider_id);
+
+  function pickProvider(p) {
+    const fullAddress = [p.address, p.city, p.state, p.zip].filter(Boolean).join(', ');
+    setForm(f => ({
+      ...f,
+      provider_id:              p.id,
+      clinic_or_provider_name:  p.practice_name + (p.contact_name ? ` - ${p.contact_name}` : ''),
+      region:                   p.region || f.region,
+      event_address:            fullAddress || f.event_address,
+    }));
+    setProviderSearch(p.practice_name + (p.contact_name ? ` - ${p.contact_name}` : ''));
+    setShowProviderDropdown(false);
+  }
+
+  function detachProvider() {
+    setForm(f => ({ ...f, provider_id: '' }));
+  }
 
   async function save() {
     setErr('');
@@ -275,6 +325,7 @@ function RequestModal({ profile, request, onClose, onSaved }) {
     setSaving(true);
     const payload = {
       ...form,
+      provider_id:    form.provider_id    === '' ? null : form.provider_id,
       num_attendees:  form.num_attendees  === '' ? null : Number(form.num_attendees),
       estimated_cost: form.estimated_cost === '' ? null : Number(form.estimated_cost),
       event_time:     form.event_time     === '' ? null : form.event_time,
@@ -333,7 +384,87 @@ function RequestModal({ profile, request, onClose, onSaved }) {
           </select>
         </Field>
         <Field label="Clinic / Provider Name" required colSpan={2}>
-          <input type="text" value={form.clinic_or_provider_name} onChange={e => set('clinic_or_provider_name', e.target.value)} placeholder="e.g. Sunrise Family Medicine, Dr. Patel's office" style={inputStyle} />
+          <div style={{ position: 'relative' }}>
+            <input
+              type="text"
+              value={providerSearch}
+              onChange={e => {
+                setProviderSearch(e.target.value);
+                set('clinic_or_provider_name', e.target.value);
+                if (form.provider_id) set('provider_id', '');  // typing detaches CRM link
+                setShowProviderDropdown(true);
+              }}
+              onFocus={() => setShowProviderDropdown(true)}
+              onBlur={() => setTimeout(() => setShowProviderDropdown(false), 150)}
+              placeholder="Type to search the CRM, or enter a new clinic / provider name"
+              style={{ ...inputStyle, paddingRight: linkedProvider ? 110 : 36 }}
+            />
+            {/* Search icon */}
+            <span style={{ position: 'absolute', right: linkedProvider ? 96 : 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: 'var(--gray)', pointerEvents: 'none' }}>
+              {linkedProvider ? '' : '⌕'}
+            </span>
+            {/* "From CRM" chip when linked */}
+            {linkedProvider && (
+              <span
+                onClick={detachProvider}
+                title="Click to detach from CRM (lets you edit the name freely)"
+                style={{
+                  position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                  background: '#ECFDF5', color: '#065F46', border: '1px solid #10B981',
+                  padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700,
+                  cursor: 'pointer', letterSpacing: 0.3, textTransform: 'uppercase',
+                }}>
+                From CRM {'×'}
+              </span>
+            )}
+
+            {/* Dropdown */}
+            {showProviderDropdown && (
+              <div style={{
+                position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
+                background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 8,
+                boxShadow: '0 8px 24px rgba(15, 23, 42, 0.12)', zIndex: 50, maxHeight: 280, overflow: 'auto',
+              }}>
+                {providerMatches.length === 0 ? (
+                  <div style={{ padding: '12px 14px', fontSize: 12, color: 'var(--gray)' }}>
+                    No matching providers in the CRM. Keep typing to enter a new one — you can add the provider to the CRM later from Marketing CRM.
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ padding: '6px 12px', fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: 0.4, background: '#FAFAFA', borderBottom: '1px solid var(--border)' }}>
+                      Existing CRM Providers {providerSearch && `matching "${providerSearch}"`}
+                    </div>
+                    {providerMatches.map(p => (
+                      <div key={p.id}
+                        onMouseDown={() => pickProvider(p)}
+                        style={{
+                          padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = '#F0FDFA'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{p.practice_name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 2 }}>
+                            {p.contact_name && <>{p.contact_name} {'·'} </>}
+                            {p.city && <>{p.city}{p.state ? ', ' + p.state : ''} {'·'} </>}
+                            {p.region && <>Territory {p.region}</>}
+                          </div>
+                        </div>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: EC.teal, background: '#ECFEFF', padding: '2px 8px', borderRadius: 999, textTransform: 'uppercase', letterSpacing: 0.3, flexShrink: 0 }}>Pick</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 4 }}>
+            {linkedProvider
+              ? <>Linked to CRM provider. Region and address auto-filled from the CRM record. Click the green chip to detach.</>
+              : <>Start typing to search the CRM. If the clinic doesn't exist yet, just type the new name — the request will record it as freeform.</>
+            }
+          </div>
         </Field>
         <Field label="Event Address" colSpan={2}>
           <input type="text" value={form.event_address} onChange={e => set('event_address', e.target.value)} placeholder="Street, city, ZIP" style={inputStyle} />
@@ -380,7 +511,8 @@ function RequestModal({ profile, request, onClose, onSaved }) {
 
 // ─── Review / Approve / Deny modal ───────────────────────────────────────
 
-function ReviewModal({ profile, isApprover, request, onClose, onSaved }) {
+function ReviewModal({ profile, providers = [], isApprover, request, onClose, onSaved }) {
+  const linkedProvider = providers.find(p => p.id === request.provider_id);
   const [approvalNotes, setApprovalNotes] = useState(request.approval_notes || '');
   const [denialReason, setDenialReason] = useState(request.denial_reason || '');
   const [actualCost, setActualCost] = useState(request.actual_cost ?? '');
@@ -442,8 +574,16 @@ function ReviewModal({ profile, isApprover, request, onClose, onSaved }) {
   return (
     <Modal title={`Request Review - ${request.clinic_or_provider_name}`} onClose={onClose} headerBg={STATUS_META[request.status]?.color || EC.navy}>
       <div style={{ padding: 22 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
           <StatusChip status={request.status} />
+          {linkedProvider && (
+            <span title="This request is linked to an active CRM provider record"
+              style={{
+                background: '#ECFDF5', color: '#065F46', border: '1px solid #10B981',
+                padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 700,
+                textTransform: 'uppercase', letterSpacing: 0.3,
+              }}>Linked to CRM</span>
+          )}
           <div style={{ fontSize: 13, color: 'var(--gray)' }}>
             Requested by <strong style={{ color: 'var(--black)' }}>{request.requested_by_name}</strong>
             {request.approved_by_name && (
@@ -451,6 +591,19 @@ function ReviewModal({ profile, isApprover, request, onClose, onSaved }) {
             )}
           </div>
         </div>
+
+        {linkedProvider && (
+          <div style={{ marginBottom: 14, padding: '10px 14px', background: '#F0FDFA', border: '1px solid #67E8F9', borderRadius: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#0E7490', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>CRM Provider Record</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{linkedProvider.practice_name}</div>
+            <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 2 }}>
+              {linkedProvider.contact_name && <>{linkedProvider.contact_name} {'·'} </>}
+              {linkedProvider.phone && <>{linkedProvider.phone} {'·'} </>}
+              {[linkedProvider.city, linkedProvider.state, linkedProvider.zip].filter(Boolean).join(', ')}
+              {linkedProvider.region && <> {'·'} Territory {linkedProvider.region}</>}
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px 22px', marginBottom: 18 }}>
           <Detail label="Event Type" value={EVENT_TYPE_LABEL[request.event_type]} />
