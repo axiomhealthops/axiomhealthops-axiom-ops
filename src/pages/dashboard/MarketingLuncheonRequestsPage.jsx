@@ -59,7 +59,10 @@ const ALL_TERRITORY_LETTERS = [...TERRITORY_LETTERS, ...GA_TERRITORY_LETTERS];
 
 export default function MarketingLuncheonRequestsPage() {
   const { profile } = useAuth();
-  const isApprover = ['super_admin', 'admin', 'director_payer_marketing'].includes(profile?.role);
+  // Approvers: Liam (super_admin) and Yvonne (director_payer_marketing) only.
+  // admins (Carla, Ashley, Dustin, Randi) can VIEW everything but cannot
+  // approve/deny — they should escalate to Yvonne for sign-off.
+  const isApprover = ['super_admin', 'director_payer_marketing'].includes(profile?.role);
 
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
