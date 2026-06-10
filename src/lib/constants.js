@@ -1,17 +1,34 @@
+// 2026-06-09: EdemaCare brand palette adopted from the official jSBDE.jpg
+// brand kit. Legacy KEY NAMES are preserved so existing pages keep working —
+// only the values change. New code should prefer the EC_* keys below.
 export const B = {
-  red: '#D94F2B',
-  darkRed: '#8B1A10',
-  orange: '#E8763A',
-  black: '#1A1A1A',
-  gray: '#8B6B64',
-  lightGray: '#BBA8A4',
-  border: '#F0E4E0',
-  bg: '#FBF7F6',
-  cardBg: '#fff',
-  green: '#2E7D32',
-  yellow: '#D97706',
-  danger: '#DC2626',
-  blue: '#1565C0',
+  red:       '#06B6D4',  // primary action (was warm red, now Teal Accent)
+  darkRed:   '#1E40AF',  // depth accent (now Supporting Blue)
+  orange:    '#0EA5E9',  // secondary accent (now Sky Blue)
+  black:     '#0F172A',  // text + headings (Primary Navy)
+  gray:      '#475569',  // body gray (cool slate)
+  lightGray: '#94A3B8',  // faint text
+  border:    '#E2E8F0',  // borders
+  bg:        '#F8FAFC',  // page bg
+  cardBg:    '#FFFFFF',
+  green:     '#059669',  // emerald — harmonizes with teal
+  yellow:    '#D97706',  // amber — kept
+  danger:    '#DC2626',  // red — kept for true errors
+  blue:      '#0EA5E9',  // Sky Blue
+};
+
+// EdemaCare brand kit colors — use these in new code by name
+export const EC = {
+  navy:            '#0F172A',  // Primary Navy
+  darkNeutral:     '#1E2937',  // Dark Neutral
+  teal:            '#06B6D4',  // Teal Accent
+  lightTeal:       '#67E8F9',  // Supporting accent
+  skyBlue:         '#0EA5E9',  // Secondary accents
+  supportingBlue:  '#1E40AF',  // Depth + dark backgrounds
+  indigo:          '#6366F1',  // Gradient end
+  white:           '#FFFFFF',
+  // Signature gradient — teal → indigo, mirrors the heart-mark in the logo
+  gradient:        'linear-gradient(135deg, #06B6D4 0%, #6366F1 100%)',
 };
 
 export const ROLES = {

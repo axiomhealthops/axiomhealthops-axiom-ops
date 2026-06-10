@@ -5,21 +5,48 @@
 }
 
 :root {
-  --red: #D94F2B;
-  --dark-red: #8B1A10;
-  --orange: #E8763A;
-  --black: #1A1A1A;
-  --gray: #8B6B64;
-  --light-gray: #BBA8A4;
-  --border: #F0E4E0;
-  --bg: #FBF7F6;
-  --card-bg: #ffffff;
-  --green: #2E7D32;
-  --yellow: #D97706;
-  --danger: #DC2626;
-  --blue: #1565C0;
-  --sidebar-bg: #0F1117;
-  --sidebar-surface: #161B26;
+  /* ─── EdemaCare Brand Kit (2026-06-09) ────────────────────────────
+     Source of truth: jSBDE.jpg palette confirmed by Liam.
+     The legacy --red / --black / --gray variable NAMES are preserved
+     so 50+ existing pages keep working unchanged — only the values
+     swap from the warm AxiomHealth palette to EdemaCare's cool
+     navy/teal/indigo system.
+
+     New brand variables (--teal, --indigo, --navy, etc.) are added
+     below so new code can reference brand colors by name without
+     going through the legacy aliases.                              */
+
+  /* Legacy aliases (preserve names, swap values to EdemaCare brand) */
+  --red:         #06B6D4;  /* primary action — was warm red, now Teal Accent */
+  --dark-red:    #1E40AF;  /* depth accent — now Supporting Blue */
+  --orange:      #0EA5E9;  /* secondary accent — now Sky Blue */
+  --black:       #0F172A;  /* text + headings — Primary Navy */
+  --gray:        #475569;  /* body gray — cool slate-600 */
+  --light-gray:  #94A3B8;  /* faint text — slate-400 */
+  --border:      #E2E8F0;  /* card borders — slate-200 */
+  --bg:          #F8FAFC;  /* page background — slate-50 */
+  --card-bg:     #FFFFFF;
+  --green:       #059669;  /* success — emerald, harmonizes with teal */
+  --yellow:      #D97706;  /* warning — amber, kept */
+  --danger:      #DC2626;  /* error — red, kept */
+  --blue:        #0EA5E9;  /* now Sky Blue per brand */
+  --sidebar-bg:        #0F172A;  /* Primary Navy */
+  --sidebar-surface:   #1E2937;  /* Dark Neutral */
+
+  /* EdemaCare brand kit colors (use these in new code) */
+  --ec-navy:             #0F172A;  /* Primary Navy — text, headings, UI */
+  --ec-dark-neutral:     #1E2937;  /* Dark Neutral — alt text + dark backgrounds */
+  --ec-teal:             #06B6D4;  /* Teal Accent — buttons, icons, highlights */
+  --ec-light-teal:       #67E8F9;  /* Supporting accent */
+  --ec-sky-blue:         #0EA5E9;  /* Secondary accents */
+  --ec-supporting-blue:  #1E40AF;  /* Depth + dark backgrounds */
+  --ec-indigo:           #6366F1;  /* Gradient end + accent blocks */
+  --ec-white:            #FFFFFF;
+
+  /* Signature gradient — same teal→indigo run that lives inside
+     the heart-mark of the logo. Use this for icon backgrounds,
+     hero CTAs, and feature highlight blocks.                       */
+  --ec-gradient: linear-gradient(135deg, #06B6D4 0%, #6366F1 100%);
 }
 
 html, body, #root {
