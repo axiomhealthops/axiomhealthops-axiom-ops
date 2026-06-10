@@ -297,6 +297,7 @@ function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects,
     follow_up_notes: encounter?.follow_up_notes || '',
   });
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const peopleForProvider = useMemo(() =>
     (contactPeopleAll || []).filter(p => p.provider_id === provider?.id && p.is_active !== false),
@@ -323,6 +324,7 @@ function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects,
     if (!form.outreach_type) return;
     if (!isEventLike && !provider) return;
     setSaving(true);
+    setSaveError('');
     const outcomeLabel = OUTCOME_RATINGS.find(o => o.key === form.outcome_rating)?.label || form.outcome || '';
     const payload = {
       contact_id: provider?.id || null,
@@ -349,11 +351,26 @@ function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects,
       follow_up_notes: form.follow_up_notes || null,
     };
     let recordId = encounter?.id;
+    let saveError = null;
     if (isEdit) {
-      await supabase.from('marketing_encounters').update(payload).eq('id', encounter.id);
+      const res = await supabase.from('marketing_encounters').update(payload).eq('id', encounter.id);
+      saveError = res.error;
     } else {
-      const { data } = await supabase.from('marketing_encounters').insert(payload).select().single();
-      recordId = data?.id;
+      const res = await supabase.from('marketing_encounters').insert(payload).select().single();
+      saveError = res.error;
+      recordId = res.data?.id;
+    }
+    if (saveError) {
+      // Surface the actual reason instead of silently closing the modal.
+      // RLS denials look like "new row violates row-level security policy" — give the
+      // user a clear, actionable message about what they need from the admin.
+      const msg = saveError.message || JSON.stringify(saveError);
+      const isRls = /row-level security|policy/i.test(msg);
+      setSaveError(isRls
+        ? `Save blocked: you do not currently have permission to log outreach in this region (${payload.region || 'no region'}). Ask an admin to add this region to your coordinator profile.`
+        : `Save failed: ${msg}`);
+      setSaving(false);
+      return;
     }
     const specialName = (specialProjects || []).find(s => s.id === form.special_project_id)?.name;
     logActivity({
@@ -545,6 +562,11 @@ function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects,
           </div>
         </div>
 
+        {saveError && (
+          <div style={{ padding:'12px 22px', background:'#FEF2F2', borderTop:'1px solid #FECACA', color:'#9C0006', fontSize:12, fontWeight:500, lineHeight:1.5 }}>
+            {saveError}
+          </div>
+        )}
         <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
           <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
           <button onClick={save} disabled={saving || (!isEventLike && !provider) || (isEventLike && !form.target_clinic_or_school) || (isPhoneCall && !form.phone_call_reason)}

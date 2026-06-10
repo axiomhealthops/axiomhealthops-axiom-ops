@@ -156,6 +156,14 @@ export default function MarketingReferralsPage() {
 
   const acceptanceRate = totals.total > 0 ? Math.round(totals.Accepted / totals.total * 100) : 0;
 
+  // ─── Which tables to show given the current filter ─────────────────────
+  // ALL = both tables. A specific FL territory letter = FL only.
+  // 'GA' or anything starting with 'GA' = Georgia only.
+  const filterIsGA = regionFilter !== 'ALL' && isGeorgiaRegion(regionFilter);
+  const filterIsFL = regionFilter !== 'ALL' && ALL_REGIONS.includes(regionFilter);
+  const showFL = regionFilter === 'ALL' || filterIsFL;
+  const showGA = regionFilter === 'ALL' || filterIsGA;
+
   // ─── Drill-down list ───────────────────────────────────────────────────
   // drillDown.scope: 'FL_ALL' | 'GA_ALL' | 'TERRITORY'. 'TERRITORY' uses
   // drillDown.region (the letter / 'GA' value).
@@ -196,7 +204,11 @@ export default function MarketingReferralsPage() {
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <TopBar
         title="Marketing - Referrals by Territory"
-        subtitle={`${totals.total} referrals in window (FL ${totalsFL.total} / GA ${totalsGA.total}) - ${totals.Accepted} accepted, ${totals.Denied} denied, ${totals.Pending} pending`}
+        subtitle={
+          regionFilter === 'ALL'
+            ? `${totals.total} referrals in window (FL ${totalsFL.total} / GA ${totalsGA.total}) - ${totals.Accepted} accepted, ${totals.Denied} denied, ${totals.Pending} pending`
+            : `${totals.total} referrals in window - ${totals.Accepted} accepted, ${totals.Denied} denied, ${totals.Pending} pending`
+        }
       />
       <div style={{ flex:1, overflow:'auto', padding:20, display:'flex', flexDirection:'column', gap:16 }}>
 
@@ -234,16 +246,26 @@ export default function MarketingReferralsPage() {
           </div>
         </div>
 
-        {/* Headline cards (combined) */}
+        {/* Headline cards */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12 }}>
-          <Stat label="Total Referrals" value={totals.total} accent="#1F4E78" sub={`FL ${totalsFL.total} - GA ${totalsGA.total}`} />
+          <Stat
+            label="Total Referrals"
+            value={totals.total}
+            accent="#1F4E78"
+            sub={
+              regionFilter === 'ALL' ? `FL ${totalsFL.total} - GA ${totalsGA.total}`
+              : filterIsGA ? 'Georgia only'
+              : `Florida - Territory ${regionFilter}`
+            }
+          />
           <Stat label="Accepted" value={totals.Accepted} accent="#065F46" sub={`${acceptanceRate}% acceptance rate`} />
           <Stat label="Denied" value={totals.Denied} accent="#9C0006" sub={totals.total > 0 ? `${Math.round(totals.Denied / totals.total * 100)}% denial rate` : ''} />
           <Stat label="Pending" value={totals.Pending} accent="#9C5700" sub="awaiting decision" />
         </div>
 
         {/* Region table */}
-        {/* ── Florida table ── */}
+        {/* ── Florida table (hidden when filter is Georgia-only) ── */}
+        {showFL && (
         <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
           <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10 }}>
             <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Florida Territories</div>
@@ -265,7 +287,7 @@ export default function MarketingReferralsPage() {
               </tr>
             </thead>
             <tbody>
-              {ALL_REGIONS.map(region => {
+              {ALL_REGIONS.filter(region => !filterIsFL || region === regionFilter).map(region => {
                 const r = byRegion[region];
                 const t = TERRITORIES[region];
                 const rate = r.total > 0 ? Math.round(r.Accepted / r.total * 100) : 0;
@@ -336,8 +358,10 @@ export default function MarketingReferralsPage() {
             </tbody>
           </table>
         </div>
+        )}
 
-        {/* ── Georgia table ── */}
+        {/* ── Georgia table (hidden when filter is Florida-only) ── */}
+        {showGA && (
         <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
           <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10 }}>
             <div style={{ fontSize:14, fontWeight:700, color:'var(--black)' }}>Georgia (Expansion)</div>
@@ -364,7 +388,7 @@ export default function MarketingReferralsPage() {
               </tr>
             </thead>
             <tbody>
-              {GA_TERRITORY_LETTERS.map(region => {
+              {GA_TERRITORY_LETTERS.filter(region => !filterIsGA || region === regionFilter).map(region => {
                 const r = byRegionGA[region] || { Accepted:0, Denied:0, Pending:0, total:0 };
                 const t = GA_TERRITORIES[region];
                 const rate = r.total > 0 ? Math.round(r.Accepted / r.total * 100) : 0;
@@ -419,6 +443,7 @@ export default function MarketingReferralsPage() {
             </tbody>
           </table>
         </div>
+        )}
 
         {/* Drill-down panel */}
         {drillDown && (
