@@ -156,7 +156,7 @@ export default function AlertsBell() {
               </div>
             ) : alerts.map(function(a) {
               var pc = PRIORITY_COLORS[a.priority] || PRIORITY_COLORS.medium;
-              var icon = TYPE_ICONS[a.alert_type] || '&#128276;';
+              var icon = TYPE_ICONS[a.alert_type] || '\uD83D\uDD14';
               return (
                 <div key={a.id}
                   onClick={function() { if (!a.is_read) markRead(a.id); }}
