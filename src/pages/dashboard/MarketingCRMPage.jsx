@@ -18,7 +18,7 @@
 // Activity log: every outreach insert calls logActivity() so RMPs show up
 // in the engagement signal.
 
-import { useState, useEffect, useMemo, Fragment } from 'react';
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
@@ -298,6 +298,15 @@ function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects,
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  // Ref so we can scroll the error banner into view when it appears — critical for
+  // iPad/mobile users who click "Log Outreach" at the bottom of a long modal and
+  // would otherwise miss the error that pops above the footer.
+  const errorRef = useRef(null);
+  useEffect(() => {
+    if (saveError && errorRef.current) {
+      errorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [saveError]);
 
   const peopleForProvider = useMemo(() =>
     (contactPeopleAll || []).filter(p => p.provider_id === provider?.id && p.is_active !== false),
@@ -563,8 +572,31 @@ function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects,
         </div>
 
         {saveError && (
-          <div style={{ padding:'12px 22px', background:'#FEF2F2', borderTop:'1px solid #FECACA', color:'#9C0006', fontSize:12, fontWeight:500, lineHeight:1.5 }}>
-            {saveError}
+          <div ref={errorRef} style={{
+            margin: '0 22px 14px',
+            padding: '14px 18px',
+            background: '#FEF2F2',
+            border: '2px solid #DC2626',
+            borderRadius: 10,
+            color: '#7F1D1D',
+            fontSize: 14,
+            fontWeight: 600,
+            lineHeight: 1.5,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+          }}>
+            <div style={{
+              flexShrink: 0,
+              width: 28, height: 28, borderRadius: '50%',
+              background: '#DC2626', color: '#fff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 700, fontSize: 18, lineHeight: 1,
+            }}>{'!'}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#991B1B', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>Save failed</div>
+              <div>{saveError}</div>
+            </div>
           </div>
         )}
         <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
