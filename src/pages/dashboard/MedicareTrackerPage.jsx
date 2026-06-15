@@ -41,7 +41,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
-import { supabase, fetchAllPages } from '../../lib/supabase';
+import { supabase, fetchAllPages, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -179,6 +179,94 @@ export default function MedicareTrackerPage() {
   const [sortKey, setSortKey] = useState('total_completed_visits');
   const [sortDir, setSortDir] = useState('desc');
   const [selectedPatient, setSelectedPatient] = useState(null); // flag row or null
+  const [confirmDischarge, setConfirmDischarge] = useState(null); // flag row or null
+  const [dischargeNote, setDischargeNote] = useState('');
+  const [dischargeBusy, setDischargeBusy] = useState(false);
+  const [dischargeMsg, setDischargeMsg] = useState('');
+
+  // ─── Discharge action (one-tap from row) ──────────────────────────────
+  // Marks the patient's census status as Discharge, acknowledges the Medicare
+  // ready-for-DC flag so the row drops off the "needs attention" view, and
+  // writes a high-priority alert routed to the regional care coordination
+  // team so they know to start the transition-of-care workflow.
+  async function dischargePatient(flag, note) {
+    setDischargeBusy(true);
+    setDischargeMsg('');
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const actor = profile?.full_name || profile?.email || 'Unknown';
+
+      // 1) Flip the census status to "Discharge"
+      const { error: censusErr } = await supabase
+        .from('census_data')
+        .update({ status: 'Discharge', updated_by: actor, status_changed_at: new Date().toISOString() })
+        .eq('patient_name', flag.patient_name);
+      if (censusErr) throw censusErr;
+
+      // 2) Acknowledge the 20-visit flag so it stops appearing as urgent
+      await supabase
+        .from('medicare_visit_flags')
+        .update({
+          flag_20th_acknowledged: true,
+          ready_for_discharge: false,
+          twentieth_visit_discharge_note_date: today,
+          roster_notes: note
+            ? `${flag.roster_notes ? flag.roster_notes + ' | ' : ''}Discharged ${today} by ${actor}: ${note}`
+            : `${flag.roster_notes ? flag.roster_notes + ' | ' : ''}Discharged ${today} by ${actor}`,
+        })
+        .eq('patient_name', flag.patient_name);
+
+      // 3) Notify care coordination team (regional)
+      const region = flag.region || null;
+      await supabase.from('alerts').insert({
+        alert_type: 'patient_discharged',
+        priority: 'high',
+        title: `Discharge: ${flag.patient_name}${region ? ` (Region ${region})` : ''}`,
+        message:
+          `${flag.patient_name} was discharged from Medicare services by ${actor} on ${today}.` +
+          (note ? ` Note: ${note}` : '') +
+          ' Please coordinate transition of care, notify referring provider, and update patient records.',
+        patient_name: flag.patient_name,
+        region: region,
+        coordinator_region: region,
+        assigned_to_region: region,
+        related_date: today,
+        metadata: {
+          source: 'medicare_tracker',
+          actor: actor,
+          actor_email: profile?.email,
+          discharge_note: note || null,
+          visits_completed: flag.total_completed_visits ?? null,
+        },
+        is_read: false,
+        is_dismissed: false,
+      });
+
+      // 4) Audit trail
+      logActivity({
+        coordinatorId: profile?.id,
+        coordinatorName: profile?.full_name,
+        coordinatorRole: profile?.role,
+        actionType: 'medicare_patient_discharged',
+        actionDetail: `Discharged ${flag.patient_name}${region ? ` (Region ${region})` : ''}${note ? ` — ${note}` : ''}`,
+        patientName: flag.patient_name,
+        tableName: 'census_data',
+        recordId: flag.id,
+        metadata: { source: 'medicare_tracker', region, visits_completed: flag.total_completed_visits },
+      });
+
+      setDischargeMsg(`✓ ${flag.patient_name} discharged. Care coord notified.`);
+      setConfirmDischarge(null);
+      setDischargeNote('');
+      setTimeout(() => setDischargeMsg(''), 4000);
+      loadFlags();
+    } catch (e) {
+      console.error('Discharge failed', e);
+      setDischargeMsg(`Discharge failed: ${e?.message || e}`);
+    } finally {
+      setDischargeBusy(false);
+    }
+  }
 
   const regionScope = useAssignedRegions();
 
@@ -684,15 +772,30 @@ export default function MedicareTrackerPage() {
                       {f.roster_notes || '-'}
                     </td>
                     <td style={tdStyle}>
-                      {f.ready_for_discharge && !f.flag_20th_acknowledged && (
-                        <span style={{ background:'#DC2626', color:'#fff', padding:'3px 8px',
-                                       borderRadius:999, fontSize:10, fontWeight:800, whiteSpace:'nowrap' }}>
-                          READY FOR DC
-                        </span>
-                      )}
-                      {f.cap_override_by && (
-                        <div style={{ fontSize:9, opacity:0.7, marginTop:2 }}>override by {f.cap_override_by}</div>
-                      )}
+                      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:4 }}>
+                        {f.ready_for_discharge && !f.flag_20th_acknowledged && (
+                          <span style={{ background:'#DC2626', color:'#fff', padding:'3px 8px',
+                                         borderRadius:999, fontSize:10, fontWeight:800, whiteSpace:'nowrap' }}>
+                            READY FOR DC
+                          </span>
+                        )}
+                        {f.cap_override_by && (
+                          <div style={{ fontSize:9, opacity:0.7 }}>override by {f.cap_override_by}</div>
+                        )}
+                        {/* Quick-discharge action — only show when patient is not already discharged */}
+                        {(f.patient_status || '').toLowerCase() !== 'discharge' && (
+                          <button
+                            onClick={e => { e.stopPropagation(); setConfirmDischarge(f); }}
+                            title="Mark this patient as Discharged and notify the Care Coord team"
+                            style={{
+                              background:'#7F1D1D', color:'#fff', border:'none',
+                              borderRadius:6, padding:'4px 10px', fontSize:10, fontWeight:700,
+                              cursor:'pointer', whiteSpace:'nowrap',
+                            }}>
+                            Discharge
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -711,6 +814,85 @@ export default function MedicareTrackerPage() {
           onClose={() => setSelectedPatient(null)}
           onSaved={() => { loadFlags(); }}
         />
+      )}
+
+      {/* Discharge confirmation modal */}
+      {confirmDischarge && (
+        <div
+          onClick={() => !dischargeBusy && setConfirmDischarge(null)}
+          style={{
+            position:'fixed', inset:0, background:'rgba(15, 23, 42, 0.6)', zIndex:3000,
+            display:'flex', alignItems:'center', justifyContent:'center', padding:24,
+          }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:540,
+                     boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ padding:'16px 22px', background:'#7F1D1D', borderRadius:'14px 14px 0 0' }}>
+              <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>Mark Patient as Discharged</div>
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.85)', marginTop:2 }}>
+                Notifies the Care Coordination team for the patient's region.
+              </div>
+            </div>
+            <div style={{ padding:'18px 22px' }}>
+              <div style={{ background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:8,
+                            padding:'10px 14px', marginBottom:14 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'#991B1B', textTransform:'uppercase', letterSpacing:0.4 }}>Patient</div>
+                <div style={{ fontSize:15, fontWeight:700, color:'#7F1D1D', marginTop:2 }}>{confirmDischarge.patient_name}</div>
+                <div style={{ fontSize:12, color:'#7F1D1D', marginTop:4 }}>
+                  Region {confirmDischarge.region || '—'} {'·'} {confirmDischarge.discipline || '—'} {'·'}
+                  {' '}{confirmDischarge.total_completed_visits ?? 0} visits completed
+                </div>
+              </div>
+              <div style={{ fontSize:13, color:'var(--black)', marginBottom:12, lineHeight:1.5 }}>
+                This will set the census status to <strong>Discharge</strong>, clear the Medicare ready-for-DC flag,
+                and create a <strong>high-priority alert</strong> for the Care Coord team in
+                Region {confirmDischarge.region || '—'} so they can start the transition-of-care workflow.
+              </div>
+              <div>
+                <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>
+                  Discharge note (optional — included in the care coord alert)
+                </div>
+                <textarea
+                  value={dischargeNote}
+                  onChange={e => setDischargeNote(e.target.value)}
+                  placeholder="e.g. patient met goals, transitioned to maintenance, will resume in 30 days"
+                  rows={3}
+                  style={{
+                    width:'100%', padding:'8px 11px', border:'1px solid var(--border)',
+                    borderRadius:7, fontSize:13, outline:'none', background:'var(--card-bg)',
+                    resize:'vertical', minHeight:60, boxSizing:'border-box',
+                  }} />
+              </div>
+            </div>
+            <div style={{ padding:'12px 22px', borderTop:'1px solid var(--border)',
+                          display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
+              <button
+                onClick={() => { setConfirmDischarge(null); setDischargeNote(''); }}
+                disabled={dischargeBusy}
+                style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7,
+                         fontSize:13, background:'var(--card-bg)', cursor:dischargeBusy?'wait':'pointer' }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => dischargePatient(confirmDischarge, dischargeNote)}
+                disabled={dischargeBusy}
+                style={{ padding:'8px 20px', background:'#7F1D1D', color:'#fff', border:'none',
+                         borderRadius:7, fontSize:13, fontWeight:700, cursor:dischargeBusy?'wait':'pointer' }}>
+                {dischargeBusy ? 'Discharging...' : 'Confirm Discharge'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Discharge result toast */}
+      {dischargeMsg && (
+        <div style={{
+          position:'fixed', bottom:24, right:24, zIndex:3100,
+          background: dischargeMsg.startsWith('✓') ? '#065F46' : '#7F1D1D',
+          color:'#fff', padding:'12px 18px', borderRadius:10, fontSize:13, fontWeight:600,
+          boxShadow:'0 10px 30px rgba(0,0,0,0.25)', maxWidth:380,
+        }}>{dischargeMsg}</div>
       )}
     </div>
   );

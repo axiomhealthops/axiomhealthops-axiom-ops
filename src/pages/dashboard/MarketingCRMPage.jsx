@@ -47,6 +47,25 @@ const REGIONS_BY_STATE = { FL: FL_REGIONS, GA: GA_REGIONS };
 // True if a coordinator-table region letter belongs to Georgia.
 // Mirrors isGeorgiaRegion() in src/lib/constants.js for self-containment here.
 const isGAReg = (r) => !!r && String(r).toUpperCase().startsWith('GA');
+// Robust state inference. Pulls from MULTIPLE signals because real-world data
+// is messy — region may be blank, state field may be wrong, etc.
+// Order matters (most-trusted first):
+//   1. region prefix 'GA' → GA
+//   2. region is a known FL letter → FL
+//   3. state field 'GA' or 'Georgia' → GA
+//   4. state field 'FL' or 'Florida' → FL
+//   5. Walter Holston (sole HAE for GA) assigned → GA fallback
+//   6. otherwise null (treat as unknown / FL-default)
+function inferState(row, walterRepId) {
+  if (!row) return null;
+  if (isGAReg(row.region)) return 'GA';
+  if (row.region && FL_REGIONS.includes(String(row.region).toUpperCase())) return 'FL';
+  const s = String(row.state || '').toUpperCase().trim();
+  if (s === 'GA' || s === 'GEORGIA') return 'GA';
+  if (s === 'FL' || s === 'FLORIDA') return 'FL';
+  if (walterRepId && (row.assigned_rep_id === walterRepId || row.rep_id === walterRepId)) return 'GA';
+  return null;
+}
 
 const OUTREACH_TYPES = [
   { key: 'in_person_visit',   label: 'In-Person Visit',  color: '#1565C0' },
@@ -1117,12 +1136,22 @@ export default function MarketingCRMPage() {
     return isAdminTier;
   }
 
+  // Walter Holston is the sole HAE for Georgia — any provider/encounter tied
+  // to him should fall back to GA when other state signals are blank.
+  const walterRepId = useMemo(
+    () => reps.find(r => r.full_name === 'Walter Holston')?.id || null,
+    [reps]
+  );
+
   // ── Derived filtering ─────────────────────────────────────────────────────
   const filteredProviders = useMemo(() => providers.filter(p => {
     if (!showInactive && p.is_active === false) return false;
     if (filterType !== 'ALL' && p.contact_type !== filterType) return false;
-    if (filterState === 'FL' && isGAReg(p.region)) return false;
-    if (filterState === 'GA' && !isGAReg(p.region)) return false;
+    if (filterState !== 'ALL') {
+      const st = inferState(p, walterRepId);
+      if (filterState === 'GA' && st !== 'GA') return false;
+      if (filterState === 'FL' && st === 'GA') return false;  // hide explicit GA when FL is picked
+    }
     if (filterRegion !== 'ALL' && p.region !== filterRegion) return false;
     if (filterPotential !== 'ALL' && p.referral_potential !== filterPotential) return false;
     if (filterPayer !== 'ALL' && (p.primary_insurance || '') !== filterPayer) return false;
@@ -1132,7 +1161,7 @@ export default function MarketingCRMPage() {
       if (!`${p.practice_name} ${p.city||''} ${p.npi||''} ${p.primary_insurance||''}`.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [providers, showInactive, filterType, filterState, filterRegion, filterPotential, filterPayer, myPipeline, profile?.id, searchQ]);
+  }), [providers, showInactive, filterType, filterState, filterRegion, filterPotential, filterPayer, myPipeline, profile?.id, searchQ, walterRepId]);
 
   // ── All-Contacts tab data + sort ─────────────────────────────────────────
   const filteredContactPeople = useMemo(() => {
@@ -1146,8 +1175,13 @@ export default function MarketingCRMPage() {
     }).filter(pp => {
       if (!showInactive && pp.is_active === false) return false;
       const ppRegion = pp.region || pp._provider?.region;
-      if (filterState === 'FL' && isGAReg(ppRegion)) return false;
-      if (filterState === 'GA' && !isGAReg(ppRegion)) return false;
+      if (filterState !== 'ALL') {
+        // Use provider's full record for state inference when available
+        const inferTarget = pp._provider || { region: ppRegion, state: pp.state, assigned_rep_id: pp.assigned_rep_id };
+        const st = inferState(inferTarget, walterRepId);
+        if (filterState === 'GA' && st !== 'GA') return false;
+        if (filterState === 'FL' && st === 'GA') return false;
+      }
       if (filterRegion !== 'ALL' && ppRegion !== filterRegion) return false;
       if (filterRep !== 'ALL' && pp._provider?.assigned_rep_id !== filterRep) return false;
       if (lowerQ) {
@@ -1172,11 +1206,23 @@ export default function MarketingCRMPage() {
       if (av > bv) return  1 * dir;
       return 0;
     });
-  }, [people, providers, encounters, showInactive, filterState, filterRegion, filterRep, contactSearchQ, contactSortKey, contactSortDir]);
+  }, [people, providers, encounters, showInactive, filterState, filterRegion, filterRep, contactSearchQ, contactSortKey, contactSortDir, walterRepId]);
 
   const filteredEncounters = useMemo(() => encounters.filter(e => {
-    if (filterState === 'FL' && isGAReg(e.region)) return false;
-    if (filterState === 'GA' && !isGAReg(e.region)) return false;
+    if (filterState !== 'ALL') {
+      // For encounters: look at the encounter's region first, then fall back to
+      // the linked provider's state if the encounter region is blank.
+      const linkedProvider = providers.find(p => p.id === e.contact_id);
+      const inferTarget = {
+        region: e.region || linkedProvider?.region,
+        state: linkedProvider?.state,
+        assigned_rep_id: linkedProvider?.assigned_rep_id,
+        rep_id: e.rep_id,
+      };
+      const st = inferState(inferTarget, walterRepId);
+      if (filterState === 'GA' && st !== 'GA') return false;
+      if (filterState === 'FL' && st === 'GA') return false;
+    }
     if (filterRegion !== 'ALL' && e.region !== filterRegion) return false;
     if (filterOutreach !== 'ALL' && e.outreach_type !== filterOutreach) return false;
     if (filterOutcome !== 'ALL' && e.outcome_rating !== filterOutcome) return false;
@@ -1191,7 +1237,7 @@ export default function MarketingCRMPage() {
       if (!hay.includes(q)) return false;
     }
     return true;
-  }), [encounters, providers, filterState, filterRegion, filterOutreach, filterOutcome, filterProject, filterRep, filterPayer, myPipeline, profile?.id, searchQ]);
+  }), [encounters, providers, filterState, filterRegion, filterOutreach, filterOutcome, filterProject, filterRep, filterPayer, myPipeline, profile?.id, searchQ, walterRepId]);
 
   // KPI computations — use Sun-Sat week math
   const todayStr = new Date().toISOString().slice(0,10);
