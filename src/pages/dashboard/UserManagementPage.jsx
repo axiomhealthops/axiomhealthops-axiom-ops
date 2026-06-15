@@ -22,7 +22,11 @@ function genPassword() {
   return Array.from({length:12}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
 }
  
-function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUpdate, onDeactivate, onToggleOverride, onSendReset, onSetPassword }) {
+function UserCard({ user, profile, pages, overrides, authStatus, isSuperAdmin, isAdmin, onUpdate, onDeactivate, onToggleOverride, onSendReset, onSetPassword }) {
+  // True when Supabase Auth still has banned_until set to a future date.
+  // This can drift out of sync with coord.is_active when an old soft-delete
+  // banned the auth account but the coord was re-activated later.
+  const isAuthBanned = !!(authStatus?.banned_until && new Date(authStatus.banned_until) > new Date());
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({ role:user.role, regions:user.regions||[], job_title:user.job_title||'', is_swift_team:user.is_swift_team||false, email:user.email||'' });
   const [saving, setSaving] = useState(false);
@@ -123,6 +127,21 @@ function UserCard({ user, profile, pages, overrides, isSuperAdmin, isAdmin, onUp
             </span>
             {user.is_active === false && <span style={{ fontSize:10, fontWeight:700, color:'#6B7280', background:'#F3F4F6', padding:'2px 8px', borderRadius:999 }}>Inactive</span>}
             {!user.user_id && <span style={{ fontSize:10, fontWeight:700, color:'#D97706', background:'#FEF3C7', padding:'2px 8px', borderRadius:999 }}>⚠ No Auth Account</span>}
+            {/* Auth-level ban badge. Critical when coord is Active but auth is
+                still banned — the user thinks they should be able to log in but
+                Supabase Auth rejects them at the door. */}
+            {isAuthBanned && user.is_active !== false && (
+              <span title={`Auth banned until ${new Date(authStatus.banned_until).toLocaleDateString()}. Toggle Deactivate then Activate to fix.`}
+                style={{ fontSize:10, fontWeight:800, color:'#fff', background:'#DC2626', padding:'2px 8px', borderRadius:999 }}>
+                AUTH BANNED — cannot log in
+              </span>
+            )}
+            {isAuthBanned && user.is_active === false && (
+              <span title={`Auth banned until ${new Date(authStatus.banned_until).toLocaleDateString()}`}
+                style={{ fontSize:10, fontWeight:700, color:'#7F1D1D', background:'#FEE2E2', padding:'2px 8px', borderRadius:999 }}>
+                Auth Banned
+              </span>
+            )}
           </div>
           <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>{user.email} {user.regions?.length > 0 ? '· Regions: ' + user.regions.join(', ') : ''}</div>
         </div>
@@ -325,12 +344,17 @@ export default function UserManagementPage() {
   const isSuperAdmin = profile?.role === 'super_admin';
   const isAdmin = profile?.role === 'admin' || isSuperAdmin;
  
+  const [authStatusMap, setAuthStatusMap] = useState({});  // user_id → { banned_until, last_sign_in_at }
+
   async function loadData() {
-    const [{ data:u }, { data:p }, { data:o }, { data:authUsers }] = await Promise.all([
+    const [{ data:u }, { data:p }, { data:o }, authStatusRes] = await Promise.all([
       supabase.from('coordinators').select('*').order('full_name'),
       supabase.from('page_permissions').select('*').order('sort_order'),
       supabase.from('user_page_overrides').select('*'),
-      supabase.from('coordinators').select('id, user_id'),
+      // Pull each linked auth.users row's banned_until + last_sign_in_at so the
+      // UI can show when coord.is_active and auth ban are out of sync. RPC is
+      // admin-gated server-side (Postgres SECURITY DEFINER).
+      supabase.rpc('admin_list_user_auth_status'),
     ]);
     setUsers(u || []);
     setPages(p || []);
@@ -340,6 +364,16 @@ export default function UserManagementPage() {
       map[ov.coordinator_id][ov.page_key] = ov.granted;
     });
     setOverrides(map);
+    // Build a quick lookup from auth.user_id → ban state
+    const authMap = {};
+    (authStatusRes?.data || []).forEach(row => {
+      authMap[row.user_id] = {
+        banned_until: row.banned_until,
+        last_sign_in_at: row.last_sign_in_at,
+        email_confirmed: row.email_confirmed,
+      };
+    });
+    setAuthStatusMap(authMap);
     setLoading(false);
   }
  
@@ -403,7 +437,26 @@ export default function UserManagementPage() {
   }
  
   async function deactivateUser(userId, isActive) {
-    await supabase.from('coordinators').update({ is_active: !isActive }).eq('id', userId);
+    // Use the Edge Function so it flips BOTH coordinators.is_active AND
+    // auth.users.banned_until in one shot. The old version only touched
+    // coordinators.is_active, which is how Gypsy Renos ended up "Active"
+    // in the UI but still banned in Supabase Auth (2026-06-15 incident).
+    setMsg('');
+    const { data, error } = await supabase.functions.invoke('admin-user-actions', {
+      body: { action: 'set_activation', coordinator_id: userId, active: !isActive },
+    });
+    if (error) {
+      let detail = error.message;
+      try { detail = (await error.context?.json?.())?.error || detail; } catch {}
+      setMsg('Error: ' + detail);
+      return;
+    }
+    if (!data?.success) {
+      setMsg('Warning: ' + (data?.warning || data?.error || 'Unknown result'));
+    } else {
+      setMsg('✓ ' + (data.message || 'Updated'));
+      setTimeout(() => setMsg(''), 4000);
+    }
     await loadData();
   }
  
@@ -494,6 +547,7 @@ export default function UserManagementPage() {
  
         {filtered.map(user => (
           <UserCard key={user.id} user={user} profile={profile} pages={pages} overrides={overrides}
+            authStatus={user.user_id ? authStatusMap[user.user_id] : null}
             isSuperAdmin={isSuperAdmin} isAdmin={isAdmin}
             onUpdate={updateUser} onDeactivate={deactivateUser} onDelete={deleteUser} onToggleOverride={toggleOverride} />
         ))}

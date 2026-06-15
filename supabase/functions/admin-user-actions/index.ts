@@ -209,6 +209,63 @@ Deno.serve(async (req) => {
   }
 
   // ─────────────────────────────────────────────────────────────────────
+  // set_activation — atomically toggle coord.is_active AND auth banned_until
+  // ─────────────────────────────────────────────────────────────────────
+  // Body: { coordinator_id, active: boolean }
+  // Why this exists: the UI used to only flip coordinators.is_active, which
+  // drifted out of sync with auth.users.banned_until. Result: Gypsy Renos
+  // was "Active" in the UI but Supabase Auth rejected her login because the
+  // ban was never lifted (2026-06-15 incident). This action keeps both in
+  // step. Activating clears banned_until; deactivating sets it to 2099-12-31.
+  if (action === "set_activation") {
+    const cid = body.coordinator_id;
+    const active = body.active === true;
+    if (!cid) return json({ error: "Missing coordinator_id" }, 400);
+
+    const { data: coord, error: ce } = await admin
+      .from("coordinators")
+      .select("id, user_id, role, full_name, is_active")
+      .eq("id", cid).maybeSingle();
+    if (ce || !coord) return json({ error: `Coordinator not found: ${errStr(ce)}` }, 404);
+
+    // super_admin protection
+    if (coord.role === "super_admin" && callerCoord.role !== "super_admin") {
+      return json({ error: "Only super_admin can change super_admin activation" }, 403);
+    }
+
+    // 1) Flip the coordinator flag
+    const { error: ue } = await admin
+      .from("coordinators")
+      .update({ is_active: active, updated_at: new Date().toISOString() })
+      .eq("id", cid);
+    if (ue) return json({ error: `Coord update failed: ${errStr(ue)}` }, 500);
+
+    // 2) Flip the auth ban (skip if no auth account linked)
+    let authAction: string | null = null;
+    if (coord.user_id) {
+      const { error: bue } = await admin.auth.admin.updateUserById(coord.user_id, {
+        ban_duration: active ? "none" : "876000h", // 100 years effectively permanent
+      });
+      if (bue) {
+        // Don't fail the whole call — surface as a warning so admin sees it
+        return json({
+          success: false,
+          warning: `Coordinator flag updated, but auth ban toggle failed: ${errStr(bue)}`,
+          coord_active: active,
+        }, 200);
+      }
+      authAction = active ? "unbanned" : "banned (until 2099)";
+    }
+
+    return json({
+      success: true,
+      coord_active: active,
+      auth_action: authAction,
+      message: `${coord.full_name} is now ${active ? "active" : "deactivated"}${authAction ? ` (auth ${authAction})` : ""}.`,
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   // bulk_user_migration — for User Management Export/Import workflow
   // ─────────────────────────────────────────────────────────────────────
   // Body: {
