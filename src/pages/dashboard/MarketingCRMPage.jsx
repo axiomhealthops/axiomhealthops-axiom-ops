@@ -40,7 +40,13 @@ const TYPE_COLORS = {
 // excluded per 2026-05-29 Director call (former-employee cleanup + non-region
 // pruning). Historical rows with those values are NOT modified — RLS still
 // permits read where the user's regions array includes the legacy value.
-const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
+const FL_REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
+const GA_REGIONS = ['GA','GA-N','GA-C','GA-S'];   // expansion sub-territories per constants.js
+const REGIONS    = FL_REGIONS;                     // legacy alias — many internal references
+const REGIONS_BY_STATE = { FL: FL_REGIONS, GA: GA_REGIONS };
+// True if a coordinator-table region letter belongs to Georgia.
+// Mirrors isGeorgiaRegion() in src/lib/constants.js for self-containment here.
+const isGAReg = (r) => !!r && String(r).toUpperCase().startsWith('GA');
 
 const OUTREACH_TYPES = [
   { key: 'in_person_visit',   label: 'In-Person Visit',  color: '#1565C0' },
@@ -973,6 +979,7 @@ export default function MarketingCRMPage() {
 
   const [activeTab, setActiveTab] = useState('activity');
   const [filterType, setFilterType]         = useState('ALL');
+  const [filterState, setFilterState]       = useState('ALL');  // 'ALL' | 'FL' | 'GA'
   const [filterRegion, setFilterRegion]     = useState('ALL');
   const [filterPotential, setFilterPotential]= useState('ALL');
   const [filterRep, setFilterRep]           = useState('ALL');
@@ -1114,6 +1121,8 @@ export default function MarketingCRMPage() {
   const filteredProviders = useMemo(() => providers.filter(p => {
     if (!showInactive && p.is_active === false) return false;
     if (filterType !== 'ALL' && p.contact_type !== filterType) return false;
+    if (filterState === 'FL' && isGAReg(p.region)) return false;
+    if (filterState === 'GA' && !isGAReg(p.region)) return false;
     if (filterRegion !== 'ALL' && p.region !== filterRegion) return false;
     if (filterPotential !== 'ALL' && p.referral_potential !== filterPotential) return false;
     if (filterPayer !== 'ALL' && (p.primary_insurance || '') !== filterPayer) return false;
@@ -1123,7 +1132,7 @@ export default function MarketingCRMPage() {
       if (!`${p.practice_name} ${p.city||''} ${p.npi||''} ${p.primary_insurance||''}`.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [providers, showInactive, filterType, filterRegion, filterPotential, filterPayer, myPipeline, profile?.id, searchQ]);
+  }), [providers, showInactive, filterType, filterState, filterRegion, filterPotential, filterPayer, myPipeline, profile?.id, searchQ]);
 
   // ── All-Contacts tab data + sort ─────────────────────────────────────────
   const filteredContactPeople = useMemo(() => {
@@ -1136,7 +1145,10 @@ export default function MarketingCRMPage() {
       return { ...pp, _provider: prov || null, _lastEncounter: lastEnc || null };
     }).filter(pp => {
       if (!showInactive && pp.is_active === false) return false;
-      if (filterRegion !== 'ALL' && (pp.region || pp._provider?.region) !== filterRegion) return false;
+      const ppRegion = pp.region || pp._provider?.region;
+      if (filterState === 'FL' && isGAReg(ppRegion)) return false;
+      if (filterState === 'GA' && !isGAReg(ppRegion)) return false;
+      if (filterRegion !== 'ALL' && ppRegion !== filterRegion) return false;
       if (filterRep !== 'ALL' && pp._provider?.assigned_rep_id !== filterRep) return false;
       if (lowerQ) {
         const hay = `${pp.name||''} ${pp.title||''} ${pp.phone||''} ${pp.email||''} ${pp._provider?.practice_name||''} ${pp.notes||''}`.toLowerCase();
@@ -1160,9 +1172,11 @@ export default function MarketingCRMPage() {
       if (av > bv) return  1 * dir;
       return 0;
     });
-  }, [people, providers, encounters, showInactive, filterRegion, filterRep, contactSearchQ, contactSortKey, contactSortDir]);
+  }, [people, providers, encounters, showInactive, filterState, filterRegion, filterRep, contactSearchQ, contactSortKey, contactSortDir]);
 
   const filteredEncounters = useMemo(() => encounters.filter(e => {
+    if (filterState === 'FL' && isGAReg(e.region)) return false;
+    if (filterState === 'GA' && !isGAReg(e.region)) return false;
     if (filterRegion !== 'ALL' && e.region !== filterRegion) return false;
     if (filterOutreach !== 'ALL' && e.outreach_type !== filterOutreach) return false;
     if (filterOutcome !== 'ALL' && e.outcome_rating !== filterOutcome) return false;
@@ -1177,7 +1191,7 @@ export default function MarketingCRMPage() {
       if (!hay.includes(q)) return false;
     }
     return true;
-  }), [encounters, providers, filterRegion, filterOutreach, filterOutcome, filterProject, filterRep, filterPayer, myPipeline, profile?.id, searchQ]);
+  }), [encounters, providers, filterState, filterRegion, filterOutreach, filterOutcome, filterProject, filterRep, filterPayer, myPipeline, profile?.id, searchQ]);
 
   // KPI computations — use Sun-Sat week math
   const todayStr = new Date().toISOString().slice(0,10);
@@ -1309,10 +1323,38 @@ export default function MarketingCRMPage() {
           <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, padding:'10px 14px', display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
             <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search practice, NPI, summary..."
               style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)', width:200 }} />
+            {/* State dropdown — switches the Regions list below + filters the data */}
+            <select value={filterState} onChange={e => {
+                const v = e.target.value;
+                setFilterState(v);
+                // If the previously-picked region doesn't belong to the newly-picked state, reset it
+                if (filterRegion !== 'ALL') {
+                  if (v === 'FL' && isGAReg(filterRegion)) setFilterRegion('ALL');
+                  if (v === 'GA' && !isGAReg(filterRegion)) setFilterRegion('ALL');
+                }
+              }}
+              style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)', fontWeight:600 }}>
+              <option value="ALL">All States</option>
+              <option value="FL">Florida</option>
+              <option value="GA">Georgia</option>
+            </select>
             <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
               style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}>
-              <option value="ALL">All Regions</option>
-              {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
+              <option value="ALL">{filterState === 'GA' ? 'All Georgia Territories' : filterState === 'FL' ? 'All Florida Territories' : 'All Regions'}</option>
+              {filterState === 'ALL' ? (
+                <>
+                  <optgroup label="Florida">
+                    {FL_REGIONS.map(r => <option key={r} value={r}>Territory {r}</option>)}
+                  </optgroup>
+                  <optgroup label="Georgia">
+                    {GA_REGIONS.map(r => <option key={r} value={r}>{r === 'GA' ? 'Georgia (all)' : r}</option>)}
+                  </optgroup>
+                </>
+              ) : filterState === 'FL' ? (
+                FL_REGIONS.map(r => <option key={r} value={r}>Territory {r}</option>)
+              ) : (
+                GA_REGIONS.map(r => <option key={r} value={r}>{r === 'GA' ? 'Georgia (all)' : r}</option>)
+              )}
             </select>
             <select value={filterRep} onChange={e => setFilterRep(e.target.value)}
               style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}>
