@@ -330,8 +330,25 @@ function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects,
   const isEventLike = OUTREACH_TYPES_NO_PROVIDER.has(form.outreach_type);
 
   async function save() {
-    if (!form.outreach_type) return;
-    if (!isEventLike && !provider) return;
+    // Validation — give the user a clear error instead of silently no-op'ing,
+    // which is what was confusing Brian Roffe (iPad, opened the modal from the
+    // top "Log Outreach" button without first picking a provider).
+    if (!form.outreach_type) {
+      setSaveError('Pick an outreach type first (In-Person Visit, Phone Call, etc.).');
+      return;
+    }
+    if (!isEventLike && !provider) {
+      setSaveError('This outreach type requires a provider. Close this modal, find the provider in the CRM list, and click "Log Outreach" from that provider\'s card. OR switch to outreach type "Event" / "Job Fair" if this is a non-provider activity.');
+      return;
+    }
+    if (isEventLike && !form.target_clinic_or_school?.trim()) {
+      setSaveError('Please enter the clinic, school, or venue name in the "Target Clinic / School" field.');
+      return;
+    }
+    if (isPhoneCall && !form.phone_call_reason?.trim()) {
+      setSaveError('Please enter a reason for the phone call before saving.');
+      return;
+    }
     setSaving(true);
     setSaveError('');
     const outcomeLabel = OUTCOME_RATINGS.find(o => o.key === form.outcome_rating)?.label || form.outcome || '';
@@ -599,10 +616,21 @@ function OutreachModal({ provider, encounter, contactPeopleAll, specialProjects,
             </div>
           </div>
         )}
+        {/* Pre-save validation banner — shows which fields are still required.
+            Tapping the Save button will now ALSO show the error in the red
+            banner above, so iPad users can't get stuck without knowing why. */}
+        {(!provider && !isEventLike) && !saveError && (
+          <div style={{ margin:'0 22px 10px', padding:'10px 14px', background:'#FFFBEB', border:'1px solid #F59E0B', borderRadius:8, color:'#92400E', fontSize:12, fontWeight:500, lineHeight:1.5 }}>
+            <strong>Heads up:</strong> this outreach type needs a provider attached. Close this and click <em>"Log Outreach"</em> from a provider's card, OR switch the type to <em>Event</em> / <em>Job Fair</em> if this is a non-provider activity.
+          </div>
+        )}
         <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
           <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
-          <button onClick={save} disabled={saving || (!isEventLike && !provider) || (isEventLike && !form.target_clinic_or_school) || (isPhoneCall && !form.phone_call_reason)}
-            style={{ padding:'8px 22px', background:'#065F46', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:'pointer' }}>
+          {/* Only disable while actively saving — let the user CLICK to see the
+              validation error in the red banner instead of being stuck on a
+              greyed-out button with no explanation. */}
+          <button onClick={save} disabled={saving}
+            style={{ padding:'8px 22px', background:'#065F46', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:saving?'wait':'pointer' }}>
             {saving ? 'Saving...' : 'Log Outreach'}
           </button>
         </div>
@@ -981,15 +1009,31 @@ export default function MarketingCRMPage() {
     || (profile.secondary_roles || []).includes('marketing_manager')
   );
 
+  // Marketing-primary roles roam across all regions to mirror the DB-side
+  // can_access_marketing_region() whitelist (see CLAUDE.md #15). Without
+  // this, useAssignedRegions scopes HAEs to their `coordinators.regions`
+  // array — Brian Roffe only saw Region T providers and Walter Holston
+  // (regions = []) saw nothing at all, forcing them into the Untargeted
+  // flow where the Save button silently disables for non-event outreach
+  // types. Keep this LOCAL to Marketing CRM — useAssignedRegions is shared
+  // with clinical/ops pages where HAEs must NOT see cross-region data.
+  const isMarketingAllAccess = profile && (
+    ['super_admin','admin','director','ceo','director_payer_marketing',
+     'healthcare_account_executive','marketing_rep'].includes(profile.role)
+    || (profile.secondary_roles || []).includes('marketing_manager')
+    || (profile.secondary_roles || []).includes('marketing_rep')
+  );
+  const scopeQuery = (q) => isMarketingAllAccess ? q : regionScope.applyToQuery(q);
+
   async function load() {
     if (regionScope.loading) return;
-    if (!regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
+    if (!isMarketingAllAccess && !regionScope.isAllAccess && (!regionScope.regions || regionScope.regions.length === 0)) {
       setProviders([]); setEncounters([]); setPeople([]); setSpecialProjects([]); setReps([]); setLoading(false); return;
     }
     const [c, e, p, s, r] = await Promise.all([
-      fetchAllPages(regionScope.applyToQuery(supabase.from('marketing_contacts').select('*').order('practice_name'))),
-      fetchAllPages(regionScope.applyToQuery(supabase.from('marketing_encounters').select('*').order('encounter_date', { ascending: false }))),
-      fetchAllPages(regionScope.applyToQuery(supabase.from('marketing_contact_people').select('*').order('name'))),
+      fetchAllPages(scopeQuery(supabase.from('marketing_contacts').select('*').order('practice_name'))),
+      fetchAllPages(scopeQuery(supabase.from('marketing_encounters').select('*').order('encounter_date', { ascending: false }))),
+      fetchAllPages(scopeQuery(supabase.from('marketing_contact_people').select('*').order('name'))),
       fetchAllPages(supabase.from('marketing_special_projects').select('*').order('name')),
       fetchAllPages(supabase.from('coordinators')
         .select('id, full_name, role, secondary_roles, regions, is_active')
