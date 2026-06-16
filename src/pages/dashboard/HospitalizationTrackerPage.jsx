@@ -28,8 +28,14 @@ const CAUSE_CATEGORIES = [
   { value: 'unknown',            label: 'Unknown',            color: '#6B7280', bg: '#F3F4F6' },
 ];
 
+// 2026-06-16: Added "CHF / Fluid retention" and "Fall (lymphedema-attributable)"
+// to the lymphedema_related list. Clinical rationale: CHF decompensation in a
+// lymphedema patient is directly tied to lymphatic load/fluid handling, and
+// falls caused by heavy/swollen limbs are lymphedema-attributable rather than
+// random trauma. The generic "Fall/Injury" stays under other_cause for falls
+// unrelated to lymphedema (slip, syncope, mechanical fall).
 const SUBCATEGORIES = {
-  lymphedema_related: ['Cellulitis', 'Wound infection', 'Lymphedema crisis', 'DVT/PE', 'Sepsis (lymphedema source)', 'Other lymphedema'],
+  lymphedema_related: ['Cellulitis', 'Wound infection', 'Lymphedema crisis', 'CHF / Fluid retention', 'Fall (lymphedema-attributable)', 'DVT/PE', 'Sepsis (lymphedema source)', 'Other lymphedema'],
   other_cause: ['Cardiac', 'Fall/Injury', 'Respiratory', 'Stroke/Neuro', 'GI', 'UTI/Sepsis', 'Surgical', 'Mental health', 'Other'],
   unknown: ['Under investigation'],
 };
