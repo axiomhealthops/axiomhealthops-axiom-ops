@@ -33,6 +33,10 @@ import HospitalizationTrackerPage from './dashboard/HospitalizationTrackerPage';
 import MissedCancelledReportPage from './dashboard/MissedCancelledReportPage';
 import MyRegionPage from './dashboard/MyRegionPage';
 import MedicareTrackerPage from './dashboard/MedicareTrackerPage';
+// 2026-06-15: Garment Tracker (LE + UE). Replaces the legacy Google Form
+// "MASTER Garment Order Form Responses" spreadsheet with a proper Kanban-style
+// workflow tied to census_data via patient_name auto-link trigger.
+import GarmentTrackerPage from './dashboard/GarmentTrackerPage';
 import MarketingCRMPage from './dashboard/MarketingCRMPage';
 import MarketingTeamDirectoryPage from './dashboard/MarketingTeamDirectoryPage';
 import MarketingReferralsPage from './dashboard/MarketingReferralsPage';
@@ -108,6 +112,7 @@ const PAGE_COMPONENTS = {
   'missed-cancelled':       MissedCancelledReportPage,
   'my-region':              MyRegionPage,
   'medicare-tracker':       MedicareTrackerPage,
+  'garment-tracker':        GarmentTrackerPage,
   'marketing-crm':          MarketingCRMPage,
   'marketing-team-directory': MarketingTeamDirectoryPage,
   'marketing-referrals':    MarketingReferralsPage,

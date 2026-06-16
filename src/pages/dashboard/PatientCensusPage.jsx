@@ -356,6 +356,90 @@ function AddAssignmentModal({ patient, patientKey, patientRegion, patientZipPref
   );
 }
 
+// 2026-06-15: Garment orders panel inside Patient Profile. Reads from
+// v_garment_orders_with_stage. We match on patient_id first (auto-linked via
+// trigger), then fall back to case-insensitive patient_name so legacy rows
+// surface even if the name hasn't been re-saved through the linker yet.
+function PatientGarmentsTab({ patient }) {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      const q1 = supabase.from('v_garment_orders_with_stage').select('*').eq('patient_id', patient.id);
+      const q2 = supabase.from('v_garment_orders_with_stage').select('*').ilike('patient_name', patient.patient_name || '');
+      const [r1, r2] = await Promise.all([q1, q2]);
+      if (cancelled) return;
+      const merged = new Map();
+      [...(r1.data || []), ...(r2.data || [])].forEach(o => merged.set(o.id, o));
+      const list = Array.from(merged.values()).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      setOrders(list);
+      setLoading(false);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [patient.id, patient.patient_name]);
+
+  const STAGE_LABEL = {
+    submitted: { l: 'Submitted', c: '#9C5700', b: '#FFFBEB' },
+    approved: { l: 'Approved', c: '#065F46', b: '#ECFDF5' },
+    auth_pending: { l: 'Auth Pending', c: '#1E40AF', b: '#EFF6FF' },
+    order_placed: { l: 'Order Placed', c: '#7C3AED', b: '#F5F3FF' },
+    in_transit: { l: 'In Transit', c: '#0E7490', b: '#ECFEFF' },
+    delivered: { l: 'Delivered', c: '#065F46', b: '#D1FAE5' },
+    denied: { l: 'Denied', c: '#9C0006', b: '#FEF2F2' },
+    cancelled: { l: 'Cancelled', c: '#6B7280', b: '#F3F4F6' },
+  };
+
+  if (loading) return <div style={{ padding: 20, color: 'var(--gray)', fontSize: 13 }}>Loading garment orders…</div>;
+  if (orders.length === 0) return (
+    <div style={{ textAlign: 'center', padding: 40, color: 'var(--gray)' }}>
+      <div style={{ fontSize: 13, fontWeight: 600 }}>No garment orders on file</div>
+      <div style={{ fontSize: 11, marginTop: 4 }}>New orders submitted through the Garment Tracker will appear here.</div>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
+        Garment Orders <span style={{ color: 'var(--gray)', fontWeight: 500, fontSize: 12 }}>· {orders.length} total</span>
+      </div>
+      {orders.map(o => {
+        const st = STAGE_LABEL[o.stage] || STAGE_LABEL.submitted;
+        return (
+          <div key={o.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'var(--card-bg)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+              <div>
+                <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: o.limb_type === 'UE' ? '#7C3AED' : '#0E7490', padding: '2px 7px', borderRadius: 999, marginRight: 6 }}>{o.limb_type}</span>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{o.order_type || 'Order'}</span>
+                {o.garment_code && <span style={{ fontSize: 11, color: 'var(--gray)', marginLeft: 8 }}>· {o.garment_code}</span>}
+              </div>
+              <span style={{ fontSize: 10, fontWeight: 700, color: st.c, background: st.b, padding: '2px 8px', borderRadius: 999 }}>{st.l}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, fontSize: 11, color: 'var(--gray)' }}>
+              <div><strong style={{ color: 'var(--black)' }}>Requested:</strong> {o.field_request_date ? new Date(o.field_request_date + 'T00:00:00').toLocaleDateString() : '—'}</div>
+              <div><strong style={{ color: 'var(--black)' }}>Clinician:</strong> {o.clinician_name || '—'}</div>
+              <div><strong style={{ color: 'var(--black)' }}>Approver:</strong> {o.approver_name || '—'}</div>
+              <div><strong style={{ color: 'var(--black)' }}>Auth #:</strong> {o.auth_number || (o.auth_needed === false ? 'N/A' : '—')}</div>
+              <div><strong style={{ color: 'var(--black)' }}>Order #:</strong> {o.order_number || '—'}</div>
+              <div><strong style={{ color: 'var(--black)' }}>Delivered:</strong> {o.delivery_date ? new Date(o.delivery_date + 'T00:00:00').toLocaleDateString() : '—'}</div>
+              <div><strong style={{ color: 'var(--black)' }}>Cost:</strong> {o.garment_cost != null ? '$' + Number(o.garment_cost).toLocaleString('en-US', { minimumFractionDigits: 2 }) : '—'}</div>
+              <div><strong style={{ color: 'var(--black)' }}>Insurance:</strong> {o.insurance || '—'}</div>
+              <div><strong style={{ color: 'var(--black)' }}>Phase:</strong> {o.phase_of_care || '—'}</div>
+            </div>
+            {o.approval_comments && (
+              <div style={{ marginTop: 8, padding: 8, background: 'var(--bg)', borderRadius: 6, fontSize: 11, color: 'var(--gray)' }}>
+                <strong style={{ color: 'var(--black)' }}>Approver Note:</strong> {o.approval_comments}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpdate }) {
   const [tab, setTab] = useState('overview');
   const [editing, setEditing] = useState(false);
@@ -785,6 +869,7 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
           {TAB('auth','Authorization')}
           {TAB('history','Visit History')}
           {TAB('notes','Chart Notes')}
+          {TAB('garments','Garments')}
         </div>
 
         {/* Tab content */}
@@ -1004,6 +1089,11 @@ function PatientProfile({ patient, visits, authData, intakeData, onClose, onUpda
             <div style={{ padding: '4px 0' }}>
               <PatientNotesPanel patientName={patient.patient_name} maxHeight="450px" />
             </div>
+          )}
+
+          {/* GARMENTS — patient-scoped slice of the Garment Tracker */}
+          {tab === 'garments' && (
+            <PatientGarmentsTab patient={patient} />
           )}
 
           {/* VISIT HISTORY */}
