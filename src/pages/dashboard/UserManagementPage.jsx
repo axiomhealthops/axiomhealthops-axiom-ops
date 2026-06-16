@@ -59,21 +59,44 @@ function UserCard({ user, profile, pages, overrides, authStatus, isSuperAdmin, i
     if (!user.user_id) { setPwdMsg('No auth account linked — create one first via User Management'); return; }
     setSaving(true);
     setPwdMsg('');
- 
+
+    // 1) Set the password via the blessed Edge Function path.
     const { data, error } = await supabase.functions.invoke('admin-user-actions', {
       body: { action: 'set_password', target_user_id: user.user_id, new_password: newPwd },
     });
- 
+
     if (error) {
-      // functions.invoke returns FunctionsHttpError when status !== 2xx — try to read the JSON body for detail
       let detail = error.message;
       try { detail = (await error.context?.json?.())?.error || detail; } catch {}
       setPwdMsg('Failed: ' + detail);
-    } else if (data?.success) {
-      setPwdMsg('✓ ' + (data.message || 'Password updated'));
+      setSaving(false);
+      return;
+    }
+    if (!data?.success) {
+      setPwdMsg('Failed: ' + (data?.error || data?.detail || 'Unknown error'));
+      setSaving(false);
+      return;
+    }
+
+    // 2) Verify the hash actually matches the plaintext we typed.
+    // The Edge Function has reported success twice now (Gypsy 6/8, Ariel
+    // 6/16) while the resulting hash did NOT match the typed password —
+    // login then fails as "Invalid". The verify RPC catches this silently
+    // dropped password before the admin walks away from the form.
+    const { data: verified, error: verifyErr } = await supabase.rpc('admin_verify_user_password', {
+      target_user_id: user.user_id,
+      plaintext: newPwd,
+    });
+    if (verifyErr) {
+      setPwdMsg('⚠ Set returned success but verify failed: ' + verifyErr.message + ' — try again');
+      setSaving(false);
+      return;
+    }
+    if (verified === true) {
+      setPwdMsg('✓ Password set AND verified — login will work with this exact password');
       setNewPwd('');
     } else {
-      setPwdMsg('Failed: ' + (data?.error || data?.detail || 'Unknown error'));
+      setPwdMsg('⚠ Password did NOT land — the hash does not match what you typed. Try again, watching for paste artifacts or hidden whitespace.');
     }
     setSaving(false);
   }
