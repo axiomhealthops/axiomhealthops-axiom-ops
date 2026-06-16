@@ -56,7 +56,7 @@ function fmtDate(d) {
   return `${x.getMonth() + 1}/${x.getDate()}/${String(x.getFullYear()).slice(2)}`;
 }
 
-export default function FrequencyReviewPage() {
+export default function FrequencyReviewPage({ embedded = false } = {}) {
   const { profile } = useAuth();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -130,17 +130,22 @@ export default function FrequencyReviewPage() {
 
   if (loading) return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <TopBar title="Frequency Review Queue" subtitle="Loading..." />
+      {!embedded && <TopBar title="Frequency Review Queue" subtitle="Loading..." />}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gray)' }}>Loading...</div>
     </div>
   );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
-      <TopBar
+      {!embedded && <TopBar
         title="Frequency Review Queue"
         subtitle={`${summary.total} patient${summary.total === 1 ? '' : 's'} whose cadence has drifted from their prescribed frequency — ${summary.deesc} under-visited · ${summary.intensified} over-visited`}
-      />
+      />}
+      {embedded && (
+        <div style={{ padding:'10px 20px', fontSize:12, color:'var(--gray)', borderBottom:'1px solid var(--border)', background:'var(--bg)' }}>
+          {summary.total} patient{summary.total === 1 ? '' : 's'} flagged · {summary.deesc} under-visited · {summary.intensified} over-visited
+        </div>
+      )}
       <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
 
         {!canApprove && (

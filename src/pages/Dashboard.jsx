@@ -57,6 +57,10 @@ import DischargeTrackerPage from './dashboard/DischargeTrackerPage';
 import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
 import StaleFrequencyPage from './dashboard/StaleFrequencyPage';
 import FrequencyReviewPage from './dashboard/FrequencyReviewPage';
+// 2026-06-16: Unified Frequency Management page — combines Drift + Stale
+// into a single tabbed view. Legacy routes stale-frequency and
+// frequency-review both resolve to this wrapper.
+import FrequencyManagementPage from './dashboard/FrequencyManagementPage';
 import OpsReportsPage from './dashboard/OpsReportsPage';
 import ClinicianSchedulePage from './dashboard/ClinicianSchedulePage';
 import InsuranceSettingsPage from './dashboard/InsuranceSettingsPage';
@@ -131,8 +135,13 @@ const PAGE_COMPONENTS = {
   'auth-renewals':           AuthRenewalsPage,
   'discharges':              DischargeTrackerPage,
   'clinical-progression':   ClinicalProgressionPage,
-  'stale-frequency':        StaleFrequencyPage,
-  'frequency-review':       FrequencyReviewPage,
+  // 2026-06-16: Both legacy routes now resolve to the unified Frequency
+  // Management wrapper. Old links still work; the wrapper opens the right
+  // tab via `intent`. Originals preserved as deep-link fallback.
+  'stale-frequency':        (props) => <FrequencyManagementPage {...props} intent="stale" />,
+  'frequency-review':       FrequencyManagementPage,
+  'stale-frequency-legacy': StaleFrequencyPage,
+  'frequency-review-legacy': FrequencyReviewPage,
   'ops-reports':             OpsReportsPage,
   'clinician-schedule':      ClinicianSchedulePage,
   'insurance-settings':      InsuranceSettingsPage,

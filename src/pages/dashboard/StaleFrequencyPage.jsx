@@ -62,7 +62,7 @@ function isCancelled(event_type, status) {
   return /cancel/i.test(event_type || '') || /cancel/i.test(status || '');
 }
 
-export default function StaleFrequencyPage() {
+export default function StaleFrequencyPage({ embedded = false } = {}) {
   const { profile } = useAuth();
   const [census, setCensus] = useState([]);
   const [visits, setVisits] = useState([]);
@@ -243,7 +243,7 @@ export default function StaleFrequencyPage() {
   if (loading) {
     return (
       <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
-        <TopBar title="Stale Frequency Review" subtitle="Analyzing patient visit patterns…" />
+        {!embedded && <TopBar title="Stale Frequency Review" subtitle="Analyzing patient visit patterns…" />}
         <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>Loading…</div>
       </div>
     );
@@ -251,7 +251,7 @@ export default function StaleFrequencyPage() {
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
-      <TopBar
+      {!embedded && <TopBar
         title="Stale Frequency Review"
         subtitle={`${counts.stale} patients eligible for frequency reduction · ~${r1(potentialCapacityPerWeek)} visits/week of capacity could be unlocked`}
         actions={
@@ -260,7 +260,18 @@ export default function StaleFrequencyPage() {
             {availableRegions.map(r => <option key={r} value={r}>{r === 'ALL' ? 'All Regions' : `Region ${r}`}</option>)}
           </select>
         }
-      />
+      />}
+      {embedded && (
+        <div style={{ padding:'10px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'1px solid var(--border)', background:'var(--bg)' }}>
+          <div style={{ fontSize:12, color:'var(--gray)' }}>
+            {counts.stale} eligible for reduction · ~{r1(potentialCapacityPerWeek)} visits/wk of unlockable capacity
+          </div>
+          <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)}
+            style={{ padding:'6px 12px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, background:'var(--card-bg)', outline:'none' }}>
+            {availableRegions.map(r => <option key={r} value={r}>{r === 'ALL' ? 'All Regions' : `Region ${r}`}</option>)}
+          </select>
+        </div>
+      )}
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', borderBottom:'1px solid var(--border)' }}>
         <MetricCard active={view === 'stale'} onClick={() => setView('stale')}
