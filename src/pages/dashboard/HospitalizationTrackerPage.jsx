@@ -40,7 +40,7 @@ const SUBCATEGORIES = {
   unknown: ['Under investigation'],
 };
 
-const FREQUENCIES = ['4w4', '3w4', '2w4', '1w4', '1x/month', '1x/month (2)', 'Maintenance', 'Unknown'];
+const FREQUENCIES = ['4w4', '3w4', '2w4', '1w4', '1ew2', '1x/month', '1x/month (2)', 'Maintenance', 'Unknown'];
 
 // 2026-06-16: Stay type — separates true inpatient admissions from
 // observation (<24h) and ED-only visits. The Lymphedema Rate uses only
