@@ -40,7 +40,18 @@ const SUBCATEGORIES = {
   unknown: ['Under investigation'],
 };
 
-const FREQUENCIES = ['4w4', '3w4', '2w2', '1w4', '1x/month', '1x/month (2)', 'Maintenance', 'Unknown'];
+const FREQUENCIES = ['4w4', '3w4', '2w4', '1w4', '1x/month', '1x/month (2)', 'Maintenance', 'Unknown'];
+
+// 2026-06-16: Stay type — separates true inpatient admissions from
+// observation (<24h) and ED-only visits. The Lymphedema Rate uses only
+// inpatient stays so ED-bounces don't pollute the quality metric.
+const STAY_TYPES = [
+  { value: 'inpatient',   label: 'Inpatient (true admission)',         color: '#7C2D12', bg: '#FEF2F2' },
+  { value: 'observation', label: 'Observation (<24h / formal obs)',    color: '#9C5700', bg: '#FFFBEB' },
+  { value: 'ed_only',     label: 'ED only (treated + released)',       color: '#1E40AF', bg: '#EFF6FF' },
+  { value: 'unknown',     label: 'Unknown (pending confirmation)',     color: '#6B7280', bg: '#F3F4F6' },
+];
+const STAY_TYPE_MAP = Object.fromEntries(STAY_TYPES.map(s => [s.value, s]));
 
 const OUTCOMES = [
   { value: 'discharged_home',  label: 'Discharged Home' },
@@ -86,6 +97,10 @@ function StatCard({ label, value, sub, color='var(--black)', bg='var(--card-bg)'
 const emptyForm = {
   patient_name:'', region:'', insurance:'', clinician_name:'',
   admission_date:'', discharge_date:'', hospital_name:'',
+  // 2026-06-16: default to inpatient — back-compat with rows logged before
+  // the stay_type distinction existed (those rows were all treated as
+  // inpatient admissions).
+  stay_type:'inpatient',
   admitting_diagnosis:'', cause_category:'lymphedema_related', cause_subcategory:'',
   potentially_preventable: false, preventability_notes:'',
   outcome:'still_admitted', returned_to_service: false, return_date:'',
@@ -180,6 +195,7 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames }) {
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
             <F label="Admission Date" req>{input('admission_date','date')}</F>
             <F label="Discharge Date (leave blank if still admitted)">{input('discharge_date','date')}</F>
+            <F label="Stay Type" req>{sel('stay_type', STAY_TYPES.map(s => ({ value: s.value, label: s.label })))}</F>
             <F label="Hospital Name">{input('hospital_name','text','Hospital or facility name')}</F>
             <F label="Admitting Diagnosis" req>{input('admitting_diagnosis','text','Primary reason for admission')}</F>
           </div>
@@ -311,16 +327,24 @@ export default function HospitalizationTrackerPage() {
   const activeCensus = useMemo(() => census.filter(c => c.status === 'Active' || c.status === 'Active - Auth Pendin').length || 543, [census]);
   const currentlyHospitalized = useMemo(() => census.filter(c => c.status === 'Hospitalized'), [census]);
 
-  const lymphHosps = filtered.filter(r => r.cause_category === 'lymphedema_related');
-  const otherHosps = filtered.filter(r => r.cause_category === 'other_cause');
-  const unknownHosps = filtered.filter(r => r.cause_category === 'unknown');
-  const stillAdmitted = filtered.filter(r => !r.discharge_date || r.outcome === 'still_admitted');
-  const preventable = filtered.filter(r => r.potentially_preventable);
-  const returnedPts = filtered.filter(r => r.returned_to_service);
+  // 2026-06-16: Quality metrics use INPATIENT stays only. Observation
+  // (<24h) and ED-only visits stay visible in the secondary stat card
+  // below so they're not invisible, but they don't inflate the Lymph Rate.
+  // Rows logged before stay_type existed default to 'inpatient' (back-compat).
+  const inpatientOnly = filtered.filter(r => (r.stay_type || 'inpatient') === 'inpatient');
+  const observationStays = filtered.filter(r => r.stay_type === 'observation');
+  const edOnlyVisits = filtered.filter(r => r.stay_type === 'ed_only');
+
+  const lymphHosps   = inpatientOnly.filter(r => r.cause_category === 'lymphedema_related');
+  const otherHosps   = inpatientOnly.filter(r => r.cause_category === 'other_cause');
+  const unknownHosps = inpatientOnly.filter(r => r.cause_category === 'unknown');
+  const stillAdmitted = inpatientOnly.filter(r => !r.discharge_date || r.outcome === 'still_admitted');
+  const preventable   = inpatientOnly.filter(r => r.potentially_preventable);
+  const returnedPts   = inpatientOnly.filter(r => r.returned_to_service);
 
   const lymphRate = activeCensus > 0 ? (lymphHosps.length / activeCensus * 100) : 0;
   const otherRate = activeCensus > 0 ? (otherHosps.length / activeCensus * 100) : 0;
-  const totalRate = activeCensus > 0 ? (filtered.length / activeCensus * 100) : 0;
+  const totalRate = activeCensus > 0 ? (inpatientOnly.length / activeCensus * 100) : 0;
 
   const periodLabel = { month:'This Month', quarter:'This Quarter', ytd:'Year to Date', all:'All Time' }[filterPeriod];
 
@@ -377,8 +401,10 @@ export default function HospitalizationTrackerPage() {
 
         <div style={{ padding:20 }}>
 
-          {/* RATE BENCHMARK CARDS — always visible */}
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', gap:14, marginBottom:20 }}>
+          {/* RATE BENCHMARK CARDS — always visible.
+              2026-06-16: grew from 5 → 6 columns to fit the new
+              Observation / ED-only card alongside the rate benchmarks. */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(6, minmax(0, 1fr))', gap:14, marginBottom:20 }}>
 
             {/* Lymphedema Rate — the critical one */}
             <div style={{ background:rateBg(lymphRate, LYMPH_BENCHMARK), border:`2px solid ${lymphRate <= LYMPH_BENCHMARK ? '#A7F3D0' : '#FECACA'}`, borderRadius:12, padding:16, gridColumn:'span 1' }}>
@@ -431,11 +457,19 @@ export default function HospitalizationTrackerPage() {
               </div>
             </div>
 
-            <StatCard label="Total Hospitalizations" value={filtered.length} icon="🏥"
-              sub={`${totalRate.toFixed(2)}% of ${activeCensus} active · ${unknownHosps.length > 0 ? unknownHosps.length + ' need classification' : 'all classified'}`}
+            <StatCard label="Inpatient Admissions" value={inpatientOnly.length} icon="🏥"
+              sub={`${totalRate.toFixed(2)}% of ${activeCensus} active · ${observationStays.length + edOnlyVisits.length} obs/ED excluded from rate`}
               color={unknownHosps.length > 0 ? '#D97706' : 'var(--black)'}
               bg={unknownHosps.length > 0 ? '#FEF3C7' : 'var(--card-bg)'}
               alert={unknownHosps.length > 0} />
+
+            {/* 2026-06-16: Observation + ED-only stays — visible but excluded
+                from the Lymph Rate denominator. ED visits aren't admissions
+                and observation status carries different billing/quality
+                weight, so they live in their own card. */}
+            <StatCard label="Observation / ED Only" value={observationStays.length + edOnlyVisits.length} icon="🚑"
+              sub={`${observationStays.length} obs (<24h) · ${edOnlyVisits.length} ED only`}
+              color={'#9C5700'} bg={'#FFFBEB'} />
             <StatCard label="Currently Admitted" value={stillAdmitted.length} icon="🛏"
               sub={stillAdmitted.length > 0 ? stillAdmitted.slice(0,2).map(r=>r.patient_name.split(',')[0]).join(', ')+(stillAdmitted.length>2?'…':'') : 'None currently admitted'}
               color={stillAdmitted.length > 0 ? '#DC2626' : '#065F46'}
@@ -608,21 +642,24 @@ export default function HospitalizationTrackerPage() {
                 </div>
               ) : (
                 <>
-                  <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.6fr 0.7fr 1fr 1fr 0.7fr 0.7fr auto', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
-                    <span>Patient</span><span>Region</span><span>Admitted</span><span>Diagnosis</span><span>Category</span><span>Outcome</span><span>Returned</span><span></span>
+                  <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.6fr 0.7fr 0.7fr 1fr 1fr 0.7fr 0.7fr auto', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
+                    <span>Patient</span><span>Region</span><span>Admitted</span><span>Stay</span><span>Diagnosis</span><span>Category</span><span>Outcome</span><span>Returned</span><span></span>
                   </div>
                   <div style={{ maxHeight:500, overflowY:'auto' }}>
                     {filtered.map((r,i) => {
                       const catCfg = CAUSE_CATEGORIES.find(c=>c.value===r.cause_category)||CAUSE_CATEGORIES[2];
                       const outCfg = OUTCOMES.find(o=>o.value===r.outcome);
+                      const stCfg  = STAY_TYPE_MAP[r.stay_type || 'inpatient'] || STAY_TYPE_MAP.inpatient;
+                      const stShort = { inpatient: 'Inpatient', observation: 'Obs (<24h)', ed_only: 'ED only', unknown: '?' }[r.stay_type || 'inpatient'];
                       return (
-                        <div key={r.id} style={{ display:'grid', gridTemplateColumns:'1.5fr 0.6fr 0.7fr 1fr 1fr 0.7fr 0.7fr auto', padding:'10px 20px', borderBottom:'1px solid var(--border)', background:i%2===0?'var(--card-bg)':'var(--bg)', alignItems:'center', fontSize:12 }}>
+                        <div key={r.id} style={{ display:'grid', gridTemplateColumns:'1.5fr 0.6fr 0.7fr 0.7fr 1fr 1fr 0.7fr 0.7fr auto', padding:'10px 20px', borderBottom:'1px solid var(--border)', background:i%2===0?'var(--card-bg)':'var(--bg)', alignItems:'center', fontSize:12 }}>
                           <div>
                             <div style={{ fontWeight:700 }}>{r.patient_name}</div>
                             {r.potentially_preventable && <span style={{ fontSize:9, color:'#D97706', fontWeight:700 }}>⚠ PREVENTABLE</span>}
                           </div>
                           <span>{r.region||'—'}</span>
                           <span style={{ fontFamily:'DM Mono, monospace', fontSize:11 }}>{r.admission_date}</span>
+                          <Badge label={stShort} color={stCfg.color} bg={stCfg.bg} />
                           <span style={{ color:'var(--gray)' }}>{r.admitting_diagnosis?.slice(0,35)}{r.admitting_diagnosis?.length>35?'…':''}</span>
                           <Badge label={catCfg.label} color={catCfg.color} bg={catCfg.bg} />
                           <span style={{ fontSize:11 }}>{outCfg?.label||r.outcome||'—'}</span>
