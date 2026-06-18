@@ -47,7 +47,7 @@ const PAGE_ICONS = {
   'stuck-auths': '🐢',
   'my-day': '☀',
   'auth-request-form': '📄',
-  users: '👥', uploads: '↑', settings: '⚙', 'insurance-settings': '🏥', 'audit-import': '📋', 'dept-reports': '📑',
+  users: '👥', uploads: '↑', settings: '⚙', 'insurance-settings': '🏥', 'cpt-codes-admin': '🧾', 'audit-import': '📋', 'dept-reports': '📑',
   // 2026-06-02 PAYROLL section
   'payroll-review':   '💵',
   'payroll-settings': '⚖',

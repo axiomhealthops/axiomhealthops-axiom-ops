@@ -31,6 +31,19 @@ const WARN_FG   = [146, 64, 14];
 
 const PLACEHOLDER_TOKEN = '[CONFIGURE IN SETTINGS]';
 
+// Request-type variants. Drives the document title, an optional physician-of-
+// record line, and the signature block. 2026-06 (Liam): four request types.
+const REQUEST_TYPE_META = {
+  new_patient:  { label: 'New Patient Authorization Request', title: 'Authorization Request / Physician Order',   physician: '' },
+  resumption:   { label: 'Resumption Order',                  title: 'Resumption of Care Authorization Request',  physician: '' },
+  coc:          { label: 'Continuation of Care (COC)',        title: 'Continuation of Care Authorization Request', physician: '' },
+  wound_care:   { label: 'Wound Care Request',                title: 'Wound Care Authorization Request',           physician: '' },
+  garment:      { label: 'Garment Authorization Request',     title: 'Garment Authorization Request',              physician: '' },
+  // legacy alias (pre-2026-06 forms saved with request_type='continuation')
+  continuation: { label: 'Continuation of Care (COC)',        title: 'Continuation of Care Authorization Request', physician: 'David Harbour, MD' },
+};
+export function requestMeta(rt) { return REQUEST_TYPE_META[rt] || REQUEST_TYPE_META.new_patient; }
+
 function safe(v) {
   if (v === null || v === undefined) return '';
   return String(v);
@@ -127,12 +140,19 @@ export async function buildAuthRequestPdf(form, opts = {}) {
   const M = 36; // 0.5" margins
 
   const isOrderOnly = form.requires_prior_auth === false;
-  // 2026-06-04 (Liam): match the AxiomHealth original title format.
-  // The form doubles as a physician order, so the title carries
-  // both halves regardless of payor prior-auth status.
-  const docTitle = isOrderOnly
+  // 2026-06 (Liam): request-type drives the title. The form doubles as a
+  // physician order, so a standard new-patient request to a payor that does
+  // not require prior auth falls back to the Service Order title.
+  const rt = form.request_type || (form.form_data || {}).request_type || 'new_patient';
+  const meta = requestMeta(rt);
+  const docTitle = (rt === 'new_patient' && isOrderOnly)
     ? 'Service Order / Physician Order'
-    : 'Authorization Request / Physician Order';
+    : meta.title;
+  // Dr. Harbour signs Continuation-of-Care requests for FHCP specifically.
+  const isFHCP = /florida health|fhcp/i.test(form.insurance_name || '');
+  const physicianOfRecord = ((rt === 'coc' || rt === 'continuation') && isFHCP)
+    ? 'David Harbour, MD'
+    : (meta.physician || '');
 
   const [logoDataUrl, clinic] = await Promise.all([
     loadLogoDataUrl(),
@@ -216,6 +236,17 @@ export async function buildAuthRequestPdf(form, opts = {}) {
     y += wrapped.length * 10 + 4;
   }
 
+  // Page-overflow guard. Manual jsPDF text does not auto-paginate, so before
+  // drawing a block that must stay intact (memo, signature) we break to a new
+  // page + redraw the body header if there isn't enough vertical room.
+  function ensureSpace(needed) {
+    if (y + needed > H - 56) {
+      doc.addPage();
+      drawHeader({ doc, W, M, logoDataUrl, title: docTitle, formId: form.id });
+      y = M + 60;
+    }
+  }
+
   // ---- Patient ----
   section('Patient Information');
   row([['Patient Name', form.patient_name], ['DOB', fmtDate(form.patient_dob)]]);
@@ -265,17 +296,26 @@ export async function buildAuthRequestPdf(form, opts = {}) {
     autoTable(doc, {
       startY: y,
       margin: { left: M, right: M },
-      head: [['CPT', 'Qty', 'Description']],
-      body: cpts.map(c => [
-        safe(c.code),
-        safe(c.quantity != null && c.quantity !== '' ? c.quantity : '1'),
-        safe(c.description),
-      ]),
+      head: [['CPT', 'Units', 'Visits', 'Mod', 'Description']],
+      body: cpts.map(c => {
+        const units  = (c.units != null && c.units !== '') ? c.units : '';
+        const visits = (c.visits != null && c.visits !== '') ? c.visits
+                       : (c.quantity != null && c.quantity !== '' ? c.quantity : '');
+        return [
+          safe(c.code),
+          safe(units || '-'),
+          safe(visits || '-'),
+          safe(c.modifier || ''),
+          safe(c.description),
+        ];
+      }),
       styles:      { fontSize: 8, cellPadding: 2, lineColor: LIGHT, lineWidth: 0.2 },
       headStyles:  { fillColor: BRAND_RED, textColor: 255, fontStyle: 'bold', fontSize: 8, halign: 'left' },
       columnStyles:{
-        0: { cellWidth: 55, fontStyle: 'bold' },
-        1: { cellWidth: 36, halign: 'center', fontStyle: 'bold' },
+        0: { cellWidth: 48, fontStyle: 'bold' },
+        1: { cellWidth: 36, halign: 'center' },
+        2: { cellWidth: 36, halign: 'center' },
+        3: { cellWidth: 52, halign: 'center' },
       },
       alternateRowStyles: { fillColor: [251, 247, 246] },
       pageBreak: 'avoid',
@@ -294,7 +334,15 @@ export async function buildAuthRequestPdf(form, opts = {}) {
   if (fd.clinical_justification) block('Clinical Justification', fd.clinical_justification, 3);
   if (fd.additional_notes)       block('Additional Notes',      fd.additional_notes, 2);
 
+  // ---- Coordinator memo to PCP (why we are sending THIS request type) ----
+  if (fd.memo_to_pcp) {
+    ensureSpace(70);
+    section('Memo to PCP Office');
+    block('Reason for this ' + meta.label, fd.memo_to_pcp, 6);
+  }
+
   // ---- Memo: what we need back from the PCP ----
+  ensureSpace(80);
   // Right above the signature block - critical instruction for the PCP
   // so the returned fax has everything billing needs.
   section('Please Return to EdemaCare');
@@ -320,6 +368,7 @@ export async function buildAuthRequestPdf(form, opts = {}) {
   y += 8 + memoLines.length * 11 + 4;
 
   // ---- PCP / Provider Acknowledgement & Signature ----
+  ensureSpace(160);
   section('Provider Acknowledgement and Signature');
   doc.setFontSize(8);
   doc.setTextColor(...BLACK);
@@ -329,6 +378,16 @@ export async function buildAuthRequestPdf(form, opts = {}) {
     M, y + 2, { maxWidth: W - 2 * M }
   );
   y += 18;
+
+  // Continuation-of-care requests for FHCP are signed by the physician of record.
+  if (physicianOfRecord) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(...BLACK);
+    doc.text('Physician of Record: ' + physicianOfRecord, M, y);
+    doc.setFont('helvetica', 'normal');
+    y += 14;
+  }
 
   // Signature box - 2 columns: Signature + Date on top row, Printed Name + Title on bottom row.
   const sigColW = (W - 2 * M) / 2;
@@ -348,6 +407,17 @@ export async function buildAuthRequestPdf(form, opts = {}) {
   doc.line(M + sigColW,      y + 16, W - M,                  y + 16);
   doc.text('PRINTED NAME',        M,           y + 26);
   doc.text('TITLE',               M + sigColW, y + 26);
+  y += 36;
+
+  // EdemaCare authorized signature (left blank; signed at point of use).
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.6);
+  doc.line(M,           y + 16, M + sigColW - 12, y + 16);
+  doc.line(M + sigColW, y + 16, W - M,            y + 16);
+  doc.setFontSize(7);
+  doc.setTextColor(...GRAY);
+  doc.text('EDEMACARE AUTHORIZED SIGNATURE', M,           y + 26);
+  doc.text('DATE',                           M + sigColW, y + 26);
   y += 30;
 
   // -----------------------------------------------------------------

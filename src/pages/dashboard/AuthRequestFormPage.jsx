@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 // (useCallback used by PatientTypeahead helper below.)
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages, safeUpdate, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
-import { downloadAuthRequestPdf } from '../../lib/authRequestPdf';
+import { downloadAuthRequestPdf, buildAuthRequestPdf, requestMeta } from '../../lib/authRequestPdf';
 
 // EdemaCare Auth Request Form - Phase 2 build (docs/Auth_Request_Form_Design.md rev 2).
 // Works for ALL payors EdemaCare services. Conditional sections based on
@@ -13,6 +13,72 @@ import { downloadAuthRequestPdf } from '../../lib/authRequestPdf';
 
 // Pinned-top carriers by use-frequency.
 const PINNED_CARRIERS = ['Humana', 'CarePlus', 'Florida Health'];
+
+// Type of Request - drives the PDF title + signature block (see authRequestPdf.js).
+const REQUEST_TYPES = [
+  { value: 'new_patient', label: 'New Patient',                hint: 'Initial request. Needs referral and authorization (if required).' },
+  { value: 'resumption',  label: 'Resumption Order',           hint: 'Resume care after a hospital or rehab stay. PCP signs the resumption order; request auth if needed. Note the facility + discharge date in the memo.' },
+  { value: 'coc',         label: 'Continuation of Care (COC)', hint: 'Established patient continuing care. Needs a new authorization only. (COC + FHCP must be signed by Dr. David Harbour, MD.)' },
+  { value: 'wound_care',  label: 'Wound Care Request',         hint: 'Wound care request. FHCP and Humana / CarePlus only.' },
+  { value: 'garment',     label: 'Garment Request',            hint: 'Compression garment authorization (A-codes).' },
+];
+
+// Payors whose Wound Care Request is accepted.
+const WOUND_CARE_PAYORS = ['Florida Health', 'Humana', 'CarePlus'];
+
+// Payor -> standard CPT set. units = billed units, visits = visit count;
+// either may be a string ('as needed'). modifier optional. Descriptions are
+// filled in from the live cpt_codes library at load time.
+const PAYOR_TEMPLATES = {
+  // Aetna Medicare, Health First, Cigna Medicare
+  aetna_hf_cigna: [
+    { code: '97162', units: '1',  visits: '1'  },
+    { code: '97166', units: '1',  visits: '1'  },
+    { code: '97164', units: '3',  visits: '3'  },
+    { code: '97168', units: '3',  visits: '3'  },
+    { code: '29581', units: '25', visits: '25', modifier: 'RT, LT, 50' },
+    { code: '97140', units: '75', visits: '25' },
+    { code: '97110', units: '50', visits: '25' },
+    { code: '97535', units: '50', visits: '25' },
+    { code: '97530', units: '50', visits: '25' },
+    { code: '97116', units: '50', visits: '25' },
+    { code: '97112', units: '50', visits: '25' },
+    { code: '97760', units: '1',  visits: '1'  },
+    { code: '97763', units: '25', visits: '25' },
+    { code: '97597', units: '25', visits: '25' },
+    { code: '97598', units: '25', visits: '25' },
+  ],
+  // Humana, CarePlus
+  humana: [
+    { code: '97162', units: '', visits: '1'  },
+    { code: '97166', units: '', visits: '1'  },
+    { code: '97164', units: '', visits: '3'  },
+    { code: '97168', units: '', visits: '3'  },
+    { code: '97140', units: '', visits: '24' },
+    { code: '97597', units: '', visits: 'as needed' },
+    { code: '97598', units: '', visits: 'as needed' },
+  ],
+  // Florida Health (FHCP) - No OT
+  fhcp: [
+    { code: '97162', units: '', visits: '1'  },
+    { code: '97164', units: '', visits: '3'  },
+    { code: '97140', units: '', visits: '24' },
+    { code: '97597', units: '', visits: 'as needed' },
+    { code: '97598', units: '', visits: 'as needed' },
+  ],
+};
+const WOUND_ONLY_TEMPLATE = [
+  { code: '97597', units: '', visits: 'as needed' },
+  { code: '97598', units: '', visits: 'as needed' },
+];
+
+function payorGroup(insuranceName) {
+  const n = (insuranceName || '').trim().toLowerCase();
+  if (n === 'aetna medicare' || n === 'health first' || n === 'cigna medicare') return 'aetna_hf_cigna';
+  if (n === 'humana' || n === 'careplus') return 'humana';
+  if (n === 'florida health') return 'fhcp';
+  return null; // Devoted Health / others -> no standard template
+}
 
 const STATUSES = [
   { value: 'draft',         label: 'Draft',         color: '#D97706', bg: '#FEF3C7' },
@@ -26,6 +92,7 @@ const CATEGORY_TABS = [
   { value: 'lymphedema', label: 'Lymphedema' },
   { value: 'pt',         label: 'Physical Therapy' },
   { value: 'ot',         label: 'Occupational Therapy' },
+  { value: 'garment',    label: 'Garment' },
   { value: 'all',        label: 'All' },
 ];
 
@@ -60,6 +127,8 @@ export default function AuthRequestFormPage({ intent }) {
 
   function emptyDraft() {
     return {
+      request_type: 'new_patient',
+      memo_to_pcp: '',
       patient_name: '',
       patient_dob: '',
       manual_patient: false,
@@ -206,6 +275,7 @@ export default function AuthRequestFormPage({ intent }) {
     if (pendingIntent.formId) {
       const f = forms.find(x => x.id === pendingIntent.formId);
       if (f) {
+        manualEdit.current = true; // opening a saved form - keep its codes
         setActiveForm(f);
         setDraftData(fromFormRow(f));
         setView('new');
@@ -254,10 +324,69 @@ export default function AuthRequestFormPage({ intent }) {
   }, [cptCodes]);
 
   const cptByCat = useMemo(() => {
-    const m = { wound_care: [], lymphedema: [], pt: [], ot: [] };
+    const m = { wound_care: [], lymphedema: [], pt: [], ot: [], garment: [] };
     cptCodesSorted.forEach(c => { if (m[c.category]) m[c.category].push(c); });
     return m;
   }, [cptCodesSorted]);
+
+  // Fast code -> library-row lookup for template descriptions.
+  const cptByCode = useMemo(() => {
+    const m = {};
+    cptCodes.forEach(c => { if (c.code) m[String(c.code).toUpperCase()] = c; });
+    return m;
+  }, [cptCodes]);
+
+  const isFHCP = useMemo(
+    () => /florida health|fhcp/i.test(draftData.insurance_name || ''),
+    [draftData.insurance_name]
+  );
+
+  // Build the payor/request-type standard code set, enriched with library
+  // descriptions + categories. Returns null when no template applies.
+  const buildTemplate = useCallback((insuranceName, requestType) => {
+    if (requestType === 'garment') return null;     // garments are patient-specific
+    let rows;
+    if (requestType === 'wound_care') {
+      rows = WOUND_ONLY_TEMPLATE;
+    } else {
+      const grp = payorGroup(insuranceName);
+      if (!grp) return null;
+      rows = PAYOR_TEMPLATES[grp];
+    }
+    return rows.map(r => {
+      const meta = cptByCode[r.code.toUpperCase()] || {};
+      return {
+        code:        r.code,
+        description: meta.description || '',
+        category:    meta.category || '',
+        units:       r.units != null ? r.units : '1',
+        visits:      r.visits != null ? r.visits : '1',
+        modifier:    r.modifier || '',
+      };
+    });
+  }, [cptByCode]);
+
+  // True once the coordinator manually curates codes, which stops auto-loading.
+  const manualEdit = useRef(false);
+
+  // Auto-load the payor's standard code set when carrier / request type changes,
+  // unless the coordinator has manually curated the list.
+  useEffect(() => {
+    if (manualEdit.current) return;
+    const tmpl = buildTemplate(draftData.insurance_name, draftData.request_type);
+    if (tmpl) setDraftData(d => ({ ...d, cpt_codes: tmpl }));
+  }, [draftData.insurance_name, draftData.request_type, buildTemplate]);
+
+  function loadPayorTemplate() {
+    const tmpl = buildTemplate(draftData.insurance_name, draftData.request_type);
+    if (!tmpl || tmpl.length === 0) {
+      setSaveMsg({ type: 'error', text: 'No standard code set for this payor / request type.' });
+      return;
+    }
+    manualEdit.current = false;
+    setDraftData(d => ({ ...d, cpt_codes: tmpl }));
+    setSaveMsg({ type: 'ok', text: 'Loaded standard codes for ' + (draftData.insurance_name || 'this payor') + '.' });
+  }
 
   const filteredCarrier = useMemo(
     () => carriers.find(c => c.insurance_name === draftData.insurance_name) || null,
@@ -334,6 +463,7 @@ export default function AuthRequestFormPage({ intent }) {
   }, [cptSearch, visibleCpts, cptCodesSorted, cptTab]);
 
   function toggleCpt(c) {
+    manualEdit.current = true;
     setDraftData(d => {
       const already = (d.cpt_codes || []).find(x => x.code === c.code);
       if (already) return { ...d, cpt_codes: d.cpt_codes.filter(x => x.code !== c.code) };
@@ -341,27 +471,207 @@ export default function AuthRequestFormPage({ intent }) {
         ...d,
         cpt_codes: [
           ...(d.cpt_codes || []),
-          { code: c.code, description: c.description, category: c.category, quantity: 1 },
+          { code: c.code, description: c.description, category: c.category, units: '1', visits: '1', modifier: '' },
         ],
       };
     });
   }
 
-  // 2026-06-04: per-code quantity. Each selected CPT gets its own visit /
-  // unit count so different intensities (e.g. 24 visits of 97140 vs 1 eval
-  // of 97161) are captured correctly on the auth request.
-  function setCptQuantity(code, qty) {
+  // Per-code units / visits / modifier. units = billed units, visits = visit
+  // count (either may be 'as needed'); modifier e.g. 'RT, LT, 50'.
+  function setCptField(code, field, value) {
+    manualEdit.current = true;
     setDraftData(d => ({
       ...d,
       cpt_codes: (d.cpt_codes || []).map(x =>
-        x.code === code ? { ...x, quantity: qty } : x
+        x.code === code ? { ...x, [field]: value } : x
       ),
     }));
+  }
+
+  function removeCpt(code) {
+    manualEdit.current = true;
+    setDraftData(d => ({ ...d, cpt_codes: (d.cpt_codes || []).filter(x => x.code !== code) }));
   }
 
   // ---- Save / send -----------------------------------------------------
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
+
+  // ---- Submit/Process -> PDF preview state -----------------------------
+  const [preview, setPreview]       = useState(null); // { url, blob, filename }
+  const [processing, setProcessing] = useState(false);
+
+  // ---- Off-list CPT request state --------------------------------------
+  const [customCode, setCustomCode]     = useState('');
+  const [customDesc, setCustomDesc]     = useState('');
+  const [customReason, setCustomReason] = useState('');
+  const [cptRequests, setCptRequests]   = useState([]); // recent requests for status display
+
+  // Recent off-list CPT requests (so the coordinator can see pending/approved status).
+  useEffect(() => { (async () => {
+    const { data } = await supabase
+      .from('cpt_code_requests')
+      .select('id, code, status, requested_by_name, created_at, review_notes')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    setCptRequests(data || []);
+  })(); }, [reloadKey]);
+
+  // Build the auth_request_forms-shaped row the PDF renderer expects.
+  function rowFromDraft() {
+    const base = {
+      patient_name:        draftData.patient_name,
+      patient_dob:         draftData.patient_dob || null,
+      insurance_name:      draftData.insurance_name,
+      insurance_type:      draftData.insurance_type,
+      region:              draftData.region,
+      requires_prior_auth: draftData.requires_prior_auth,
+      request_type:        draftData.request_type || 'new_patient',
+      form_data:           toFormData(draftData),
+    };
+    return activeForm
+      ? { ...activeForm, ...base, created_by_name: activeForm.created_by_name || profileName }
+      : { ...emptyRow(), ...base, created_by_name: profileName, created_at: new Date().toISOString() };
+  }
+
+  function pdfFilename() {
+    const safeName = (draftData.patient_name || 'patient').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return 'EdemaCare_' + (draftData.request_type || 'new_patient') + '_' + safeName + '_' +
+           new Date().toISOString().slice(0, 10) + '.pdf';
+  }
+
+  // Submit / Process -> render the PDF and open the preview.
+  async function processForm() {
+    if (!draftData.patient_name) {
+      setSaveMsg({ type: 'error', text: 'Select or enter a patient before processing.' });
+      return;
+    }
+    setProcessing(true); setSaveMsg(null);
+    try {
+      const doc = await buildAuthRequestPdf(rowFromDraft());
+      const blob = doc.output('blob');
+      const url = URL.createObjectURL(blob);
+      setPreview({ url, blob, filename: pdfFilename() });
+    } catch (e) {
+      setSaveMsg({ type: 'error', text: 'Could not build preview: ' + (e?.message || e) });
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  function editFromPreview() {
+    if (preview?.url) URL.revokeObjectURL(preview.url);
+    setPreview(null);
+  }
+
+  // From the preview: persist the form, store the PDF on the patient chart
+  // (patient-documents bucket + patient_documents row), and download it.
+  async function saveAndDownload() {
+    if (!preview) return;
+    setProcessing(true); setSaveMsg(null);
+    try {
+      const basePayload = {
+        patient_name:        draftData.patient_name,
+        patient_dob:         draftData.patient_dob || null,
+        insurance_name:      draftData.insurance_name,
+        insurance_type:      draftData.insurance_type || null,
+        region:              draftData.region || null,
+        requires_prior_auth: draftData.requires_prior_auth,
+        request_type:        draftData.request_type || 'new_patient',
+        form_data:           toFormData(draftData),
+        updated_by:          profileName,
+      };
+      let formRow = activeForm;
+      if (formRow?.id && formRow.status !== 'sent' && formRow.status !== 'superseded') {
+        await safeUpdate('auth_request_forms', basePayload, { id: formRow.id });
+        formRow = { ...formRow, ...basePayload };
+      } else if (!formRow?.id) {
+        const { data, error } = await supabase.from('auth_request_forms')
+          .insert({ ...basePayload, status: 'draft', created_by: profile?.user_id || null, created_by_name: profileName })
+          .select('*').single();
+        if (error) throw error;
+        formRow = data;
+        setActiveForm(data);
+      }
+
+      // Upload the generated PDF to the patient-documents storage bucket.
+      const safeName = (draftData.patient_name || 'patient').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const path = safeName + '/auth_request/' + (formRow?.id || 'unsaved') + '_' + Date.now() + '.pdf';
+      const up = await supabase.storage.from('patient-documents')
+        .upload(path, preview.blob, { contentType: 'application/pdf', upsert: false });
+      if (up.error) throw up.error;
+
+      // Record it on the patient chart (Documents).
+      const meta = requestMeta(draftData.request_type);
+      const { error: docErr } = await supabase.from('patient_documents').insert({
+        patient_name:    draftData.patient_name,
+        region:          draftData.region || null,
+        doc_type:        'auth_request_form',
+        doc_label:       meta.label + (draftData.insurance_name ? ' - ' + draftData.insurance_name : ''),
+        file_name:       preview.filename,
+        file_path:       up.data?.path || path,
+        file_type:       'application/pdf',
+        file_size:       preview.blob.size,
+        effective_date:  new Date().toISOString().slice(0, 10),
+        is_latest:       true,
+        uploaded_by:     profileName,
+        auth_tracker_id: formRow?.auth_tracker_id || null,
+      });
+      if (docErr) throw docErr;
+
+      // Download a local copy.
+      const a = document.createElement('a');
+      a.href = preview.url; a.download = preview.filename;
+      document.body.appendChild(a); a.click(); a.remove();
+
+      logActivity({
+        coordinatorId:   profile?.id,
+        coordinatorName: profileName,
+        coordinatorRole: profile?.role,
+        actionType:      'auth_request_form_saved_to_chart',
+        tableName:       'patient_documents',
+        recordId:        formRow?.id || null,
+        actionDetail:    'Saved ' + meta.label + ' to chart for ' + draftData.patient_name,
+        metadata:        { patient_name: draftData.patient_name, request_type: draftData.request_type, insurance: draftData.insurance_name },
+      }).catch(() => {});
+
+      setReloadKey(k => k + 1);
+      setSaveMsg({ type: 'ok', text: 'Saved to the patient chart (Documents) and downloaded.' });
+      editFromPreview();
+    } catch (e) {
+      setSaveMsg({ type: 'error', text: 'Save to chart failed: ' + (e?.message || e) });
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  // Off-list CPT: add directly if already approved, else file a request for Carla.
+  async function requestCustomCode() {
+    const code = (customCode || '').trim().toUpperCase();
+    if (!code) return;
+    const existing = cptCodes.find(c => (c.code || '').toUpperCase() === code);
+    if (existing) {
+      toggleCpt(existing);
+      setCustomCode(''); setCustomDesc(''); setCustomReason('');
+      setSaveMsg({ type: 'ok', text: code + ' is already approved - added to this request.' });
+      return;
+    }
+    const { error } = await supabase.from('cpt_code_requests').insert({
+      code,
+      description:       customDesc || null,
+      category:         cptTab === 'all' ? null : cptTab,
+      reason:           customReason || null,
+      requested_by:     profile?.user_id || null,
+      requested_by_name: profileName,
+      context_patient:  draftData.patient_name || null,
+      context_form_id:  activeForm?.id || null,
+    });
+    if (error) { setSaveMsg({ type: 'error', text: error.message }); return; }
+    setCustomCode(''); setCustomDesc(''); setCustomReason('');
+    setReloadKey(k => k + 1);
+    setSaveMsg({ type: 'ok', text: code + ' submitted to Carla Smith for approval. It cannot be added to a request until approved.' });
+  }
 
   async function save(asStatus) {
     setSaving(true); setSaveMsg(null);
@@ -372,6 +682,7 @@ export default function AuthRequestFormPage({ intent }) {
       insurance_type:      draftData.insurance_type || null,
       region:              draftData.region || null,
       requires_prior_auth: draftData.requires_prior_auth,
+      request_type:        draftData.request_type || 'new_patient',
       status:              asStatus,
       form_data:           toFormData(draftData),
       created_by_name:     activeForm?.created_by_name || profileName,
@@ -430,6 +741,7 @@ export default function AuthRequestFormPage({ intent }) {
       insurance_type: activeForm.insurance_type,
       region:         activeForm.region,
       requires_prior_auth: activeForm.requires_prior_auth,
+      request_type:   activeForm.request_type || 'new_patient',
       form_data:      activeForm.form_data,
       status:         'draft',
       version_number: (activeForm.version_number || 1) + 1,
@@ -440,6 +752,7 @@ export default function AuthRequestFormPage({ intent }) {
     const { data: inserted, error } = await supabase.from('auth_request_forms').insert(newRow).select('*').single();
     if (error) { setSaveMsg({ type: 'error', text: error.message }); return; }
     await safeUpdate('auth_request_forms', { status: 'superseded' }, { id: activeForm.id });
+    manualEdit.current = true; // amendment carries the original codes forward
     setActiveForm(inserted);
     setDraftData(fromFormRow(inserted));
     setReloadKey(k => k + 1);
@@ -447,6 +760,7 @@ export default function AuthRequestFormPage({ intent }) {
   }
 
   function newRequest() {
+    manualEdit.current = false; // allow payor template auto-load on a fresh request
     setActiveForm(null);
     setDraftData(emptyDraft());
     setSaveMsg(null);
@@ -454,6 +768,7 @@ export default function AuthRequestFormPage({ intent }) {
   }
 
   function openExisting(f) {
+    manualEdit.current = true; // preserve the saved code list; do not auto-load a template over it
     setActiveForm(f);
     setDraftData(fromFormRow(f));
     setView('new');
@@ -547,6 +862,30 @@ export default function AuthRequestFormPage({ intent }) {
                 </div>
               </div>
             )}
+
+            <Section title="Type of Request">
+              <Field label="Authorization Type">
+                <select value={draftData.request_type || 'new_patient'} disabled={locked}
+                        onChange={e => setDraftData(d => ({ ...d, request_type: e.target.value }))}
+                        style={S.input}>
+                  {REQUEST_TYPES.map(t => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+                <div style={S.hint}>
+                  {REQUEST_TYPES.find(t => t.value === (draftData.request_type || 'new_patient'))?.hint}
+                </div>
+              </Field>
+              {draftData.request_type === 'coc' && isFHCP && (
+                <div style={S.infoNote}>COC for FHCP must be signed by <strong>Dr. David Harbour, MD</strong>. The PDF will print his physician signature line.</div>
+              )}
+              {draftData.request_type === 'resumption' && (
+                <div style={S.infoNote}>Use the Memo below to note the hospital / rehab facility and discharge date driving this resumption.</div>
+              )}
+              {draftData.request_type === 'wound_care' && draftData.insurance_name && !WOUND_CARE_PAYORS.includes(draftData.insurance_name) && (
+                <div style={S.warnNote}>Wound Care Requests are for FHCP and Humana / CarePlus only. {draftData.insurance_name} is not one of these.</div>
+              )}
+            </Section>
 
             <Section title="Patient">
               <PatientTypeahead
@@ -703,6 +1042,14 @@ export default function AuthRequestFormPage({ intent }) {
             </Section>
 
             <Section title="CPT Codes">
+              {buildTemplate(draftData.insurance_name, draftData.request_type) && (
+                <div style={S.templateBar}>
+                  <span style={{ fontSize: 12, color: '#1E40AF' }}>
+                    Standard code set available for {draftData.request_type === 'wound_care' ? 'Wound Care' : (draftData.insurance_name || 'this payor')}.
+                  </span>
+                  <button style={S.templateBtn} disabled={locked} onClick={loadPayorTemplate}>Reload standard codes</button>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
                 {CATEGORY_TABS.map(t => (
                   <button key={t.value} onClick={() => setCptTab(t.value)} disabled={locked}
@@ -729,25 +1076,10 @@ export default function AuthRequestFormPage({ intent }) {
                   const sel = (draftData.cpt_codes || []).find(x => x.code === c.code);
                   const toggle = () => !locked && toggleCpt(c);
                   return (
-                    <div key={c.code} style={{ ...S.cptRow, ...(sel ? S.cptRowOn : {}) }}>
-                      <input type="checkbox" disabled={locked} checked={!!sel} onChange={toggle} />
-                      <div onClick={toggle} style={{ ...S.cptCode, cursor: locked ? 'default' : 'pointer' }}>{c.code}</div>
-                      <div onClick={toggle} style={{ ...S.cptDesc, cursor: locked ? 'default' : 'pointer' }}>{c.description}</div>
-                      {sel ? (
-                        <input
-                          type="number"
-                          min="1"
-                          disabled={locked}
-                          value={sel.quantity ?? 1}
-                          onChange={e => setCptQuantity(c.code, parseInt(e.target.value, 10) || 1)}
-                          onClick={e => e.stopPropagation()}
-                          placeholder="Qty"
-                          title="Visits / units requested for this code"
-                          style={S.cptQty}
-                        />
-                      ) : (
-                        <div style={S.cptQtyPlaceholder}>Qty</div>
-                      )}
+                    <div key={c.code} style={{ ...S.cptRow, ...(sel ? S.cptRowOn : {}), cursor: locked ? 'default' : 'pointer' }} onClick={toggle}>
+                      <input type="checkbox" disabled={locked} checked={!!sel} onChange={toggle} onClick={e => e.stopPropagation()} />
+                      <div style={S.cptCode}>{c.code}</div>
+                      <div style={S.cptDesc}>{c.description}</div>
                     </div>
                   );
                 })}
@@ -770,11 +1102,64 @@ export default function AuthRequestFormPage({ intent }) {
                 )}
               </div>
               {(draftData.cpt_codes || []).length > 0 && (
-                <div style={{ marginTop: 10, fontSize: 12, color: '#374151' }}>
-                  Selected ({draftData.cpt_codes.length}, total qty {(draftData.cpt_codes || []).reduce((s, c) => s + (parseInt(c.quantity, 10) || 0), 0)}):{' '}
-                  {draftData.cpt_codes.map(c => c.code + ' x' + (c.quantity || 1)).join(', ')}
+                <div style={{ marginTop: 12 }}>
+                  <div style={S.selHead}>Requested Codes ({draftData.cpt_codes.length})</div>
+                  <div style={S.selTableHead}>
+                    <span>Code</span><span>Units</span><span>Visits</span><span>Modifier</span><span></span>
+                  </div>
+                  {draftData.cpt_codes.map(c => (
+                    <div key={c.code} style={S.selRow}>
+                      <span style={S.selCode} title={c.description}>{c.code}</span>
+                      <input style={S.selInput} disabled={locked} placeholder="-"
+                             value={c.units ?? ''}
+                             onChange={e => setCptField(c.code, 'units', e.target.value)} />
+                      <input style={S.selInput} disabled={locked} placeholder="-"
+                             value={c.visits ?? (c.quantity != null ? String(c.quantity) : '')}
+                             onChange={e => setCptField(c.code, 'visits', e.target.value)} />
+                      <input style={S.selInputWide} disabled={locked} placeholder="-"
+                             value={c.modifier ?? ''}
+                             onChange={e => setCptField(c.code, 'modifier', e.target.value)} />
+                      <button style={S.selRemove} disabled={locked} onClick={() => removeCpt(c.code)} title="Remove">x</button>
+                    </div>
+                  ))}
+                  <div style={S.hint}>Units = billed units; Visits = visit count. Both accept text (e.g. "as needed"). Edit any value as needed.</div>
                 </div>
               )}
+
+              {/* Off-list CPT: must be approved by Carla before use */}
+              <div style={S.customCptBox}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: '#1A1A1A' }}>
+                  Need a code that is not listed?
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <input style={{ ...S.input, maxWidth: 130 }} placeholder="CPT code" value={customCode} disabled={locked}
+                         onChange={e => setCustomCode(e.target.value)} />
+                  <input style={{ ...S.input, flex: 1, minWidth: 160 }} placeholder="Description (optional)" value={customDesc} disabled={locked}
+                         onChange={e => setCustomDesc(e.target.value)} />
+                </div>
+                <input style={{ ...S.input, marginTop: 6 }} placeholder="Why is this code needed? (helps Carla review)" value={customReason} disabled={locked}
+                       onChange={e => setCustomReason(e.target.value)} />
+                <button style={{ ...S.outlineBtn, marginTop: 6 }} disabled={locked || !customCode.trim()} onClick={requestCustomCode}>
+                  Submit code for approval
+                </button>
+                <div style={S.hint}>
+                  Off-list codes are reviewed by Carla Smith before they can be used. This prevents inaccurate codes on auth requests.
+                </div>
+                {cptRequests.filter(r => r.status === 'pending').length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: '#92400E', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>
+                      Pending approval
+                    </div>
+                    {cptRequests.filter(r => r.status === 'pending').slice(0, 5).map(r => (
+                      <div key={r.id} style={S.cptReqRow}>
+                        <span style={{ fontFamily: 'ui-monospace, Menlo, monospace', fontWeight: 700 }}>{r.code}</span>
+                        <span style={{ color: '#6B7280' }}>{r.requested_by_name || ''}</span>
+                        <span style={S.cptReqPending}>pending</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </Section>
 
             <Section title="Service Request">
@@ -801,6 +1186,17 @@ export default function AuthRequestFormPage({ intent }) {
                           onChange={e => setDraftData(d => ({ ...d, additional_notes: e.target.value }))}
                           rows={3} style={{ ...S.input, fontFamily: 'inherit' }} />
               </Field>
+            </Section>
+
+            <Section title="Memo to PCP Office">
+              <Field label="Message to the PCP - why are we requesting this authorization?">
+                <textarea disabled={locked} value={draftData.memo_to_pcp || ''}
+                          onChange={e => setDraftData(d => ({ ...d, memo_to_pcp: e.target.value }))}
+                          rows={4} maxLength={1500} style={{ ...S.input, fontFamily: 'inherit' }}
+                          placeholder="e.g. Patient discharged from Florida Hospital Altamonte on 06/14 after a 6-day admission for cellulitis; resuming lymphedema therapy per plan of care." />
+                <div style={S.charCount}>{(draftData.memo_to_pcp || '').length} / 1500</div>
+              </Field>
+              <div style={S.hint}>This memo prints on the PDF above the provider signature block, so the PCP office understands the reason for the request.</div>
             </Section>
 
             <Section title="Signature">
@@ -844,7 +1240,11 @@ export default function AuthRequestFormPage({ intent }) {
                 )}
               </div>
 
-              <button style={S.primaryBtn} onClick={exportPdf}>{'Download PDF'}</button>
+              <button style={S.primaryBtn} disabled={processing || !draftData.patient_name} onClick={processForm}>
+                {processing ? 'Processing...' : 'Submit / Process'}
+              </button>
+              <div style={S.previewHint}>Builds a PDF preview you can review, then edit or save to the patient chart.</div>
+              <button style={S.outlineBtn} onClick={exportPdf}>Quick PDF (no save)</button>
 
               {!locked && (
                 <>
@@ -868,6 +1268,27 @@ export default function AuthRequestFormPage({ intent }) {
                 once a form is marked sent, it cannot be edited - file an amendment instead.
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Submit / Process -> PDF preview overlay */}
+      {preview && (
+        <div style={S.previewOverlay}>
+          <div style={S.previewModal}>
+            <div style={S.previewBar}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>PDF Preview</div>
+                <div style={{ fontSize: 11, color: '#6B7280' }}>Review the document, then edit or save it to the patient chart.</div>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={S.outlineBtn} disabled={processing} onClick={editFromPreview}>Edit</button>
+                <button style={S.sendBtn} disabled={processing} onClick={saveAndDownload}>
+                  {processing ? 'Saving...' : 'Save to Chart & Download'}
+                </button>
+              </div>
+            </div>
+            <iframe title="Auth request PDF preview" src={preview.url} style={S.previewFrame} />
           </div>
         </div>
       )}
@@ -1074,6 +1495,7 @@ function fromFormRow(row) {
     requires_prior_auth: row.requires_prior_auth !== false,
     manual_patient:      false,
     ...(row.form_data || {}),
+    request_type:        row.request_type || (row.form_data || {}).request_type || 'new_patient',
   };
 }
 
@@ -1316,7 +1738,7 @@ const S = {
   cptSearch: { width: '100%', padding: '8px 32px 8px 12px', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, background: '#fff', boxSizing: 'border-box', outline: 'none' },
   cptSearchClear: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', width: 22, height: 22, borderRadius: '50%', border: 'none', background: '#E5E7EB', color: '#374151', fontSize: 11, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 },
   cptList: { maxHeight: 280, overflowY: 'auto', border: '1px solid #F3F4F6', borderRadius: 6 },
-  cptRow: { display: 'grid', gridTemplateColumns: '24px 70px 1fr 70px', gap: 8, padding: '8px 10px', borderBottom: '1px solid #F3F4F6', alignItems: 'center' },
+  cptRow: { display: 'grid', gridTemplateColumns: '24px 70px 1fr', gap: 8, padding: '8px 10px', borderBottom: '1px solid #F3F4F6', alignItems: 'center' },
   cptRowOn: { background: '#FEF7F5' },
   cptCode: { fontFamily: 'ui-monospace, Menlo, monospace', fontWeight: 700, fontSize: 12 },
   cptDesc: { fontSize: 12, color: '#374151' },
@@ -1347,4 +1769,28 @@ const S = {
   msgErr: { background: '#FEF2F2', color: '#991B1B', border: '1px solid #FECACA' },
 
   legalNote: { fontSize: 10, color: '#9CA3AF', lineHeight: 1.4, marginTop: 6, padding: '0 4px' },
+
+  infoNote: { background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '8px 10px', color: '#1E40AF', marginTop: 6, fontSize: 12, lineHeight: 1.4 },
+  warnNote: { background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8, padding: '8px 10px', color: '#92400E', marginTop: 6, fontSize: 12, lineHeight: 1.4 },
+  previewHint: { fontSize: 10, color: '#9CA3AF', lineHeight: 1.4, marginTop: -2, padding: '0 4px' },
+
+  templateBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '8px 10px', marginBottom: 10 },
+  templateBtn: { padding: '6px 12px', borderRadius: 6, border: 'none', background: '#1E40AF', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 12 },
+
+  selHead: { fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' },
+  selTableHead: { display: 'grid', gridTemplateColumns: '70px 60px 60px 1fr 24px', gap: 8, fontSize: 9, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.04em', padding: '0 2px 4px' },
+  selRow: { display: 'grid', gridTemplateColumns: '70px 60px 60px 1fr 24px', gap: 8, alignItems: 'center', padding: '4px 2px', borderBottom: '1px solid #F3F4F6' },
+  selCode: { fontFamily: 'ui-monospace, Menlo, monospace', fontWeight: 700, fontSize: 12, color: '#1A1A1A' },
+  selInput: { width: '100%', padding: '5px 6px', border: '1px solid #D1D5DB', borderRadius: 5, fontSize: 12, textAlign: 'center', background: '#fff', boxSizing: 'border-box' },
+  selInputWide: { width: '100%', padding: '5px 8px', border: '1px solid #D1D5DB', borderRadius: 5, fontSize: 12, background: '#fff', boxSizing: 'border-box' },
+  selRemove: { width: 22, height: 22, borderRadius: 5, border: '1px solid #FECACA', background: '#fff', color: '#991B1B', fontWeight: 700, fontSize: 11, cursor: 'pointer', padding: 0 },
+
+  customCptBox: { marginTop: 12, padding: 12, border: '1px dashed #D1D5DB', borderRadius: 8, background: '#FAFAFA' },
+  cptReqRow: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, padding: '3px 0' },
+  cptReqPending: { fontSize: 9, fontWeight: 700, color: '#92400E', background: '#FEF3C7', padding: '1px 6px', borderRadius: 999, marginLeft: 'auto' },
+
+  previewOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  previewModal: { background: '#fff', borderRadius: 12, width: '100%', maxWidth: 900, height: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,0.35)' },
+  previewBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 16px', borderBottom: '1px solid #E5E7EB', background: '#fff' },
+  previewFrame: { flex: 1, width: '100%', border: 'none', background: '#525659' },
 };

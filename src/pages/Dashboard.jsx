@@ -75,6 +75,8 @@ import StuckAuthsPage from './dashboard/StuckAuthsPage';
 import MyDayPage from './dashboard/MyDayPage';
 // 2026-06-03: Auth Request Form (docs/Auth_Request_Form_Design.md rev 2)
 import AuthRequestFormPage from './dashboard/AuthRequestFormPage';
+// 2026-06-17: CPT Codes library + off-list approval queue (Carla)
+import CptCodesAdminPage from './dashboard/CptCodesAdminPage';
 // 2026-06-02 Phase 2A: Payroll Review & Audit (docs/Payroll_Review_Design.md rev 2)
 import PayrollReviewPage from './dashboard/PayrollReviewPage';
 import PayrollSettingsPage from './dashboard/PayrollSettingsPage';
@@ -155,6 +157,7 @@ const PAGE_COMPONENTS = {
   'stuck-auths':             StuckAuthsPage,
   'my-day':                  MyDayPage,
   'auth-request-form':       AuthRequestFormPage,
+  'cpt-codes-admin':         CptCodesAdminPage,
   'payroll-review':          PayrollReviewPage,
   'payroll-settings':        PayrollSettingsPage,
   'payer-marketing-report':  PayerMarketingReportPage,
