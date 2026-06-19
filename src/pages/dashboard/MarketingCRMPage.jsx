@@ -119,14 +119,22 @@ function MktField({ label, field, type='text', required=false, half=false, value
 // marketing_contacts is the PROVIDER (practice/facility) table.
 // ─────────────────────────────────────────────────────────────────────────────
 function ProviderModal({ provider, onClose, onSaved, profile, repsForAssignment }) {
+  // 2026-06-19: Walter Holston (sole GA HAE) flagged that the form was
+  // silently routing his providers to FL because (a) the State field
+  // wasn't surfaced in the UI and (b) the default was hardcoded to 'FL'.
+  // Now: default state = 'GA' for Walter, 'FL' for everyone else; State
+  // is a visible required dropdown; Region options reshape to the
+  // matching state's territory list when state changes.
+  const defaultState = profile?.full_name === 'Walter Holston' ? 'GA' : 'FL';
   const empty = {
-    contact_type:'PCP', practice_name:'', address:'', city:'', state:'FL', zip:'',
+    contact_type:'PCP', practice_name:'', address:'', city:'', state: defaultState, zip:'',
     region: profile?.regions?.[0] || '', npi:'', referral_potential:'medium',
     active_referral_source:false, notes:'', primary_insurance:'',
     assigned_rep_id: profile?.id || '', is_active: true,
   };
   const [form, setForm] = useState(provider ? { ...empty, ...provider } : { ...empty });
   const [saving, setSaving] = useState(false);
+  const regionOptions = REGIONS_BY_STATE[form.state] || FL_REGIONS;
 
   async function save() {
     if (!form.practice_name?.trim()) return;
@@ -169,11 +177,28 @@ function ProviderModal({ provider, onClose, onSaved, profile, repsForAssignment 
             </select>
           </div>
           <div>
-            <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>Region</label>
+            <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>State *</label>
+            <select value={form.state || 'FL'}
+              onChange={e => {
+                const ns = e.target.value;
+                // Reset region when state flips — the prior region belonged
+                // to the other state's territory list and would otherwise
+                // render as an orphaned value.
+                setForm(f => ({ ...f, state: ns, region: '' }));
+              }}
+              style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
+              <option value="FL">Florida</option>
+              <option value="GA">Georgia</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:11, fontWeight:600, color:'var(--gray)', display:'block', marginBottom:3 }}>
+              {form.state === 'GA' ? 'Georgia Territory' : 'Region'}
+            </label>
             <select value={form.region||''} onChange={e => setForm(f=>({...f,region:e.target.value}))}
               style={{ width:'100%', padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
-              <option value="">Multi / Unassigned</option>
-              {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
+              <option value="">{form.state === 'GA' ? 'Georgia (statewide)' : 'Multi / Unassigned'}</option>
+              {regionOptions.map(r => <option key={r} value={r}>{form.state === 'GA' ? r : `Region ${r}`}</option>)}
             </select>
           </div>
           <MktField label="Practice / Facility Name" field="practice_name" required value={form.practice_name} onChange={setForm} />
