@@ -499,7 +499,7 @@ function AddTaskModal(props) {
  
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <button onClick={props.onClose} style={{ padding: '9px 18px', background: 'none', border: '1px solid #E5E7EB', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
-          <button onClick={handleSave} style={{ padding: '9px 20px', background: '#D94F2B', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Add Task</button>
+          <button onClick={handleSave} style={{ padding: '9px 20px', background: '#06B6D4', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Add Task</button>
         </div>
       </div>
     </div>
@@ -1070,7 +1070,7 @@ export default function CoordinatorPage(props) {
       {/* Header */}
       <div style={{ background: '#0F1117', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 8, background: '#D94F2B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: '#fff' }}>E</div>
+          <div style={{ width: 36, height: 36, borderRadius: 8, background: '#06B6D4', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: '#fff' }}>E</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>EdemaCare</div>
             <div style={{ fontSize: 11, color: '#6B7280' }}>Care Coordinator</div>
@@ -1873,7 +1873,7 @@ export default function CoordinatorPage(props) {
               </span>
             </div>
             <button onClick={function() { setShowModal(true); }}
-              style={{ padding: '4px 10px', background: '#D94F2B', color: '#fff', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+              style={{ padding: '4px 10px', background: '#06B6D4', color: '#fff', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
               + Add
             </button>
           </div>

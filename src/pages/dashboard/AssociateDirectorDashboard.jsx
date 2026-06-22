@@ -496,7 +496,7 @@ export default function AssociateDirectorDashboard({ onNavigate }) {
       }}>
         <div>
           <div style={{
-            fontSize: 11, fontWeight: 700, color: 'var(--red, #D94F2B)',
+            fontSize: 11, fontWeight: 700, color: 'var(--red, #06B6D4)',
             textTransform: 'uppercase', letterSpacing: '0.08em',
           }}>
             {(() => {

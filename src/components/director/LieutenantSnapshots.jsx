@@ -180,7 +180,7 @@ export default function LieutenantSnapshots({ census, intakeReferrals, auths, ac
             title="Operations Manager"
             name="Carla Smith"
             role="Manages Intake / Auth / Care Coordination"
-            accent="#D94F2B"
+            accent="#06B6D4"
             tiles={carlaTiles}
             onJumpTo={onJumpTo}
             jumpTarget="ops-dashboard"

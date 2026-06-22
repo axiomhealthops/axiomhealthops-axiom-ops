@@ -22,7 +22,7 @@
 
 import { useEffect } from 'react';
 
-const BRAND_RED = '#D94F2B';
+const BRAND_RED = '#06B6D4';
 
 export default function DrillDownDrawer({
   open,
@@ -87,7 +87,7 @@ export default function DrillDownDrawer({
         </div>
 
         {/* Body */}
-        <div style={{ flex: 1, overflow: 'auto', background: '#FBF7F6' }}>
+        <div style={{ flex: 1, overflow: 'auto', background: '#F8FAFC' }}>
           {loading ? (
             <div style={{ padding: 40, textAlign: 'center', color: '#6B7280', fontSize: 13 }}>
               Loading…

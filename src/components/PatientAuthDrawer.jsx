@@ -959,7 +959,7 @@ function RequestsSection({ forms, onDownload, onOpen, onNew, saving }) {
           No authorization requests yet for this patient.
         </div>
         <button onClick={onNew} disabled={saving}
-          style={{ padding: '8px 16px', borderRadius: 7, border: 'none', background: '#D94F2B', color: '#fff', fontWeight: 700, fontSize: 12, cursor: saving ? 'wait' : 'pointer' }}>
+          style={{ padding: '8px 16px', borderRadius: 7, border: 'none', background: '#06B6D4', color: '#fff', fontWeight: 700, fontSize: 12, cursor: saving ? 'wait' : 'pointer' }}>
           + New Request
         </button>
       </div>
@@ -972,7 +972,7 @@ function RequestsSection({ forms, onDownload, onOpen, onNew, saving }) {
           {forms.length} request{forms.length === 1 ? '' : 's'} on file
         </div>
         <button onClick={onNew} disabled={saving}
-          style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #D94F2B', background: '#fff', color: '#D94F2B', fontWeight: 700, fontSize: 11, cursor: saving ? 'wait' : 'pointer' }}>
+          style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #06B6D4', background: '#fff', color: '#06B6D4', fontWeight: 700, fontSize: 11, cursor: saving ? 'wait' : 'pointer' }}>
           + New Request
         </button>
       </div>
@@ -1010,7 +1010,7 @@ function RequestsSection({ forms, onDownload, onOpen, onNew, saving }) {
             </div>
             <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
               <button onClick={() => onDownload(req)} disabled={saving}
-                style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: '#D94F2B', color: '#fff', fontWeight: 700, fontSize: 11, cursor: saving ? 'wait' : 'pointer' }}>
+                style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: '#06B6D4', color: '#fff', fontWeight: 700, fontSize: 11, cursor: saving ? 'wait' : 'pointer' }}>
                 Download PDF
               </button>
               <button onClick={() => onOpen(req)} disabled={saving}

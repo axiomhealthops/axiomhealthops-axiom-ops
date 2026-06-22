@@ -197,7 +197,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed, onToggle, a
 const S = {
   sidebar: { height: '100vh', background: '#0F1117', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden', borderRight: '1px solid #1E2535', position: 'fixed', top: 0, left: 0, zIndex: 100, transition: 'width 0.2s ease' },
   header: { display: 'flex', alignItems: 'center', gap: 10, padding: '16px 12px', borderBottom: '1px solid #1E2535', minHeight: 64 },
-  logoMark: { width: 32, height: 32, borderRadius: 8, background: '#D94F2B', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, flexShrink: 0 },
+  logoMark: { width: 32, height: 32, borderRadius: 8, background: '#06B6D4', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, flexShrink: 0 },
   logoText: { flex: 1, minWidth: 0 },
   logoTitle: { fontSize: 13, fontWeight: 700, color: '#fff', letterSpacing: '-0.2px', whiteSpace: 'nowrap' },
   logoSub: { fontSize: 10, color: '#4B5563', marginTop: 1 },

@@ -25,7 +25,7 @@ import { useRealtimeTable } from '../hooks/useRealtimeTable';
 
 const SOURCE_VISUAL = {
   mention:       { label: 'Mention',  color: '#1565C0', bg: '#EFF6FF', border: '#BFDBFE', icon: '@' },
-  assigned_task: { label: 'Task',     color: '#7C2D12', bg: '#FFF7ED', border: '#FDBA74', icon: '!' },
+  assigned_task: { label: 'Task',     color: '#0F172A', bg: '#FFF7ED', border: '#FDBA74', icon: '!' },
   alert:         { label: 'Alert',    color: '#7F1D1D', bg: '#FEE2E2', border: '#FCA5A5', icon: '*' },
 };
 

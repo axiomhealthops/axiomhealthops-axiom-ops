@@ -34,8 +34,8 @@ import * as XLSX from 'xlsx';
 const CANONICAL_REGIONS = ['A', 'B', 'C', 'G', 'H', 'J', 'M', 'N', 'T', 'V'];
 
 // Brand
-const BRAND_RED = '#D94F2B';
-const BG_SUBTLE = '#FBF7F6';
+const BRAND_RED = '#06B6D4';
+const BG_SUBTLE = '#F8FAFC';
 
 // Threshold color bands per Liam's spec: green ≥12, yellow 10-11, red <10.
 // Exempt entries (Lia Davis + Samantha Faliks per 2026-06-05 clarification)

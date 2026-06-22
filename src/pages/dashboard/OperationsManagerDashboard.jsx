@@ -554,7 +554,7 @@ export default function OperationsManagerDashboard(props) {
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
         }}>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#D94F2B', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#06B6D4', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
               Operations Manager
             </div>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#111827', marginTop: 2 }}>

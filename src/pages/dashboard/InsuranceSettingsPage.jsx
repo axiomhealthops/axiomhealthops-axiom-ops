@@ -275,7 +275,7 @@ function AbbreviationModal({ row, onClose, onSaved, coordinatorId }) {
               fontSize: 13, background: 'var(--card-bg)', cursor: 'pointer',
             }}>Cancel</button>
             <button onClick={handleSave} disabled={saving} style={{
-              padding: '8px 20px', background: '#D94F2B', color: '#fff',
+              padding: '8px 20px', background: '#06B6D4', color: '#fff',
               border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600,
               cursor: saving ? 'wait' : 'pointer',
             }}>
@@ -382,7 +382,7 @@ export default function InsuranceSettingsPage() {
           <button
             onClick={() => setEditing('new')}
             style={{
-              padding: '7px 16px', background: '#D94F2B', color: '#fff',
+              padding: '7px 16px', background: '#06B6D4', color: '#fff',
               border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer',
             }}
           >+ Add Abbreviation</button>

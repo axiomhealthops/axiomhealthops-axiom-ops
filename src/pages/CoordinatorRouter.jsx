@@ -32,7 +32,7 @@ export default function CoordinatorRouter() {
     <div style={{ minHeight: '100vh', background: '#F9FAFB', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'DM Sans, sans-serif' }}>
       <div style={{ width: '100%', maxWidth: 560, padding: 24 }}>
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ width: 52, height: 52, borderRadius: 12, background: '#D94F2B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 700, color: '#fff', margin: '0 auto 16px' }}>A</div>
+          <div style={{ width: 52, height: 52, borderRadius: 12, background: '#06B6D4', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 700, color: '#fff', margin: '0 auto 16px' }}>A</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#111827' }}>Care Coordinator Portal</div>
           <div style={{ fontSize: 14, color: '#6B7280', marginTop: 6 }}>Select a coordinator to preview their view</div>
         </div>
@@ -43,7 +43,7 @@ export default function CoordinatorRouter() {
             return (
               <button key={coord.name} onClick={function() { setSelected(coord); }}
                 style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 12, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer', textAlign: 'left', width: '100%', transition: 'border-color 0.15s, box-shadow 0.15s' }}
-                onMouseEnter={function(e) { e.currentTarget.style.borderColor = '#D94F2B'; e.currentTarget.style.boxShadow = '0 0 0 3px #D94F2B20'; }}
+                onMouseEnter={function(e) { e.currentTarget.style.borderColor = '#06B6D4'; e.currentTarget.style.boxShadow = '0 0 0 3px #06B6D420'; }}
                 onMouseLeave={function(e) { e.currentTarget.style.borderColor = '#E5E7EB'; e.currentTarget.style.boxShadow = 'none'; }}>
                 <div style={{ width: 44, height: 44, borderRadius: 10, background: '#0F1117', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
                   {initials}

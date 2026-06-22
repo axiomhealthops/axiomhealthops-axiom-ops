@@ -1005,7 +1005,7 @@ export default function IntakeDashboardPage() {
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {/* Header */}
-                <div style={{ background: 'linear-gradient(135deg, #7C2D12 0%, #DC2626 100%)', borderRadius: 12, padding: 24, color: '#fff' }}>
+                <div style={{ background: 'linear-gradient(135deg, #0F172A 0%, #DC2626 100%)', borderRadius: 12, padding: 24, color: '#fff' }}>
                   <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7, marginBottom: 6 }}>Denial Audit — Quality Control</div>
                   <div style={{ fontSize: 26, fontWeight: 700, fontFamily: 'DM Mono, monospace', marginBottom: 8 }}>{suspiciousPatterns.length} Referrals Flagged for Review</div>
                   <div style={{ fontSize: 13, opacity: 0.85, maxWidth: 700, lineHeight: 1.6 }}>

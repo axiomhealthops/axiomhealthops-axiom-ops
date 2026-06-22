@@ -22,12 +22,17 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from './supabase';
 
-const BRAND_RED = [217, 79, 43]; // #D94F2B
-const BLACK     = [26, 26, 26];
-const GRAY      = [107, 114, 128];
-const LIGHT     = [240, 228, 224];
-const WARN_BG   = [254, 243, 199];
-const WARN_FG   = [146, 64, 14];
+// EdemaCare brand palette (see reference_edemacare_brand_kit memory).
+// BRAND is Teal Accent #06B6D4 — replaces the legacy AxiomHealth red #D94F2B.
+// BRAND_DARK is Primary Navy #0F172A — used for high-emphasis body text.
+const BRAND      = [6, 182, 212];   // #06B6D4 Teal Accent
+const BRAND_DARK = [15, 23, 42];    // #0F172A Primary Navy
+const BRAND_RED  = BRAND;           // back-compat alias for existing call sites
+const BLACK      = BRAND_DARK;
+const GRAY       = [107, 114, 128];
+const LIGHT      = [207, 250, 254]; // #CFFAFE very-light teal (rules, alt rows)
+const WARN_BG    = [254, 243, 199];
+const WARN_FG    = [146, 64, 14];
 
 const PLACEHOLDER_TOKEN = '[CONFIGURE IN SETTINGS]';
 
@@ -317,7 +322,7 @@ export async function buildAuthRequestPdf(form, opts = {}) {
         2: { cellWidth: 36, halign: 'center' },
         3: { cellWidth: 52, halign: 'center' },
       },
-      alternateRowStyles: { fillColor: [251, 247, 246] },
+      alternateRowStyles: { fillColor: [236, 254, 255] }, // #ECFEFF cyan tint
       pageBreak: 'avoid',
     });
     y = doc.lastAutoTable.finalY + 8;
