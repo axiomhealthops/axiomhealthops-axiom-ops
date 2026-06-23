@@ -358,6 +358,55 @@ function LeadingIndicator({ label, value, color, hint }) {
   );
 }
 
+// 2026-06-23: ahmops.com mirror sync header. Surfaces last sync time,
+// orders in last 24h, and any sync error. Click stuck-orders count to
+// jump to the intervention page. Renders even when status is null so
+// Earl knows when the integration hasn't been configured yet.
+function Base44SyncStrip({ status, onJumpToStuck }) {
+  if (!status) {
+    return (
+      <div style={{ padding: '8px 20px', background: '#F3F4F6', borderBottom: '1px solid #E5E7EB',
+        fontSize: 11, color: '#6B7280' }}>
+        ahmops.com mirror: not configured yet. See docs/base44/setup-cron.sql.
+      </div>
+    );
+  }
+  const last = status.last_successful_sync_at;
+  const mins = last ? Math.floor((Date.now() - new Date(last).getTime()) / 60000) : null;
+  const fresh = mins == null ? { label: 'no successful sync yet', color: '#7F1D1D', bg: '#FEE2E2' }
+              : mins < 60   ? { label: 'synced ' + mins + 'm ago',  color: '#065F46', bg: '#D1FAE5' }
+              : mins < 360  ? { label: 'synced ' + Math.floor(mins / 60) + 'h ago', color: '#92400E', bg: '#FEF3C7' }
+              :               { label: 'stale: ' + Math.floor(mins / 60) + 'h since last sync', color: '#7F1D1D', bg: '#FEE2E2' };
+  return (
+    <div style={{
+      padding: '8px 20px', background: fresh.bg, borderBottom: '1px solid #E5E7EB',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8,
+    }}>
+      <div style={{ fontSize: 12, color: fresh.color }}>
+        <strong>ahmops.com mirror:</strong> {fresh.label}
+        <span style={{ marginLeft: 16 }}>
+          {status.orders_last_24h ?? 0} new orders 24h {'·'} {status.open_orders ?? 0} open {'·'} {status.total_mirrored_orders ?? 0} total mirrored
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {(status.stuck_orders_count ?? 0) > 0 && (
+          <button onClick={onJumpToStuck}
+            style={{ padding: '4px 10px', background: '#7F1D1D', color: '#fff',
+              border: 'none', borderRadius: 999, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+            {status.stuck_orders_count} stuck - review
+          </button>
+        )}
+        {status.last_error_message && (
+          <span style={{ fontSize: 11, color: '#7F1D1D', background: '#FEE2E2',
+            padding: '3px 8px', borderRadius: 999, fontWeight: 600 }}>
+            Sync error: {status.last_error_message.slice(0, 60)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SupplyManagerPage() {
   const { profile } = useAuth();
   const [monthly, setMonthly] = useState([]);
@@ -366,6 +415,9 @@ export default function SupplyManagerPage() {
   const [openOrders, setOpenOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [criticalEditOpen, setCriticalEditOpen] = useState(false);
+  // 2026-06-23: ahmops.com (base44) mirror sync status. Surfaces "Last sync"
+  // strip and orders-last-24h. Null until first successful sync run.
+  const [base44Sync, setBase44Sync] = useState(null);
 
   function navigateTo(page) {
     window.dispatchEvent(new CustomEvent('axiom-navigate', { detail: { page } }));
@@ -373,7 +425,7 @@ export default function SupplyManagerPage() {
 
   async function load() {
     setLoading(true);
-    const [m, c, d, o] = await Promise.all([
+    const [m, c, d, o, b] = await Promise.all([
       fetchAllPages(supabase.from('v_supply_kpis_monthly').select('*')),
       supabase.from('supply_critical_number').select('*')
         .lte('quarter_start', new Date().toISOString().slice(0, 10))
@@ -383,16 +435,22 @@ export default function SupplyManagerPage() {
         .order('delay_date', { ascending: false })),
       fetchAllPages(supabase.from('garment_orders').select('id,approval_status,field_request_date,order_placed_date,delivery_date,vendor_eta_date,vendor,order_type,garment_cost')
         .neq('approval_status', 'cancelled')),
+      supabase.from('v_base44_sync_status').select('*').maybeSingle(),
     ]);
     setMonthly(m || []);
     setCritical(c?.data || null);
     setDelays(d || []);
     setOpenOrders(o || []);
+    setBase44Sync(b?.data || null);
     setLoading(false);
   }
 
   useEffect(() => { load(); }, []);
-  useRealtimeTable(['garment_orders','supply_monthly_plan','supply_care_delays','supply_critical_number'], load);
+  useRealtimeTable(
+    ['garment_orders','supply_monthly_plan','supply_care_delays','supply_critical_number',
+     'base44_orders','base44_sync_runs'],
+    load,
+  );
 
   const current = monthly[monthly.length - 1]; // most recent month
   const prior   = monthly.length >= 2 ? monthly[monthly.length - 2] : null;
@@ -453,6 +511,9 @@ export default function SupplyManagerPage() {
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       <TopBar title="Supply Manager"
         subtitle={current ? (current.month_label + ' month-to-date - Earl Dimaano, Supply Management') : 'Earl Dimaano, Supply Management'} />
+
+      {/* ahmops.com mirror sync strip */}
+      <Base44SyncStrip status={base44Sync} onJumpToStuck={() => navigateTo('stuck-orders')} />
 
       <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
 

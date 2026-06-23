@@ -76,6 +76,9 @@ import SupplyManagerPage from './dashboard/SupplyManagerPage';
 import SupplyOrderWorklistPage from './dashboard/SupplyOrderWorklistPage';
 import SupplyMonthlyPlanPage from './dashboard/SupplyMonthlyPlanPage';
 import SupplyCareDelaysPage from './dashboard/SupplyCareDelaysPage';
+// 2026-06-23: Stuck Orders intervention surface fed by ahmops.com (base44)
+// order mirror. Read-only; clinicians act inside ahmops.com itself.
+import StuckOrdersPage from './dashboard/StuckOrdersPage';
 import MyDayPage from './dashboard/MyDayPage';
 // 2026-06-03: Auth Request Form (docs/Auth_Request_Form_Design.md rev 2)
 import AuthRequestFormPage from './dashboard/AuthRequestFormPage';
@@ -163,6 +166,7 @@ const PAGE_COMPONENTS = {
   'supply-worklist':         SupplyOrderWorklistPage,
   'supply-monthly-plan':     SupplyMonthlyPlanPage,
   'supply-care-delays':      SupplyCareDelaysPage,
+  'stuck-orders':            StuckOrdersPage,
   'my-day':                  MyDayPage,
   'auth-request-form':       AuthRequestFormPage,
   'cpt-codes-admin':         CptCodesAdminPage,
