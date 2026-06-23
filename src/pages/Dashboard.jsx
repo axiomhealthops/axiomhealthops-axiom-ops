@@ -72,6 +72,7 @@ import AuthPendingCoveragePage from './dashboard/AuthPendingCoveragePage';
 import VisitRunwayPage from './dashboard/VisitRunwayPage';
 import AuthExpiryTimelinePage from './dashboard/AuthExpiryTimelinePage';
 import StuckAuthsPage from './dashboard/StuckAuthsPage';
+import SupplyManagerPage from './dashboard/SupplyManagerPage';
 import MyDayPage from './dashboard/MyDayPage';
 // 2026-06-03: Auth Request Form (docs/Auth_Request_Form_Design.md rev 2)
 import AuthRequestFormPage from './dashboard/AuthRequestFormPage';
@@ -155,6 +156,7 @@ const PAGE_COMPONENTS = {
   'visit-runway':            VisitRunwayPage,
   'auth-expiry-timeline':    AuthExpiryTimelinePage,
   'stuck-auths':             StuckAuthsPage,
+  'supply-manager':          SupplyManagerPage,
   'my-day':                  MyDayPage,
   'auth-request-form':       AuthRequestFormPage,
   'cpt-codes-admin':         CptCodesAdminPage,

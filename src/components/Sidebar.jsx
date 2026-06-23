@@ -17,6 +17,7 @@ const ALL_SECTIONS = [
   { key: 'AUTHORIZATION',       label: 'AUTHORIZATION' },
   { key: 'CARE COORDINATION',   label: 'CARE COORDINATION' },
   { key: 'CLINICAL DEPARTMENT', label: 'CLINICAL DEPARTMENT' },
+  { key: 'SUPPLY MANAGEMENT',   label: 'SUPPLY MANAGEMENT' },
   { key: 'MARKETING',           label: 'MARKETING' },
   { key: 'PERFORMANCE',         label: 'PERFORMANCE' },
   // 2026-06-02: New PAYROLL section per docs/Payroll_Review_Design.md (rev 2).
@@ -45,6 +46,8 @@ const PAGE_ICONS = {
   'visit-runway': '🏃',
   'auth-expiry-timeline': '📅',
   'stuck-auths': '🐢',
+  'supply-manager': '📦',
+  'garment-tracker': '👕',
   'my-day': '☀',
   'auth-request-form': '📄',
   users: '👥', uploads: '↑', settings: '⚙', 'insurance-settings': '🏥', 'cpt-codes-admin': '🧾', 'audit-import': '📋', 'dept-reports': '📑',
