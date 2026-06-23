@@ -77,15 +77,26 @@ function HeroNumber({ label, value, sub, color, status, footer }) {
   );
 }
 
-function ScorecardTile({ label, value, target, missing, hint, isLeading }) {
+function ScorecardTile({ label, value, target, missing, hint, isLeading, ctaPage, ctaLabel }) {
+  function go() {
+    if (ctaPage) window.dispatchEvent(new CustomEvent('axiom-navigate', { detail: { page: ctaPage } }));
+  }
   if (missing) {
     return (
       <div style={{ background: 'var(--card-bg)', border: '1px dashed var(--border)',
-        borderRadius: 10, padding: '12px 14px' }}>
+        borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column' }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)',
           textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
         <div style={{ fontSize: 14, fontWeight: 600, color: '#9CA3AF', marginTop: 4 }}>Not tracked yet</div>
         {hint && <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 4 }}>{hint}</div>}
+        {ctaPage && (
+          <button onClick={go}
+            style={{ marginTop: 8, padding: '5px 10px', background: '#0F1117', color: '#fff',
+              border: 'none', borderRadius: 5, fontSize: 10, fontWeight: 700, cursor: 'pointer',
+              alignSelf: 'flex-start' }}>
+            {ctaLabel || 'Start tracking'}
+          </button>
+        )}
       </div>
     );
   }
@@ -158,22 +169,31 @@ function TrendChart({ data, valueKey, label, color, targetValue }) {
   );
 }
 
-function CriticalNumberCard({ critical, onSet }) {
+function CriticalNumberCard({ critical, onEdit }) {
   if (!critical) {
     return (
-      <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D',
-        borderRadius: 12, padding: '14px 20px' }}>
+      <button onClick={onEdit}
+        style={{ width: '100%', textAlign: 'left', cursor: 'pointer',
+          background: '#FEF3C7', border: '1px solid #FCD34D',
+          borderRadius: 12, padding: '14px 20px' }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: '#92400E',
           textTransform: 'uppercase', letterSpacing: '0.05em' }}>Quarterly Critical Number</div>
-        <div style={{ fontSize: 13, color: '#7C2D12', marginTop: 4 }}>Not yet set. Earl picks one number per quarter that gets disproportionate focus.</div>
-      </div>
+        <div style={{ fontSize: 13, color: '#7C2D12', marginTop: 4 }}>
+          Not yet set. Click to pick one priority per quarter.
+        </div>
+      </button>
     );
   }
   return (
-    <div style={{ background: 'linear-gradient(135deg, #7C2D12 0%, #C2410C 100%)',
-      borderRadius: 12, padding: '16px 22px', color: '#fff' }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: '#FED7AA',
-        textTransform: 'uppercase', letterSpacing: '0.06em' }}>{critical.quarter_label} Critical Number</div>
+    <button onClick={onEdit}
+      style={{ width: '100%', textAlign: 'left', cursor: 'pointer',
+        background: 'linear-gradient(135deg, #7C2D12 0%, #C2410C 100%)',
+        border: 'none', borderRadius: 12, padding: '16px 22px', color: '#fff' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#FED7AA',
+          textTransform: 'uppercase', letterSpacing: '0.06em' }}>{critical.quarter_label} Critical Number</div>
+        <div style={{ fontSize: 10, color: '#FED7AA', opacity: 0.85 }}>click to edit</div>
+      </div>
       <div style={{ fontSize: 16, fontWeight: 700, marginTop: 4 }}>{critical.title}</div>
       {(critical.baseline_value || critical.target_value) && (
         <div style={{ fontSize: 11, color: '#FED7AA', marginTop: 8, display: 'flex', gap: 18 }}>
@@ -181,6 +201,146 @@ function CriticalNumberCard({ critical, onSet }) {
           {critical.target_value && <span>Target: {critical.target_value}</span>}
         </div>
       )}
+    </button>
+  );
+}
+
+// Modal for editing or creating the current-quarter Critical Number.
+function CriticalNumberModal({ critical, onClose, onSaved, profile }) {
+  const quarterStart = critical?.quarter_start || (() => {
+    const d = new Date();
+    const q = Math.floor(d.getMonth() / 3);
+    return new Date(d.getFullYear(), q * 3, 1).toISOString().slice(0, 10);
+  })();
+  const quarterLabel = critical?.quarter_label || (() => {
+    const d = new Date(quarterStart);
+    const q = Math.floor(d.getMonth() / 3) + 1;
+    return 'Q' + q + ' ' + d.getFullYear();
+  })();
+
+  const [form, setForm] = useState({
+    quarter_start:  quarterStart,
+    quarter_label:  quarterLabel,
+    title:          critical?.title || '',
+    baseline_value: critical?.baseline_value || '',
+    target_value:   critical?.target_value || '',
+    measure_unit:   critical?.measure_unit || '',
+    status:         critical?.status || 'in_progress',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function save() {
+    if (!form.title.trim()) { setErr('Title is required.'); return; }
+    setSaving(true); setErr('');
+    const payload = {
+      ...form,
+      title: form.title.trim(),
+      baseline_value: form.baseline_value.trim() || null,
+      target_value: form.target_value.trim() || null,
+      measure_unit: form.measure_unit.trim() || null,
+      set_by: profile?.full_name || profile?.email || null,
+      updated_at: new Date().toISOString(),
+    };
+    let res;
+    if (critical?.id) {
+      res = await supabase.from('supply_critical_number').update(payload).eq('id', critical.id);
+    } else {
+      res = await supabase.from('supply_critical_number').insert(payload);
+    }
+    setSaving(false);
+    if (res.error) { setErr(res.error.message); return; }
+    onSaved();
+    onClose();
+  }
+
+  const inp = {
+    width: '100%', padding: '8px 10px', border: '1px solid #E5E7EB',
+    borderRadius: 6, fontSize: 12, outline: 'none', background: '#fff', boxSizing: 'border-box',
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+        zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: '#fff', borderRadius: 12, width: 520, maxWidth: '92vw',
+          maxHeight: '90vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding: '16px 22px', borderBottom: '1px solid #E5E7EB',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: '#0F1117' }}>Critical Number</div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
+              One priority per quarter that gets disproportionate focus.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22,
+            color: '#9CA3AF', cursor: 'pointer', padding: 0 }}>{'×'}</button>
+        </div>
+        <div style={{ padding: 22, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          <Field label="Quarter">
+            <input value={form.quarter_label} onChange={e => setForm(p => ({ ...p, quarter_label: e.target.value }))}
+              style={inp} placeholder="Q3 2026" />
+          </Field>
+          <Field label="Quarter start">
+            <input type="date" value={form.quarter_start}
+              onChange={e => setForm(p => ({ ...p, quarter_start: e.target.value }))}
+              style={inp} />
+          </Field>
+          <Field label="Title *" span={2}>
+            <input value={form.title}
+              onChange={e => setForm(p => ({ ...p, title: e.target.value }))}
+              style={inp} placeholder="e.g. Move standardized-catalog spend to 85% with zero care delays" />
+          </Field>
+          <Field label="Baseline value">
+            <input value={form.baseline_value}
+              onChange={e => setForm(p => ({ ...p, baseline_value: e.target.value }))}
+              style={inp} placeholder="e.g. 0% or $210 PPPM" />
+          </Field>
+          <Field label="Target value">
+            <input value={form.target_value}
+              onChange={e => setForm(p => ({ ...p, target_value: e.target.value }))}
+              style={inp} placeholder="e.g. 85% / $185" />
+          </Field>
+          <Field label="Status">
+            <select value={form.status}
+              onChange={e => setForm(p => ({ ...p, status: e.target.value }))} style={inp}>
+              <option value="in_progress">in_progress</option>
+              <option value="on_track">on_track</option>
+              <option value="at_risk">at_risk</option>
+              <option value="missed">missed</option>
+              <option value="hit">hit</option>
+            </select>
+          </Field>
+        </div>
+        {err && (
+          <div style={{ margin: '0 22px 12px', padding: '8px 10px', background: '#FEF2F2',
+            color: '#991B1B', fontSize: 12, borderRadius: 6, border: '1px solid #FECACA' }}>{err}</div>
+        )}
+        <div style={{ padding: '14px 22px', borderTop: '1px solid #E5E7EB',
+          display: 'flex', justifyContent: 'flex-end', gap: 8, background: '#FAFAFA' }}>
+          <button onClick={onClose} style={{ padding: '8px 16px', border: '1px solid #E5E7EB',
+            background: '#fff', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+            Cancel
+          </button>
+          <button onClick={save} disabled={saving}
+            style={{ padding: '8px 18px', border: 'none',
+              background: saving ? '#9CA3AF' : '#0F1117', color: '#fff',
+              borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: saving ? 'wait' : 'pointer' }}>
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children, span = 1 }) {
+  return (
+    <div style={{ gridColumn: 'span ' + span }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#6B7280',
+        textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>{label}</div>
+      {children}
     </div>
   );
 }
@@ -205,6 +365,11 @@ export default function SupplyManagerPage() {
   const [delays, setDelays] = useState([]);
   const [openOrders, setOpenOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [criticalEditOpen, setCriticalEditOpen] = useState(false);
+
+  function navigateTo(page) {
+    window.dispatchEvent(new CustomEvent('axiom-navigate', { detail: { page } }));
+  }
 
   async function load() {
     setLoading(true);
@@ -310,21 +475,34 @@ export default function SupplyManagerPage() {
             color="#1565C0"
             status={pppmStatus}
             footer={'Targets: hold <= $' + PPPM_TARGET_BASELINE + ' baseline / drive to $' + PPPM_TARGET_12MO + ' over 12 mo'} />
-          <HeroNumber
-            label="Care Delay Rate (counter-balance)"
-            value={fmtPct(current?.care_delay_rate_pct ?? 0, 2)}
-            sub={current?.care_delays_count != null
-              ? current.care_delays_count + ' supply-caused delay(s) this month'
-              : 'none logged'}
-            color="#7C2D12"
-            status={careDelayStatus}
-            footer={'Target <= ' + CARE_DELAY_TARGET + '%, trending to 0. Reported alongside PPPM, always.'} />
+          <div style={{ flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <HeroNumber
+              label="Care Delay Rate (counter-balance)"
+              value={fmtPct(current?.care_delay_rate_pct ?? 0, 2)}
+              sub={current?.care_delays_count != null
+                ? current.care_delays_count + ' supply-caused delay(s) this month'
+                : 'none logged'}
+              color="#7C2D12"
+              status={careDelayStatus}
+              footer={'Target <= ' + CARE_DELAY_TARGET + '%, trending to 0. Reported alongside PPPM, always.'} />
+            <button onClick={() => navigateTo('supply-care-delays')}
+              style={{ padding: '8px 14px', background: '#fff', color: '#7C2D12',
+                border: '1px solid #FCD34D', borderRadius: 7, fontSize: 11,
+                fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}>
+              Log a care delay -&gt;
+            </button>
+          </div>
         </div>
 
-        {/* Quarterly Critical Number */}
+        {/* Quarterly Critical Number — clickable to edit */}
         <div style={{ marginBottom: 14 }}>
-          <CriticalNumberCard critical={critical} />
+          <CriticalNumberCard critical={critical} onEdit={() => setCriticalEditOpen(true)} />
         </div>
+        {criticalEditOpen && (
+          <CriticalNumberModal critical={critical}
+            onClose={() => setCriticalEditOpen(false)}
+            onSaved={load} profile={profile} />
+        )}
 
         {/* Supporting scorecard (5 tiles, capped per Scaling Up rules) */}
         <div style={{ marginBottom: 6 }}>
@@ -337,28 +515,34 @@ export default function SupplyManagerPage() {
               value={current?.otif_pct != null ? Number(current.otif_pct) : null}
               target={OTIF_TARGET}
               missing={current?.otif_pct == null}
-              hint="Fill vendor_eta_date + delivery_date on orders" />
+              hint="Fill ETA + delivery dates on orders"
+              ctaPage="supply-worklist" ctaLabel="Fix in Worklist" />
             <ScorecardTile label="Order Accuracy"
               value={current?.accuracy_pct != null ? Number(current.accuracy_pct) : null}
               target={ACCURACY_TARGET}
               missing={current?.accuracy_pct == null}
-              hint={'Initial orders / all orders. ' + (current?.order_count || 0) + ' orders this month.'} />
+              hint={'Initial / all orders. ' + (current?.order_count || 0) + ' orders this month.'} />
             <ScorecardTile label="Doc Compliance"
               value={current?.doc_compliance_pct != null ? Number(current.doc_compliance_pct) : null}
               target={DOC_COMPLIANCE_TARGET}
               missing={current?.auth_required_count === 0}
-              hint={(current?.auth_required_count || 0) + ' auth-required orders need an auth number'} />
+              hint={(current?.auth_required_count || 0) + ' auth-required orders, '
+                + Math.round(((current?.auth_required_count || 0) * (100 - (current?.doc_compliance_pct || 0))) / 100)
+                + ' missing auth #'}
+              ctaPage="supply-worklist" ctaLabel="Fill auth #s" />
             <ScorecardTile label="Standardized Catalog %"
               value={current?.standardized_catalog_pct != null ? Number(current.standardized_catalog_pct) : null}
               target={CATALOG_TARGET}
               missing={current?.standardized_catalog_pct == null}
-              hint="Earl flags each order is_standardized_catalog"
-              isLeading />
+              hint="Flag each order Yes / No"
+              isLeading
+              ctaPage="supply-worklist" ctaLabel="Tag orders" />
             <ScorecardTile label="Budget Variance"
               value={current?.budget_variance_pct != null ? Number(current.budget_variance_pct) : null}
               target={BUDGET_VAR_TARGET}
               missing={current?.budget_variance_pct == null}
-              hint={current?.planned_spend_usd ? '' : 'Set monthly plan in supply_monthly_plan'} />
+              hint={current?.planned_spend_usd ? '' : 'Enter monthly plan'}
+              ctaPage="supply-monthly-plan" ctaLabel="Set plan" />
           </div>
         </div>
 
