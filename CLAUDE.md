@@ -6,6 +6,56 @@ Deploys to Vercel automatically from the `main` branch within ~60 seconds of a p
 
 ---
 
+## Tech stack & repository layout
+
+- **Frontend:** React 18 + React Router 6, built with Vite 5. No CSS framework —
+  styling is inline-style objects + CSS variables in `src/index.css`. No TypeScript
+  on the frontend (plain `.jsx`); the only TS is in Supabase Edge Functions (Deno).
+- **Data:** Supabase (Postgres + Auth + RLS + Edge Functions), project
+  `kndiyailsqrialgbozac` (a.k.a. `axiom-ops`). Client via `@supabase/supabase-js`.
+- **Reports/exports:** `xlsx` (SheetJS) for XLSX, `jspdf` + `jspdf-autotable` for PDFs,
+  `recharts` for charts.
+- **Hosting:** Vercel, auto-deploy from `main`. SPA — `vercel.json` rewrites all
+  routes to `index.html`. There is **no client-side router URL**: page switching is
+  state-driven in `src/pages/Dashboard.jsx` (a `PAGES` map keyed by page string),
+  with cross-page navigation fired through the `axiom-navigate` window event and an
+  optional `intent` hint consumed once on page mount.
+
+```
+src/
+  main.jsx                     # React entry
+  App.jsx                      # top-level auth gate + layout
+  index.css                    # CSS variables incl. EdemaCare --ec-* palette
+  pages/
+    Login.jsx, ResetPassword.jsx
+    Dashboard.jsx              # PAGES map — single source of truth for page routing
+    CoordinatorRouter.jsx      # role-based portal dispatch
+    dashboard/                 # ~70 feature pages (one file per page)
+  components/                  # shared UI (Sidebar, TopBar, modals, bells, cards)
+    director/  ops/            # role-scoped dashboard widgets
+  layouts/DashboardLayout.jsx
+  hooks/                       # useAuth, useCoordinatorEngagement, useRealtimeTable,
+                               #   useAssignedRegions, useRiskMap
+  lib/                         # constants, supabase, dateUtils, visitMath, visitDedup,
+                               #   stateMapping, alertEngine, authRequestPdf
+supabase/
+  functions/                   # Deno Edge Functions (admin-user-actions, daily-ops-report,
+                               #   notify-mention)
+  migrations/                  # SQL migrations (most schema lives in the remote DB and is
+                               #   applied via Supabase MCP apply_migration, not all checked in)
+  seeds/
+docs/                          # design specs + audits (source of truth for page intent)
+public/                        # logo + PWA icons + manifest
+```
+
+- **Schema reality check:** only a handful of migrations are committed under
+  `supabase/migrations/`. Most tables, views, RPCs, and triggers referenced in this
+  file live in the remote Supabase project and were applied via MCP `apply_migration`.
+  To inspect current schema, use the Supabase MCP (`list_tables`, `execute_sql`) rather
+  than assuming the migrations folder is complete.
+
+---
+
 ## Brand naming conventions — read before renaming anything
 
 **Brand palette (2026-06-09):** EdemaCare adopted the official cool teal/navy/indigo
@@ -70,6 +120,19 @@ codebase, and they have different rules:
 - **Per (patient, date, staff) slot = ONE counted visit.** Pariox sometimes uploads
   duplicate rows for the same slot with different `event_type`s
   (e.g. "Maintenance *e*" + "Level 2 *e*"). Collapse to one row per slot before counting.
+- **Reading `visit_schedule_data` for counting/billing → use
+  `dedupVisitsByLatestUpload(rows)` from `src/lib/visitDedup.js`.** This is the shared,
+  canonical implementation of the per-`(patient_name, visit_date)` latest-`uploaded_at`
+  rule that conventions #10–#12 below were extracted from. Do NOT re-roll a per-date
+  "latest batch" filter — that is the exact bug that under-counted the Productivity
+  Tracker.
+
+### Region ↔ state mapping (FL/GA)
+- EdemaCare operational tables key off single-letter region codes; the FL/GA split
+  lives in `marketing_territories`. Use `src/lib/stateMapping.js`
+  (`useStateMapping()` hook, `regionMatchesState()`, `getRegionsForState()`,
+  `readPersistedState`/`persistState`) rather than hardcoding which letters are GA.
+  `isGeorgiaRegion(region)` in `constants.js` matches any value `/^GA/i`.
 
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
@@ -95,15 +158,33 @@ codebase, and they have different rules:
   via both `Sidebar.jsx` and `useAuth.canAccess()`.
 - `page_permissions` columns: super_admin, admin, assoc_director, regional_manager,
   pod_leader, team_member, auth_coordinator, intake_coordinator, care_coordinator,
-  clinician, telehealth.
+  clinician, telehealth. Two more roles exist in `constants.js`/auth and map onto
+  these: `director_payer_marketing` (Yvonne — full marketing access, director tier)
+  and `ceo` (maps to super_admin). The role → default landing page is set in
+  `Dashboard.jsx` (`defaultPageForRole`).
+
+### Shared hooks (prefer these over inlining logic)
+- `useAuth()` (`src/hooks/useAuth.jsx`) — session, `profile`, `role`, `canAccess()`.
+- `useCoordinatorEngagement()` — the ONLY blessed "is coordinator X active?" check
+  (6-source MAX, see broke-before #13). Never read `last_sign_in_at` or filter
+  `activity_log` directly.
+- `useRealtimeTable(tables, onChange)` — Supabase realtime subscription; most live
+  pages (Garment Tracker, Discharge Tracker, Hospitalization Tracker, etc.) refresh
+  through it.
+- `useAssignedRegions()` — territory scoping for AD/RM/TM views.
+- `useRiskMap()` — patient risk-factor lookup feeding `RiskBadge`.
 
 ### Sidebar sections
 The DB stores these EXACT strings in `page_permissions.page_section` — `Sidebar.jsx`
 `ALL_SECTIONS` keys MUST match verbatim. Don't shorten or rename:
 ```
 OVERVIEW · OPERATIONS · INTAKE · AUTHORIZATION · CARE COORDINATION ·
-CLINICAL DEPARTMENT · MARKETING · PERFORMANCE · ADMIN
+CLINICAL DEPARTMENT · MARKETING · PERFORMANCE · PAYROLL · ADMIN
 ```
+The `key` must match the DB string verbatim; the human-facing `label` may differ
+(e.g. `OPERATIONS` renders as "MAIN OPERATIONS"). `CLINICAL DEPARTMENT` now houses
+the Garment Tracker and the unified Frequency Management page; `PAYROLL` houses
+Payroll Review + Payroll Settings.
 
 ---
 
@@ -130,6 +211,17 @@ CLINICAL DEPARTMENT · MARKETING · PERFORMANCE · ADMIN
 - Schema changes: use Supabase MCP `apply_migration` with descriptive names.
 - The `data_audit_log` table records reversible field-level changes from imports.
 
+### Edge Functions (`supabase/functions/`, Deno + TypeScript)
+- `admin-user-actions` (v6/v7) — privileged user CRUD: create/activate/deactivate,
+  set/reset password, and `bulk_user_migration` (powers User Management Export/Import).
+  This is the ONLY blessed path to provision auth-user passwords — never raw-SQL
+  `INSERT` into `auth.users` (see broke-before #14/#16). Calls `clear_pending_email_change`
+  after email updates.
+- `daily-ops-report` — emails Liam the daily ops digest via Resend.
+- `notify-mention` — emails on @-mentions in notes via Resend.
+- Email sender stays `@axiomhealthmanagement.com` (Resend DKIM/SPF verified there);
+  display name is "EdemaCare". Do not move the sender to `edemacare.com`.
+
 ---
 
 ## Key pages (what they're for, who uses them)
@@ -152,6 +244,16 @@ CLINICAL DEPARTMENT · MARKETING · PERFORMANCE · ADMIN
 | Marketing Referrals by Territory | Yvonne + marketing team | Read-only referrals view by territory, FL + GA on one page |
 | Marketing Luncheon Requests | Marketing field + Liam/Yvonne | Provider lunch/in-service approval workflow |
 | Payer + Marketing Report | Yvonne | Per-payer revenue + productivity breakdown |
+| Auth Request Form | Auth team | All-payor authorization/service-order builder → client-side PDF (fax cover + request). 5 request types (New Patient, Resumption, COC, Wound Care, Garment); payor-specific CPT/A-code templates; submit → preview → save-to-chart. See `src/lib/authRequestPdf.js` + `docs/Auth_Request_Form_Design.md`. |
+| CPT Codes Admin | Admin/Auth | Maintains the live `cpt_codes` library that powers the Auth Request Form templates |
+| Medicare Tracker | Director/Auth | Flat straight-Medicare roster (one row/patient): 20-visit cap, 10-visit + 30-day progress-note rules, ready-for-discharge flag, KX cap-override (admin). DB-enforced via `trg_enforce_medicare_visit_cap` + `trg_flag_medicare_ready_for_discharge`. One-click discharge with care-coord alert. |
+| Garment Tracker | Clinical/Care coord | LE+UE compression-garment pipeline (Kanban + table): submitted → approved → auth_pending → order_placed → in_transit → delivered. Supervisor approval + auth/order/delivery capture; auto-links patient via DB trigger; stages from `v_garment_orders_with_stage`. Replaces the legacy Google Form. |
+| Frequency Management | Liam/Carla/ADs | Unified tabbed view merging DRIFT (cadence drifted from prescribed) + STALE (stable 90+ days, reduction candidates). Single `approve_frequency_change` RPC. Legacy `frequency-review` / `stale-frequency` pages still deep-link in. |
+| Clinical Progression | Clinical/Care coord | Per-patient level-of-care (EVAL→L5…L1→Maintenance) + visit-frequency (4w4/2w4/1w4/…) + LOC tracking |
+| Hospitalization Tracker | Director/RM/Clinical | Admissions log with lymphedema-attributable vs other-cause classification (incl. CHF/fluid retention + falls), Inpatient/Observation/ED `stay_type`, Lymph Rate (<1%) + Other Rate (<5%) benchmarks |
+| Discharge Tracker | Care coord | Discharge log + reason/outcome + 30-day follow-up workflow |
+| Telehealth Monitor | Telehealth lead | Telehealth visit oversight |
+| Payroll Review / Payroll Settings | Admin | Payroll reconciliation + rate/config settings |
 
 ---
 
