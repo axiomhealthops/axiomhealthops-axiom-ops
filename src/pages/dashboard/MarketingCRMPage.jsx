@@ -1095,8 +1095,14 @@ export default function MarketingCRMPage() {
     setEncounters(e || []);
     setPeople(p || []);
     setSpecialProjects(s || []);
+    // 2026-06-23: include healthcare_account_executive + director_payer_marketing
+    // in the rep dropdown. Brian Roffe (HAE, regions=['T']) was missing because
+    // his role wasn't in the allowlist even though his outreach showed in the
+    // activity feed. Mirrors the isMarketingAllAccess role list above so the
+    // "who can use this page" and "who appears as a rep" stay in sync.
     setReps((r || []).filter(x =>
-      ['regional_manager','assoc_director','marketing_rep'].includes(x.role)
+      ['regional_manager','assoc_director','marketing_rep',
+       'healthcare_account_executive','director_payer_marketing'].includes(x.role)
       || (x.secondary_roles || []).includes('marketing_rep')
       || (x.secondary_roles || []).includes('marketing_manager')
     ));
