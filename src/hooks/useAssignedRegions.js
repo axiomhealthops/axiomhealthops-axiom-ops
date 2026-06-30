@@ -4,15 +4,24 @@
 // this hook and apply the returned `regions` filter to its queries so
 // coordinators only see data for regions they're assigned to.
 //
-// Rules (per Liam, 2026-04-15):
-//   * super_admin  → all regions (no filter). Returned regions = null.
-//   * admin        → filter by profile.regions array (admins are seeded
-//                    with all 11 regions; if trimmed, they scope to that
-//                    subset).
+// Rules (per Liam, 2026-04-15; updated 2026-06-30):
+//   * super_admin     → all regions (no filter). Returned regions = null.
+//   * assoc_director  → all regions (no filter). ADs cover specific
+//                       territories via coordinators.regions, but per Liam
+//                       2026-06-30 they need cross-territory visibility for
+//                       situational awareness and to cover for each other
+//                       (e.g., Samantha acting for G, Ariel acting for H/J,
+//                       Earl as Supply Chain AD covering all regions). The
+//                       regions array still drives "you are the AD for X"
+//                       assignment displays — only the data visibility gate
+//                       is lifted.
+//   * admin           → filter by profile.regions array (admins are seeded
+//                       with all 11 regions; if trimmed, they scope to that
+//                       subset).
 //   * regional_manager / care_coordinator / intake_coordinator /
-//     auth_coordinator / assoc_director / clinician / telehealth /
+//     auth_coordinator / clinician / telehealth /
 //     pod_leader / team_member → filter by profile.regions.
-//   * Empty or null regions array on a non-super_admin user → FAIL CLOSED
+//   * Empty or null regions array on a non-all-access user → FAIL CLOSED
 //     (user sees nothing). This is intentional — a misconfigured user
 //     should not leak cross-region data. Fix by assigning regions in
 //     User Management.
@@ -38,8 +47,10 @@ export function useAssignedRegions() {
       return { regions: [], isAllAccess: false, loading: true };
     }
 
-    // Super admin sees everything. Returned regions = null sentinel.
-    if (profile.role === 'super_admin') {
+    // All-access roles see everything across regions. Returned regions = null sentinel.
+    // assoc_director is included per Liam 2026-06-30: ADs need cross-territory
+    // visibility even though they oversee specific territories.
+    if (profile.role === 'super_admin' || profile.role === 'assoc_director') {
       return { regions: null, isAllAccess: true, loading: false };
     }
 
