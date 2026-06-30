@@ -57,6 +57,15 @@ function fmtDate(d) {
   if (!d) return '-';
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
+// Compact "Jun 19 '26" form for in-row dates where horizontal real estate is
+// at a premium. Used in the roster row's Eval column and the 10th/20th
+// milestone sub-line. Full fmtDate stays for headers, modals, and exports.
+function fmtDateShort(d) {
+  if (!d) return '-';
+  const parts = new Date(d + 'T00:00:00').toLocaleDateString('en-US',
+    { month: 'short', day: 'numeric', year: '2-digit' }).split(', ');
+  return parts.length === 2 ? `${parts[0]} '${parts[1]}` : parts[0];
+}
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function addDaysIso(yyyymmdd, days) {
   if (!yyyymmdd) return null;
@@ -910,13 +919,25 @@ function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge }) {
   const f = flag;
   const visits = visitsForCap(f);
   const pct = Math.min(100, Math.round((visits / 20) * 100));
+  const overCapBy = Math.max(0, visits - 20);
   const driftAmount = manualDriftOf(f);
   const tenth = f.tenth_visit_actual_date
-    ? `10th ${fmtDate(f.tenth_visit_actual_date)}`
-    : `10th proj ${fmtDate(f.tenth_visit_projected_date)}`;
+    ? `10th ${fmtDateShort(f.tenth_visit_actual_date)}`
+    : `10th proj ${fmtDateShort(f.tenth_visit_projected_date)}`;
   const twentieth = f.twentieth_visit_actual_date
-    ? `20th ${fmtDate(f.twentieth_visit_actual_date)}`
-    : `20th proj ${fmtDate(f.twentieth_visit_projected_date)}`;
+    ? `20th ${fmtDateShort(f.twentieth_visit_actual_date)}`
+    : `20th proj ${fmtDateShort(f.twentieth_visit_projected_date)}`;
+
+  // Suppress the bucket chip when it would just repeat the census status text
+  // (e.g., a "READY DC" chip on a row already labeled "Discharge") or when it
+  // outright contradicts the status (a "READY DC" chip on a "SOC Pending"
+  // patient who happens to have 20 episode-2 visits booked under them). Status
+  // text wins; OVER CAP / NOTE DUE / DC SOON / NOTE SOON still surface since
+  // they convey new information regardless of census status.
+  const statusNorm = (f.patient_status || '').toLowerCase();
+  const isDischargeChip = bucketLabel === BUCKET_STYLE.discharge.label;
+  const hideChip = isDischargeChip && (statusNorm === 'discharge' || statusNorm === 'soc pending');
+  const showChip = !!bucketLabel && !hideChip;
 
   return (
     <tr
@@ -941,10 +962,10 @@ function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge }) {
         )}
       </td>
 
-      {/* Status — census status text + bucket chip */}
+      {/* Status — census status text + bucket chip (when it adds info) */}
       <td style={tdStyle}>
         <div style={{ fontWeight:600 }}>{f.patient_status || '-'}</div>
-        {bucketLabel && (
+        {showChip && (
           <span style={{
             display:'inline-block', marginTop:4,
             background: `${bucketStyle.accent}15`,
@@ -958,9 +979,9 @@ function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge }) {
         )}
       </td>
 
-      {/* Eval */}
+      {/* Eval — short date for compactness */}
       <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace', color:'var(--gray)' }}>
-        {fmtDate(f.evaluation_date)}
+        {fmtDateShort(f.evaluation_date)}
       </td>
 
       {/* Therapists — PT/OT primary + PTA/COTA secondary */}
@@ -979,15 +1000,42 @@ function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge }) {
           <span style={{ fontSize:16, fontWeight:800, color: visits >= 20 ? bucketStyle.accent : 'var(--text)' }}>
             {visits}
           </span>
-          <span style={{ fontSize:11, color:'var(--gray)' }}>/ 20</span>
+          <span style={{ fontSize:11, color:'var(--text)', opacity:0.6 }}>/ 20</span>
+          {overCapBy > 0 && (
+            <span style={{
+              fontSize:9, fontWeight:800, letterSpacing:0.4,
+              color: bucketStyle.accent,
+              background: `${bucketStyle.accent}1A`,
+              border:`1px solid ${bucketStyle.accent}55`,
+              borderRadius:4, padding:'1px 5px',
+            }}>
+              +{overCapBy} OVER
+            </span>
+          )}
           {f.current_episode_number > 1 && (
             <span style={{ fontSize:9, color:'var(--gray)' }}>
               ep {f.current_episode_number}/{f.episode_count}
             </span>
           )}
         </div>
-        <div style={{ marginTop:4, height:4, background:'var(--border)', borderRadius:2, overflow:'hidden' }}>
-          <div style={{ width: `${pct}%`, height:'100%', background: bucketStyle.accent === 'transparent' ? '#10B981' : bucketStyle.accent }} />
+        {/* Bar — clamped at 100% with a small overflow notch when over-cap so
+            the visual reads "past full" instead of "exactly full". */}
+        <div style={{ position:'relative', marginTop:4, height:4, background:'var(--border)', borderRadius:2 }}>
+          <div style={{
+            position:'absolute', left:0, top:0, height:'100%',
+            width: `${pct}%`,
+            background: bucketStyle.accent === 'transparent' ? '#10B981' : bucketStyle.accent,
+            borderRadius: 2,
+          }} />
+          {overCapBy > 0 && (
+            <div style={{
+              position:'absolute', right:-3, top:-1, bottom:-1,
+              width:6,
+              background: bucketStyle.accent,
+              borderRadius:2,
+              boxShadow: `0 0 0 1px ${bucketStyle.accent}`,
+            }} />
+          )}
         </div>
         <div style={{ fontSize:9, color:'var(--gray)', marginTop:3, lineHeight:1.3 }}>
           {tenth}{' '}{String.fromCharCode(183)}{' '}{twentieth}
