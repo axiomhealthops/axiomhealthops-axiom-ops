@@ -53,6 +53,24 @@ import { isCompleted, isEval, dedupEncounters } from '../../lib/visitMath';
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 const ADMIN_ROLES = new Set(['super_admin', 'admin', 'director', 'ceo']);
 
+// 2026-06-30 — when a chart is flagged "Needs Audit" the following four
+// people get a high-priority alert. Per Liam: these names are intentionally
+// hard-wired (the alert UI has no per-recipient routing yet, and these four
+// all have all-region access so the single alert will land in their bell).
+// IDs sourced from coordinators table on 2026-06-30. Names are kept here for
+// the alert message body; IDs go into metadata so we can grow into per-user
+// routing later without rewriting the trigger logic.
+const AUDIT_ALERT_RECIPIENTS = [
+  { id: '24580169-8fea-4d42-97c3-2e4c779c3101', name: 'Hervylie Senica' },
+  { id: '646223a8-20b0-4d37-805d-b96d79c0f77c', name: 'Carla Smith' },
+  { id: '1fe789dc-ac6e-4289-a48e-8c2bbfa31637', name: "Liam O'Brien" },
+  { id: '7507c50d-0a27-4496-9466-36a989539b2d', name: 'Randi Bonner' },
+];
+
+const PATIENT_STATUS_OPTIONS = [
+  'Active', 'SOC Pending', 'On Hold', 'Hospitalized', 'Discharge', 'Non-Admit', 'Waitlist',
+];
+
 function fmtDate(d) {
   if (!d) return '-';
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -165,8 +183,19 @@ const COLS = [
   { key: 'evaluation_date',        label: 'Eval',       w: 90,  sortBy: 'evaluation_date' },
   { key: 'therapists',             label: 'Therapists', w: 200, sortBy: 'evaluating_pt' },
   { key: 'progress',               label: 'Progress',   w: 180, sortBy: 'total_completed_visits' },
-  { key: 'roster_notes',           label: 'Notes',      w: 260, sortBy: null },
-  { key: 'action',                 label: '',           w: 140, sortBy: null },
+  { key: 'roster_notes',           label: 'Notes',      w: 240, sortBy: null },
+  { key: 'action',                 label: '',           w: 130, sortBy: null },
+  { key: 'audit',                  label: 'Audit',      w: 70,  sortBy: null },
+];
+
+const AUDIT_COLS = [
+  { key: 'patient_name',           label: 'Patient',      w: 220, sortBy: 'patient_name' },
+  { key: 'audit_reason',           label: 'Audit Reason', w: 240, sortBy: 'needs_audit_flagged_at' },
+  { key: 'patient_status',         label: 'Status',       w: 150, sortBy: 'patient_status' },
+  { key: 'evaluation_date',        label: 'Eval Date',    w: 130, sortBy: 'evaluation_date' },
+  { key: 'therapists',             label: 'Therapists',   w: 240, sortBy: 'evaluating_pt' },
+  { key: 'progress',               label: 'Progress',     w: 170, sortBy: 'total_completed_visits' },
+  { key: 'audit_actions',          label: '',             w: 200, sortBy: null },
 ];
 
 // =============================================================================
@@ -179,6 +208,7 @@ export default function MedicareTrackerPage() {
   const [flags, setFlags] = useState([]);
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
+  const [view, setView] = useState('active'); // 'active' | 'audit'
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [filterDiscipline, setFilterDiscipline] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -186,6 +216,10 @@ export default function MedicareTrackerPage() {
   const [searchQ, setSearchQ] = useState('');
   const [sortKey, setSortKey] = useState('total_completed_visits');
   const [sortDir, setSortDir] = useState('desc');
+  // Audit flagging modal — opens with the chosen row + an empty reason field
+  const [auditPrompt, setAuditPrompt] = useState(null);
+  const [auditReason, setAuditReason] = useState('');
+  const [auditBusy, setAuditBusy] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState(null); // flag row or null
   const [confirmDischarge, setConfirmDischarge] = useState(null); // flag row or null
   const [dischargeNote, setDischargeNote] = useState('');
@@ -291,6 +325,201 @@ export default function MedicareTrackerPage() {
     }
   }
 
+  // ─── Needs Audit flag (Active roster -> Audit lane) ─────────────────
+  // Sets needs_audit + reason + actor on the flag row, then fires a single
+  // high-priority alert addressed to Hervylie, Carla, Liam, and Randi. The
+  // row drops off Active and surfaces in the Needs Audit tab where the named
+  // fields can be edited without recalc clobbering the edits.
+  async function flagForAudit(flag, reason) {
+    setAuditBusy(true);
+    setDischargeMsg('');
+    try {
+      const actor = profile?.full_name || profile?.email || 'Unknown';
+      const trimmed = (reason || '').trim();
+      if (!trimmed) throw new Error('Audit reason is required');
+
+      const { error: updErr } = await supabase
+        .from('medicare_visit_flags')
+        .update({
+          needs_audit: true,
+          needs_audit_reason: trimmed,
+          needs_audit_flagged_by: actor,
+          needs_audit_flagged_at: new Date().toISOString(),
+          needs_audit_resolved_at: null,
+          needs_audit_resolved_by: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', flag.id);
+      if (updErr) throw new Error(`flag update failed: ${updErr.message}`);
+
+      const region = flag.region || null;
+      const recipientNames = AUDIT_ALERT_RECIPIENTS.map(r => r.name).join(', ');
+      const { error: alertErr } = await supabase.from('alerts').insert({
+        alert_type: 'medicare_chart_needs_audit',
+        priority: 'high',
+        title: `Chart needs audit: ${flag.patient_name}${region ? ` (Region ${region})` : ''}`,
+        message:
+          `${actor} flagged ${flag.patient_name} for audit. ` +
+          `Reason: "${trimmed}". ` +
+          `Please review in the Medicare Tracker -> Needs Audit tab. ` +
+          `Notifying: ${recipientNames}.`,
+        patient_name: flag.patient_name,
+        region,
+        coordinator_region: region,
+        assigned_to_region: region,
+        related_date: new Date().toISOString().slice(0, 10),
+        metadata: {
+          source: 'medicare_tracker_audit_flag',
+          actor,
+          actor_email: profile?.email,
+          reason: trimmed,
+          recipients: AUDIT_ALERT_RECIPIENTS,
+          medicare_flag_id: flag.id,
+          visits_completed: flag.total_completed_visits ?? null,
+        },
+        is_read: false,
+        is_dismissed: false,
+      });
+      if (alertErr) console.warn('Audit alert insert failed (non-fatal):', alertErr.message);
+
+      logActivity({
+        coordinatorId: profile?.id,
+        coordinatorName: profile?.full_name,
+        coordinatorRole: profile?.role,
+        actionType: 'medicare_chart_needs_audit',
+        actionDetail: `Flagged ${flag.patient_name}${region ? ` (Region ${region})` : ''} for audit: ${trimmed}`,
+        patientName: flag.patient_name,
+        tableName: 'medicare_visit_flags',
+        recordId: flag.id,
+        metadata: { source: 'medicare_tracker', region, reason: trimmed },
+      });
+
+      setAuditPrompt(null);
+      setAuditReason('');
+      setDischargeMsg(`${flag.patient_name} moved to Needs Audit. Notified ${recipientNames}.`);
+      setTimeout(() => setDischargeMsg(''), 4500);
+      loadFlags();
+    } catch (e) {
+      console.error('Audit flag failed', e);
+      setDischargeMsg(`Audit flag failed: ${e?.message || e}`);
+    } finally {
+      setAuditBusy(false);
+    }
+  }
+
+  // ─── Save inline edits from the Needs Audit table ────────────────────
+  // Used by AuditRosterRow's Save button. patch is a partial object of the
+  // editable fields (patient_status, evaluation_date, evaluating_pt,
+  // assistant_therapist, current_episode_visit_count, total_completed_visits).
+  async function saveAuditEdits(flag, patch) {
+    const actor = profile?.full_name || profile?.email || 'Unknown';
+    const { error } = await supabase
+      .from('medicare_visit_flags')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', flag.id);
+    if (error) {
+      setDischargeMsg(`Save failed: ${error.message}`);
+      return false;
+    }
+    logActivity({
+      coordinatorId: profile?.id,
+      coordinatorName: profile?.full_name,
+      coordinatorRole: profile?.role,
+      actionType: 'medicare_audit_edit',
+      actionDetail: `Edited ${flag.patient_name} during audit: ${Object.keys(patch).join(', ')}`,
+      patientName: flag.patient_name,
+      tableName: 'medicare_visit_flags',
+      recordId: flag.id,
+      metadata: { source: 'medicare_tracker_audit', actor, fields: Object.keys(patch) },
+    });
+    setDischargeMsg(`${flag.patient_name} updated.`);
+    setTimeout(() => setDischargeMsg(''), 2500);
+    loadFlags();
+    return true;
+  }
+
+  // Reset the per-episode visit counters and start a new episode. Original
+  // visit_schedule_data history stays intact — this only resets the tracker's
+  // per-episode counters that the cap math reads from.
+  async function restartTracker(flag) {
+    const actor = profile?.full_name || profile?.email || 'Unknown';
+    const today = new Date().toISOString().slice(0, 10);
+    const newEpisode = (flag.current_episode_number || 1) + 1;
+    const { error } = await supabase
+      .from('medicare_visit_flags')
+      .update({
+        current_episode_number: newEpisode,
+        current_episode_visit_count: 0,
+        current_episode_start_date: today,
+        ready_for_discharge: false,
+        flag_20th_acknowledged: false,
+        flag_10th_acknowledged: false,
+        progress_note_due: false,
+        progress_note_due_reason: null,
+        last_progress_note_date: today,
+        last_progress_note_visit: 0,
+        next_due_visit: 10,
+        next_due_date: addDaysIso(today, 30),
+        twentieth_visit_actual_date: null,
+        twentieth_visit_projected_date: null,
+        twentieth_visit_discharge_note_date: null,
+        tenth_visit_actual_date: null,
+        tenth_visit_projected_date: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', flag.id);
+    if (error) {
+      setDischargeMsg(`Restart failed: ${error.message}`);
+      return;
+    }
+    logActivity({
+      coordinatorId: profile?.id,
+      coordinatorName: profile?.full_name,
+      coordinatorRole: profile?.role,
+      actionType: 'medicare_tracker_restart',
+      actionDetail: `Restarted tracker for ${flag.patient_name} (now episode ${newEpisode})`,
+      patientName: flag.patient_name,
+      tableName: 'medicare_visit_flags',
+      recordId: flag.id,
+      metadata: { source: 'medicare_tracker_audit', actor, new_episode: newEpisode },
+    });
+    setDischargeMsg(`${flag.patient_name} tracker restarted (now episode ${newEpisode}).`);
+    setTimeout(() => setDischargeMsg(''), 3000);
+    loadFlags();
+  }
+
+  // Clear the needs_audit flag and return the row to the Active roster.
+  async function resolveAudit(flag) {
+    const actor = profile?.full_name || profile?.email || 'Unknown';
+    const { error } = await supabase
+      .from('medicare_visit_flags')
+      .update({
+        needs_audit: false,
+        needs_audit_resolved_at: new Date().toISOString(),
+        needs_audit_resolved_by: actor,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', flag.id);
+    if (error) {
+      setDischargeMsg(`Resolve failed: ${error.message}`);
+      return;
+    }
+    logActivity({
+      coordinatorId: profile?.id,
+      coordinatorName: profile?.full_name,
+      coordinatorRole: profile?.role,
+      actionType: 'medicare_audit_resolved',
+      actionDetail: `Resolved audit for ${flag.patient_name}`,
+      patientName: flag.patient_name,
+      tableName: 'medicare_visit_flags',
+      recordId: flag.id,
+      metadata: { source: 'medicare_tracker_audit', actor },
+    });
+    setDischargeMsg(`${flag.patient_name} audit resolved. Returned to Active roster.`);
+    setTimeout(() => setDischargeMsg(''), 3000);
+    loadFlags();
+  }
+
   const regionScope = useAssignedRegions();
 
   // --- recalc -----------------------------------------------------------
@@ -338,7 +567,17 @@ export default function MedicareTrackerPage() {
       const escalationTasks = [];
       const today = todayISO();
 
+      // Pre-fetch needs_audit state for every Medicare patient so the loop
+      // can skip audited rows without doing a per-iteration round trip.
+      const { data: auditFlagRows } = await supabase.from('medicare_visit_flags')
+        .select('patient_name, needs_audit').eq('needs_audit', true);
+      const auditedPatientNames = new Set((auditFlagRows || []).map(r => r.patient_name));
+
       for (const pt of mcPts) {
+        // Skip rows currently flagged for audit — Ariel's manual edits would
+        // be overwritten otherwise. Recalc resumes once needs_audit clears.
+        if (auditedPatientNames.has(pt.patient_name)) continue;
+
         // Completed visits only (via canonical isCompleted), deduped to one
         // encounter per (patient, date) so PT+PTA co-treat slots don't double.
         const ptVisitsRaw = (visits || []).filter(v => v.patient_name === pt.patient_name && isCompleted(v));
@@ -571,12 +810,21 @@ export default function MedicareTrackerPage() {
   useRealtimeTable(['census_data', 'visit_schedule_data', 'medicare_visit_flags'], loadFlags);
 
   // --- derived view ----------------------------------------------------
+  // Split flags by audit lane first — Active view hides audited rows, Audit
+  // view shows only audited rows. Dropdown/search filters apply to whichever
+  // lane the user is currently on.
+  const activeFlags = useMemo(() => flags.filter(f => !f.needs_audit), [flags]);
+  const auditFlags  = useMemo(() => flags.filter(f =>  f.needs_audit), [flags]);
+  const sourceFlags = view === 'audit' ? auditFlags : activeFlags;
+
   const filtered = useMemo(() => {
-    return flags.filter(f => {
+    return sourceFlags.filter(f => {
       if (filterRegion !== 'ALL' && f.region !== filterRegion) return false;
       if (filterDiscipline !== 'ALL' && f.discipline !== filterDiscipline) return false;
       if (filterStatus !== 'ALL' && f.patient_status !== filterStatus) return false;
-      if (filterBucket !== 'ALL' && bucketOf(f) !== filterBucket) return false;
+      // Bucket filter only applies on the Active view — audit rows aren't
+      // bucketed by clinical urgency, they're triaged by Ariel directly.
+      if (view === 'active' && filterBucket !== 'ALL' && bucketOf(f) !== filterBucket) return false;
       if (searchQ) {
         const q = searchQ.toLowerCase();
         if (!(f.patient_name || '').toLowerCase().includes(q) &&
@@ -585,7 +833,7 @@ export default function MedicareTrackerPage() {
       }
       return true;
     });
-  }, [flags, filterRegion, filterDiscipline, filterStatus, filterBucket, searchQ]);
+  }, [sourceFlags, view, filterRegion, filterDiscipline, filterStatus, filterBucket, searchQ]);
 
   const sorted = useMemo(() => {
     const bucketRank = { over_cap: 0, discharge: 1, dc_soon: 2, note_overdue: 3, note_soon: 4, ok: 5 };
@@ -611,12 +859,15 @@ export default function MedicareTrackerPage() {
   }, [filtered, sortKey, sortDir]);
 
   const counts = useMemo(() => ({
-    total: flags.length,
-    overCap: flags.filter(f => (f.total_completed_visits || 0) >= 21).length,
-    readyDc: flags.filter(f => f.ready_for_discharge && !f.flag_20th_acknowledged).length,
-    noteDue: flags.filter(f => f.progress_note_due).length,
-    dcSoon:  flags.filter(f => { const v = f.total_completed_visits || 0; return v >= 18 && v < 20; }).length,
-  }), [flags]);
+    // KPI tile numbers reference the Active roster only — audited rows are
+    // intentionally a separate count surfaced by the tab.
+    total: activeFlags.length,
+    overCap: activeFlags.filter(f => (f.total_completed_visits || 0) >= 21).length,
+    readyDc: activeFlags.filter(f => f.ready_for_discharge && !f.flag_20th_acknowledged).length,
+    noteDue: activeFlags.filter(f => f.progress_note_due).length,
+    dcSoon:  activeFlags.filter(f => { const v = f.total_completed_visits || 0; return v >= 18 && v < 20; }).length,
+    needsAudit: auditFlags.length,
+  }), [activeFlags, auditFlags]);
 
   // --- distinct dropdown values ----------------------------------------
   const distinctDisc = useMemo(() => Array.from(new Set(flags.map(f => f.discipline).filter(Boolean))).sort(), [flags]);
@@ -669,40 +920,60 @@ export default function MedicareTrackerPage() {
         subtitle="20-visit cap, 10-visit progress note, and ready-for-discharge across all regions"
       />
 
-      {/* KPI tiles — clickable, each one applies the matching bucket filter. */}
-      <div style={{ padding:'14px 20px 6px 20px', display:'grid',
-                    gridTemplateColumns:'repeat(4, minmax(0,1fr))', gap:12 }}>
-        <KpiTile
-          label="Medicare Patients"
-          value={counts.total}
-          active={filterBucket === 'ALL'}
-          accent="#0F1117"
-          onClick={() => setFilterBucket('ALL')}
-        />
-        <KpiTile
-          label="Over Cap"
-          value={counts.overCap}
-          active={filterBucket === 'over_cap'}
-          accent={BUCKET_STYLE.over_cap.accent}
-          onClick={() => setFilterBucket('over_cap')}
-        />
-        <KpiTile
-          label="Ready for Discharge"
-          value={counts.readyDc}
-          active={filterBucket === 'discharge'}
-          accent={BUCKET_STYLE.discharge.accent}
-          onClick={() => setFilterBucket('discharge')}
-        />
-        <KpiTile
-          label="Progress Note Due"
-          value={counts.noteDue}
-          active={filterBucket === 'note_overdue'}
-          accent={BUCKET_STYLE.note_overdue.accent}
-          onClick={() => setFilterBucket('note_overdue')}
-        />
+      {/* Tab strip — Active Roster | Needs Audit. Sits between the TopBar and
+          the rest of the page so view switching is the first thing you see. */}
+      <div style={{ padding:'10px 20px 0 20px', display:'flex', gap:6,
+                    borderBottom:'1px solid var(--border)' }}>
+        <TabButton
+          label="Active Roster"
+          count={activeFlags.length}
+          active={view === 'active'}
+          onClick={() => setView('active')} />
+        <TabButton
+          label="Needs Audit"
+          count={counts.needsAudit}
+          accent="#B45309"
+          active={view === 'audit'}
+          onClick={() => setView('audit')} />
       </div>
 
-      {/* Compact filter strip */}
+      {/* KPI tiles — Active view only. Audit view doesn't get the buckets;
+          its workflow is "go through each row and fix something". */}
+      {view === 'active' && (
+        <div style={{ padding:'14px 20px 6px 20px', display:'grid',
+                      gridTemplateColumns:'repeat(4, minmax(0,1fr))', gap:12 }}>
+          <KpiTile
+            label="Medicare Patients"
+            value={counts.total}
+            active={filterBucket === 'ALL'}
+            accent="#0F1117"
+            onClick={() => setFilterBucket('ALL')}
+          />
+          <KpiTile
+            label="Over Cap"
+            value={counts.overCap}
+            active={filterBucket === 'over_cap'}
+            accent={BUCKET_STYLE.over_cap.accent}
+            onClick={() => setFilterBucket('over_cap')}
+          />
+          <KpiTile
+            label="Ready for Discharge"
+            value={counts.readyDc}
+            active={filterBucket === 'discharge'}
+            accent={BUCKET_STYLE.discharge.accent}
+            onClick={() => setFilterBucket('discharge')}
+          />
+          <KpiTile
+            label="Progress Note Due"
+            value={counts.noteDue}
+            active={filterBucket === 'note_overdue'}
+            accent={BUCKET_STYLE.note_overdue.accent}
+            onClick={() => setFilterBucket('note_overdue')}
+          />
+        </div>
+      )}
+
+      {/* Compact filter strip — shared between views */}
       <div style={{ padding:'10px 20px', borderBottom:'1px solid var(--border)',
                     display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
         <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)} style={selStyle}>
@@ -717,7 +988,7 @@ export default function MedicareTrackerPage() {
           <option value="ALL">All Statuses</option>
           {distinctStatus.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        {filterBucket !== 'ALL' && (
+        {view === 'active' && filterBucket !== 'ALL' && (
           <button onClick={() => setFilterBucket('ALL')}
             style={{ ...selStyle, color:'var(--gray)', cursor:'pointer' }}>
             Clear bucket filter
@@ -733,15 +1004,14 @@ export default function MedicareTrackerPage() {
         </div>
       </div>
 
-      {/* Roster table */}
+      {/* Roster table — Active view (compact) or Audit view (editable) */}
       <div style={{ padding:'14px 20px 24px 20px', overflowX:'auto' }}>
-        <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden', minWidth: 1180 }}>
+        <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden', minWidth: view === 'audit' ? 1280 : 1180 }}>
           <table style={{ borderCollapse:'collapse', width:'100%', fontSize:12 }}>
             <thead>
               <tr style={{ background:'var(--bg)', borderBottom:'2px solid var(--border)' }}>
-                {/* 4px stripe column — no header, just the colored bar */}
-                <th style={{ width:4, padding:0 }} />
-                {COLS.map(c => {
+                {view === 'active' && <th style={{ width:4, padding:0 }} />}
+                {(view === 'audit' ? AUDIT_COLS : COLS).map(c => {
                   const sortable = !!c.sortBy;
                   return (
                     <th key={c.key}
@@ -758,21 +1028,39 @@ export default function MedicareTrackerPage() {
             </thead>
             <tbody>
               {sorted.length === 0 ? (
-                <tr><td colSpan={COLS.length + 1} style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
-                  {flags.length === 0 ? 'No Medicare patients yet. Click Recalculate to scan.' : 'No rows match current filters.'}
+                <tr><td colSpan={(view === 'audit' ? AUDIT_COLS : COLS).length + (view === 'active' ? 1 : 0)}
+                        style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
+                  {view === 'audit'
+                    ? (auditFlags.length === 0
+                        ? 'No charts flagged for audit.'
+                        : 'No rows match current filters.')
+                    : (flags.length === 0
+                        ? 'No Medicare patients yet. Click Recalculate to scan.'
+                        : 'No rows match current filters.')}
                 </td></tr>
-              ) : sorted.map(f => {
-                const bucket = bucketOf(f);
-                const style = BUCKET_STYLE[bucket];
-                return (
-                  <RosterRow key={f.id}
+              ) : view === 'audit' ? (
+                sorted.map(f => (
+                  <AuditRosterRow key={f.id}
                     flag={f}
-                    bucketStyle={style}
-                    bucketLabel={style.label}
-                    onSelect={() => setSelectedPatient(f)}
-                    onDischarge={() => setConfirmDischarge(f)} />
-                );
-              })}
+                    onSave={patch => saveAuditEdits(f, patch)}
+                    onRestart={() => restartTracker(f)}
+                    onResolve={() => resolveAudit(f)} />
+                ))
+              ) : (
+                sorted.map(f => {
+                  const bucket = bucketOf(f);
+                  const style = BUCKET_STYLE[bucket];
+                  return (
+                    <RosterRow key={f.id}
+                      flag={f}
+                      bucketStyle={style}
+                      bucketLabel={style.label}
+                      onSelect={() => setSelectedPatient(f)}
+                      onDischarge={() => setConfirmDischarge(f)}
+                      onAudit={() => { setAuditPrompt(f); setAuditReason(''); }} />
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -858,6 +1146,73 @@ export default function MedicareTrackerPage() {
         </div>
       )}
 
+      {/* Audit flag modal — required reason field, fires the notification */}
+      {auditPrompt && (
+        <div
+          onClick={() => !auditBusy && setAuditPrompt(null)}
+          style={{
+            position:'fixed', inset:0, background:'rgba(15, 23, 42, 0.6)', zIndex:3000,
+            display:'flex', alignItems:'center', justifyContent:'center', padding:24,
+          }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:560,
+                     boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ padding:'16px 22px', background:'#B45309', borderRadius:'14px 14px 0 0' }}>
+              <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>Flag Chart for Audit</div>
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.85)', marginTop:2 }}>
+                Moves the row to the Needs Audit tab and alerts Hervylie Senica, Carla Smith, Liam O'Brien, and Randi Bonner.
+              </div>
+            </div>
+            <div style={{ padding:'18px 22px' }}>
+              <div style={{ background:'#FFFBEB', border:'1px solid #FDE68A', borderRadius:8,
+                            padding:'10px 14px', marginBottom:14 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'#92400E', textTransform:'uppercase', letterSpacing:0.4 }}>Patient</div>
+                <div style={{ fontSize:15, fontWeight:700, color:'#78350F', marginTop:2 }}>{auditPrompt.patient_name}</div>
+                <div style={{ fontSize:12, color:'#78350F', marginTop:4 }}>
+                  Region {auditPrompt.region || '-'} {'·'} {auditPrompt.discipline || '-'} {'·'}
+                  {' '}{auditPrompt.total_completed_visits ?? 0} visits completed
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>
+                  Audit reason (required — include what's wrong and what needs to be verified)
+                </div>
+                <textarea
+                  value={auditReason}
+                  onChange={e => setAuditReason(e.target.value)}
+                  placeholder="e.g. Visit count looks wrong — Pariox shows 12 but we billed 14. Need to reconcile against the schedule and decide whether to KX or re-cert."
+                  rows={5}
+                  autoFocus
+                  style={{
+                    width:'100%', padding:'8px 11px', border:'1px solid var(--border)',
+                    borderRadius:7, fontSize:13, outline:'none', background:'var(--card-bg)',
+                    resize:'vertical', minHeight:90, boxSizing:'border-box',
+                  }} />
+              </div>
+            </div>
+            <div style={{ padding:'12px 22px', borderTop:'1px solid var(--border)',
+                          display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
+              <button
+                onClick={() => { setAuditPrompt(null); setAuditReason(''); }}
+                disabled={auditBusy}
+                style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7,
+                         fontSize:13, background:'var(--card-bg)', cursor:auditBusy?'wait':'pointer' }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => flagForAudit(auditPrompt, auditReason)}
+                disabled={auditBusy || !auditReason.trim()}
+                style={{ padding:'8px 20px', background:'#B45309', color:'#fff', border:'none',
+                         borderRadius:7, fontSize:13, fontWeight:700,
+                         cursor:auditBusy?'wait':(auditReason.trim()?'pointer':'not-allowed'),
+                         opacity: auditReason.trim() ? 1 : 0.6 }}>
+                {auditBusy ? 'Flagging...' : 'Flag for Audit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Discharge result toast — green on success, red on failure */}
       {dischargeMsg && (
         <div style={{
@@ -868,6 +1223,42 @@ export default function MedicareTrackerPage() {
         }}>{dischargeMsg}</div>
       )}
     </div>
+  );
+}
+
+// =============================================================================
+// TAB BUTTON — top-of-page view switch between Active Roster and Needs Audit
+// =============================================================================
+function TabButton({ label, count, active, accent, onClick }) {
+  const tone = accent || (active ? '#0F1117' : 'var(--gray)');
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding:'10px 16px',
+        background:'transparent',
+        border:'none',
+        borderBottom: active ? `3px solid ${tone}` : '3px solid transparent',
+        marginBottom:-1,
+        cursor:'pointer',
+        fontSize:13,
+        fontWeight: active ? 700 : 500,
+        color: active ? tone : 'var(--gray)',
+        display:'inline-flex', alignItems:'center', gap:8,
+      }}
+    >
+      {label}
+      {typeof count === 'number' && (
+        <span style={{
+          fontFamily:'DM Mono, monospace',
+          fontSize:11, fontWeight:700,
+          background: active ? `${tone}15` : 'var(--bg)',
+          color: active ? tone : 'var(--gray)',
+          border:`1px solid ${active ? tone + '40' : 'var(--border)'}`,
+          padding:'1px 7px', borderRadius:999,
+        }}>{count}</span>
+      )}
+    </button>
   );
 }
 
@@ -915,7 +1306,7 @@ function KpiTile({ label, value, accent, active, onClick }) {
 //     on a second line. Single source of progress instead of four columns.
 //   * Therapists column stacks PT/OT primary and PTA/COTA secondary.
 // =============================================================================
-function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge }) {
+function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge, onAudit }) {
   const f = flag;
   const visits = visitsForCap(f);
   const pct = Math.min(100, Math.round((visits / 20) * 100));
@@ -1062,6 +1453,196 @@ function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge }) {
       {/* Action */}
       <td style={tdStyle}>
         <FlagCell flag={f} bucketStyle={bucketStyle} onDischarge={onDischarge} />
+      </td>
+
+      {/* Needs Audit checkbox — Liam's far-right control. Click opens the
+          required-reason modal. Stops row-click propagation so checking the
+          box doesn't also open the patient drawer. */}
+      <td style={{ ...tdStyle, textAlign:'center' }}
+          onClick={e => { e.stopPropagation(); if (onAudit) onAudit(); }}>
+        <label style={{ display:'inline-flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}
+               onClick={e => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={!!f.needs_audit}
+            onChange={() => { if (onAudit) onAudit(); }}
+            style={{ width:16, height:16, accentColor:'#B45309', cursor:'pointer' }}
+          />
+          <span style={{ fontSize:10, color:'var(--gray)', fontWeight:600 }}>Audit</span>
+        </label>
+      </td>
+    </tr>
+  );
+}
+
+// =============================================================================
+// AUDIT ROSTER ROW — Needs Audit lane, inline-editable fields
+// =============================================================================
+// Each row holds local edit state in a single `edits` object. Save commits to
+// medicare_visit_flags; Restart Tracker resets episode counters; Resolve Audit
+// returns the row to the Active roster (and re-enables recalc on the row).
+function AuditRosterRow({ flag, onSave, onRestart, onResolve }) {
+  const f = flag;
+  const initial = {
+    patient_status: f.patient_status || '',
+    evaluation_date: f.evaluation_date || '',
+    evaluating_pt: f.evaluating_pt || '',
+    assistant_therapist: f.assistant_therapist || '',
+    current_episode_visit_count:
+      f.current_episode_visit_count != null ? f.current_episode_visit_count : (f.total_completed_visits || 0),
+  };
+  const [edits, setEdits] = useState(initial);
+  const [saving, setSaving] = useState(false);
+
+  // Reset local edits when the underlying row changes (e.g., after a save +
+  // realtime refetch). Keying on id + updated_at picks up server-side updates.
+  useEffect(() => {
+    setEdits({
+      patient_status: f.patient_status || '',
+      evaluation_date: f.evaluation_date || '',
+      evaluating_pt: f.evaluating_pt || '',
+      assistant_therapist: f.assistant_therapist || '',
+      current_episode_visit_count:
+        f.current_episode_visit_count != null ? f.current_episode_visit_count : (f.total_completed_visits || 0),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.id, f.updated_at]);
+
+  const isDirty = Object.keys(initial).some(k => String(initial[k] ?? '') !== String(edits[k] ?? ''));
+
+  async function handleSave() {
+    setSaving(true);
+    const patch = {};
+    if (edits.patient_status !== initial.patient_status) patch.patient_status = edits.patient_status;
+    if (edits.evaluation_date !== initial.evaluation_date) patch.evaluation_date = edits.evaluation_date || null;
+    if (edits.evaluating_pt !== initial.evaluating_pt) patch.evaluating_pt = edits.evaluating_pt;
+    if (edits.assistant_therapist !== initial.assistant_therapist) patch.assistant_therapist = edits.assistant_therapist || null;
+    if (edits.current_episode_visit_count !== initial.current_episode_visit_count) {
+      const n = Math.max(0, parseInt(edits.current_episode_visit_count, 10) || 0);
+      patch.current_episode_visit_count = n;
+      patch.total_completed_visits = n;
+    }
+    if (Object.keys(patch).length > 0) await onSave(patch);
+    setSaving(false);
+  }
+
+  const inputBase = {
+    width:'100%', boxSizing:'border-box',
+    padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6,
+    fontSize:12, background:'var(--card-bg)', outline:'none',
+  };
+
+  return (
+    <tr style={{ borderBottom:'1px solid var(--border)', background: isDirty ? '#FFFBEB' : 'transparent' }}>
+      {/* Patient (read-only header w/ region + flag metadata) */}
+      <td style={tdStyle}>
+        <div style={{ fontWeight:700, fontSize:13 }}>{f.patient_name}</div>
+        <div style={{ fontSize:10, color:'var(--gray)', marginTop:2 }}>
+          {[
+            f.region && `Region ${f.region}`,
+            f.discipline,
+            f.ref_source && `ref ${f.ref_source}`,
+          ].filter(Boolean).join('  ' + String.fromCharCode(183) + '  ')}
+        </div>
+        {f.needs_audit_flagged_by && (
+          <div style={{ fontSize:9, color:'var(--gray)', marginTop:4 }}>
+            flagged by {f.needs_audit_flagged_by}
+            {f.needs_audit_flagged_at && ` on ${fmtDateShort(f.needs_audit_flagged_at.slice(0,10))}`}
+          </div>
+        )}
+      </td>
+
+      {/* Audit Reason */}
+      <td style={{ ...tdStyle, color:'var(--text)' }}>
+        <div style={{ lineHeight:1.4, whiteSpace:'pre-wrap' }}>
+          {f.needs_audit_reason || '-'}
+        </div>
+      </td>
+
+      {/* Status (editable) */}
+      <td style={tdStyle}>
+        <select value={edits.patient_status}
+                onChange={e => setEdits(s => ({ ...s, patient_status: e.target.value }))}
+                style={inputBase}>
+          <option value="">- select -</option>
+          {PATIENT_STATUS_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+        </select>
+      </td>
+
+      {/* Eval Date (editable date input) */}
+      <td style={tdStyle}>
+        <input type="date" value={edits.evaluation_date || ''}
+               onChange={e => setEdits(s => ({ ...s, evaluation_date: e.target.value }))}
+               style={inputBase} />
+      </td>
+
+      {/* Therapists (editable text — primary above, assistant below) */}
+      <td style={tdStyle}>
+        <input type="text" value={edits.evaluating_pt}
+               onChange={e => setEdits(s => ({ ...s, evaluating_pt: e.target.value }))}
+               placeholder="PT / OT (primary)"
+               style={inputBase} />
+        <input type="text" value={edits.assistant_therapist}
+               onChange={e => setEdits(s => ({ ...s, assistant_therapist: e.target.value }))}
+               placeholder="PTA / COTA (optional)"
+               style={{ ...inputBase, marginTop:4 }} />
+      </td>
+
+      {/* Progress — used visit count is editable */}
+      <td style={tdStyle}>
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <input type="number" min={0} max={40}
+                 value={edits.current_episode_visit_count}
+                 onChange={e => setEdits(s => ({ ...s, current_episode_visit_count: e.target.value }))}
+                 style={{ ...inputBase, width:70, fontFamily:'DM Mono, monospace', fontWeight:700 }} />
+          <span style={{ fontSize:11, color:'var(--gray)' }}>/ 20</span>
+        </div>
+        {f.current_episode_number > 1 && (
+          <div style={{ fontSize:9, color:'var(--gray)', marginTop:3 }}>
+            ep {f.current_episode_number}/{f.episode_count}
+          </div>
+        )}
+        <button
+          onClick={onRestart}
+          title="Reset episode visit counters to 0 and bump to a new episode. Visit history in Pariox stays intact."
+          style={{
+            marginTop:6, fontSize:10, fontWeight:600,
+            background:'transparent', color:'#7C3AED',
+            border:'1px solid #7C3AED55', borderRadius:5,
+            padding:'2px 8px', cursor:'pointer',
+          }}>
+          Restart Tracker
+        </button>
+      </td>
+
+      {/* Actions */}
+      <td style={tdStyle}>
+        <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+          <button
+            onClick={handleSave}
+            disabled={!isDirty || saving}
+            style={{
+              fontSize:11, fontWeight:700,
+              background: isDirty ? '#065F46' : 'transparent',
+              color: isDirty ? '#fff' : 'var(--gray)',
+              border: `1px solid ${isDirty ? '#065F46' : 'var(--border)'}`,
+              borderRadius:6, padding:'5px 10px',
+              cursor: isDirty && !saving ? 'pointer' : 'not-allowed',
+            }}>
+            {saving ? 'Saving...' : (isDirty ? 'Save Edits' : 'No Changes')}
+          </button>
+          <button
+            onClick={onResolve}
+            title="Clear the Needs Audit flag and return this row to the Active roster"
+            style={{
+              fontSize:11, fontWeight:600,
+              background:'transparent', color:'var(--text)',
+              border:'1px solid var(--border)', borderRadius:6, padding:'5px 10px',
+              cursor:'pointer',
+            }}>
+            Resolve Audit
+          </button>
+        </div>
       </td>
     </tr>
   );
