@@ -133,32 +133,31 @@ function manualDriftOf(f) {
   if (f?.manual_visit_count == null || f?.current_episode_visit_count == null) return 0;
   return Math.abs(f.current_episode_visit_count - f.manual_visit_count);
 }
+// 2026-06-30 redesign: fewer columns, lighter palette, a 4px colored left-
+// accent stripe instead of the cryptic X/!/~/*/.  bucket icon. Only OVER CAP
+// keeps a faint row tint (because it IS an emergency); everything else relies
+// on the stripe + a small bucket chip in the Status column.
 const BUCKET_STYLE = {
-  over_cap:     { bg: '#1F2937', fg: '#FFFFFF', label: 'OVER CAP',   icon: 'X' },
-  discharge:    { bg: '#FEE2E2', fg: '#991B1B', label: 'DISCHARGE',  icon: '!' },
-  dc_soon:      { bg: '#EDE9FE', fg: '#5B21B6', label: 'DC SOON',    icon: '~' },
-  note_overdue: { bg: '#FFEDD5', fg: '#9A3412', label: 'NOTE DUE',   icon: '*' },
-  note_soon:    { bg: '#FEF3C7', fg: '#92400E', label: 'NOTE SOON',  icon: '.' },
-  ok:           { bg: 'transparent', fg: 'var(--gray)', label: '',   icon: '' },
+  over_cap:     { accent: '#7F1D1D', tint: '#FEF2F2', label: 'OVER CAP'  },
+  discharge:    { accent: '#DC2626', tint: 'transparent', label: 'READY DC' },
+  dc_soon:      { accent: '#7C3AED', tint: 'transparent', label: 'DC SOON'   },
+  note_overdue: { accent: '#EA580C', tint: 'transparent', label: 'NOTE DUE'  },
+  note_soon:    { accent: '#CA8A04', tint: 'transparent', label: 'NOTE SOON' },
+  ok:           { accent: 'transparent', tint: 'transparent', label: ''     },
 };
 
-// --- column definitions (Liam's spec, 15 cols) -----------------------------
+// --- column definitions (2026-06-30 condensed layout) ---------------------
+// Was 15 cols (Liam's Excel spec). Reduced to 7 by stacking related fields
+// inside one cell. The XLSX export still emits all 15 fields for parity with
+// Liam's spreadsheet workflow — only the on-screen table is condensed.
 const COLS = [
-  { key: 'patient_name',           label: 'Patient',          w: 180 },
-  { key: 'address',                label: 'Address',          w: 150 },
-  { key: 'discipline',             label: 'Disc',             w: 90 },
-  { key: 'ref_source',             label: 'Ref Src',          w: 70 },
-  { key: 'patient_status',         label: 'Status',           w: 100 },
-  { key: 'region',                 label: 'Rgn',              w: 50 },
-  { key: 'evaluation_date',        label: 'Eval Date',        w: 100 },
-  { key: 'evaluating_pt',          label: 'PT / OT',          w: 130 },
-  { key: 'assistant_therapist',    label: 'PTA / COTA',       w: 130 },
-  { key: 'tenth_visit_actual_date',label: '10th Visit',       w: 110 },
-  { key: 'visits_allowed',         label: 'Allowed',          w: 60 },
-  { key: 'total_completed_visits', label: 'Used',             w: 50 },
-  { key: 'visits_remaining',       label: 'Remaining',        w: 80 },
-  { key: 'twentieth_visit_actual_date', label: '20th Visit',  w: 110 },
-  { key: 'roster_notes',           label: 'Notes',            w: 160 },
+  { key: 'patient_name',           label: 'Patient',    w: 240, sortBy: 'patient_name' },
+  { key: 'patient_status',         label: 'Status',     w: 130, sortBy: 'patient_status' },
+  { key: 'evaluation_date',        label: 'Eval',       w: 90,  sortBy: 'evaluation_date' },
+  { key: 'therapists',             label: 'Therapists', w: 200, sortBy: 'evaluating_pt' },
+  { key: 'progress',               label: 'Progress',   w: 180, sortBy: 'total_completed_visits' },
+  { key: 'roster_notes',           label: 'Notes',      w: 260, sortBy: null },
+  { key: 'action',                 label: '',           w: 140, sortBy: null },
 ];
 
 // =============================================================================
@@ -658,50 +657,67 @@ export default function MedicareTrackerPage() {
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100%' }}>
       <TopBar
         title="Medicare Visit Tracker"
-        subtitle={counts.total + ' Medicare patients - ' + counts.overCap + ' OVER CAP - ' +
-                  counts.readyDc + ' ready for discharge - ' + counts.noteDue + ' progress note due'}
+        subtitle="20-visit cap, 10-visit progress note, and ready-for-discharge across all regions"
       />
 
-      {/* Filter strip */}
-      <div style={{ padding:'10px 20px', borderBottom:'1px solid var(--border)', background:'var(--card-bg)',
+      {/* KPI tiles — clickable, each one applies the matching bucket filter. */}
+      <div style={{ padding:'14px 20px 6px 20px', display:'grid',
+                    gridTemplateColumns:'repeat(4, minmax(0,1fr))', gap:12 }}>
+        <KpiTile
+          label="Medicare Patients"
+          value={counts.total}
+          active={filterBucket === 'ALL'}
+          accent="#0F1117"
+          onClick={() => setFilterBucket('ALL')}
+        />
+        <KpiTile
+          label="Over Cap"
+          value={counts.overCap}
+          active={filterBucket === 'over_cap'}
+          accent={BUCKET_STYLE.over_cap.accent}
+          onClick={() => setFilterBucket('over_cap')}
+        />
+        <KpiTile
+          label="Ready for Discharge"
+          value={counts.readyDc}
+          active={filterBucket === 'discharge'}
+          accent={BUCKET_STYLE.discharge.accent}
+          onClick={() => setFilterBucket('discharge')}
+        />
+        <KpiTile
+          label="Progress Note Due"
+          value={counts.noteDue}
+          active={filterBucket === 'note_overdue'}
+          accent={BUCKET_STYLE.note_overdue.accent}
+          onClick={() => setFilterBucket('note_overdue')}
+        />
+      </div>
+
+      {/* Compact filter strip */}
+      <div style={{ padding:'10px 20px', borderBottom:'1px solid var(--border)',
                     display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-        <div style={{ display:'flex', gap:0, border:'1px solid var(--border)', borderRadius:7, overflow:'hidden' }}>
-          {[
-            ['ALL',          'All ' + counts.total],
-            ['over_cap',     'Over Cap ' + counts.overCap],
-            ['discharge',    'Discharge ' + counts.readyDc],
-            ['dc_soon',      'DC Soon ' + counts.dcSoon],
-            ['note_overdue', 'Note Due ' + counts.noteDue],
-            ['note_soon',    'Note Soon'],
-          ].map(([k, l]) => (
-            <button key={k} onClick={() => setFilterBucket(k)}
-              style={{ padding:'6px 12px', border:'none', fontSize:11,
-                fontWeight: filterBucket === k ? 700 : 500, cursor:'pointer',
-                background: filterBucket === k ? '#0F1117' : 'var(--card-bg)',
-                color:      filterBucket === k ? '#fff' : 'var(--gray)' }}>
-              {l}
-            </button>
-          ))}
-        </div>
-        <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)}
-          style={selStyle}>
+        <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)} style={selStyle}>
           <option value="ALL">All Regions</option>
           {REGIONS.map(r => <option key={r} value={r}>Region {r}</option>)}
         </select>
-        <select value={filterDiscipline} onChange={e => setFilterDiscipline(e.target.value)}
-          style={selStyle}>
+        <select value={filterDiscipline} onChange={e => setFilterDiscipline(e.target.value)} style={selStyle}>
           <option value="ALL">All Disciplines</option>
           {distinctDisc.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-          style={selStyle}>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={selStyle}>
           <option value="ALL">All Statuses</option>
           {distinctStatus.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
+        {filterBucket !== 'ALL' && (
+          <button onClick={() => setFilterBucket('ALL')}
+            style={{ ...selStyle, color:'var(--gray)', cursor:'pointer' }}>
+            Clear bucket filter
+          </button>
+        )}
         <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search patient, PT, PTA..."
-          style={{ ...selStyle, width:200 }} />
+          style={{ ...selStyle, width:220 }} />
         <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
-          <button onClick={exportXlsx} style={btnSecondaryStyle}>{'⤓'} Export XLSX</button>
+          <button onClick={exportXlsx} style={btnSecondaryStyle}>Export XLSX</button>
           <button onClick={recalculate} disabled={calculating} style={btnPrimaryStyle}>
             {calculating ? 'Recalculating...' : 'Recalculate'}
           </button>
@@ -710,91 +726,42 @@ export default function MedicareTrackerPage() {
 
       {/* Roster table */}
       <div style={{ padding:'14px 20px 24px 20px', overflowX:'auto' }}>
-        <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden', minWidth: 1600 }}>
+        <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden', minWidth: 1180 }}>
           <table style={{ borderCollapse:'collapse', width:'100%', fontSize:12 }}>
             <thead>
               <tr style={{ background:'var(--bg)', borderBottom:'2px solid var(--border)' }}>
-                <th style={{ ...thStyle, width:24, padding:'8px 6px' }}>{' '}</th>
-                {COLS.map(c => (
-                  <th key={c.key} onClick={() => toggleSort(c.key)}
-                    style={{ ...thStyle, width:c.w, cursor:'pointer', userSelect:'none' }}>
-                    {c.label}
-                    {sortKey === c.key && <span style={{ marginLeft:4, opacity:0.6 }}>{sortDir === 'asc' ? '^' : 'v'}</span>}
-                  </th>
-                ))}
-                <th style={{ ...thStyle, width:120 }}>Flag</th>
+                {/* 4px stripe column — no header, just the colored bar */}
+                <th style={{ width:4, padding:0 }} />
+                {COLS.map(c => {
+                  const sortable = !!c.sortBy;
+                  return (
+                    <th key={c.key}
+                      onClick={sortable ? () => toggleSort(c.sortBy) : undefined}
+                      style={{ ...thStyle, width:c.w, cursor: sortable ? 'pointer' : 'default', userSelect:'none' }}>
+                      {c.label}
+                      {sortable && sortKey === c.sortBy && (
+                        <span style={{ marginLeft:4, opacity:0.6 }}>{sortDir === 'asc' ? '^' : 'v'}</span>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 ? (
-                <tr><td colSpan={COLS.length + 2} style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
+                <tr><td colSpan={COLS.length + 1} style={{ padding:40, textAlign:'center', color:'var(--gray)' }}>
                   {flags.length === 0 ? 'No Medicare patients yet. Click Recalculate to scan.' : 'No rows match current filters.'}
                 </td></tr>
               ) : sorted.map(f => {
                 const bucket = bucketOf(f);
                 const style = BUCKET_STYLE[bucket];
-                const remaining = 20 - visitsForCap(f);
                 return (
-                  <tr key={f.id}
-                    onClick={() => setSelectedPatient(f)}
-                    style={{ background: style.bg, color: style.fg,
-                             borderBottom:'1px solid var(--border)', cursor:'pointer' }}>
-                    <td style={{ ...tdStyle, textAlign:'center', fontWeight:900, color: style.fg }}>{style.icon}</td>
-                    <td style={tdStyle}>
-                      <div style={{ fontWeight:700 }}>{f.patient_name}</div>
-                      {f.insurance && <div style={{ fontSize:10, opacity:0.7 }}>{f.insurance}</div>}
-                    </td>
-                    <td style={tdStyle}>{f.address || '-'}</td>
-                    <td style={tdStyle}>{f.discipline || '-'}</td>
-                    <td style={tdStyle}>{f.ref_source || '-'}</td>
-                    <td style={tdStyle}>{f.patient_status || '-'}</td>
-                    <td style={{ ...tdStyle, fontWeight:700 }}>{f.region || '-'}</td>
-                    <td style={tdStyle}>{fmtDate(f.evaluation_date)}</td>
-                    <td style={tdStyle}>{f.evaluating_pt || 'Unassigned'}</td>
-                    <td style={tdStyle}>{f.assistant_therapist || '-'}</td>
-                    <td style={tdStyle}>
-                      {f.tenth_visit_actual_date
-                        ? fmtDate(f.tenth_visit_actual_date)
-                        : <span style={{ opacity:0.7 }}>proj {fmtDate(f.tenth_visit_projected_date)}</span>}
-                      {f.tenth_visit_note_submitted_date && (
-                        <div style={{ fontSize:9, opacity:0.7 }}>note {fmtDate(f.tenth_visit_note_submitted_date)}</div>
-                      )}
-                    </td>
-                    <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace' }}>20</td>
-                    <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace', fontWeight:900 }}>
-                      {visitsForCap(f)}
-                      {f.current_episode_number > 1 && (
-                        <div style={{ fontSize:9, fontWeight:600, opacity:0.7 }}>
-                          Ep {f.current_episode_number}/{f.episode_count}
-                        </div>
-                      )}
-                      {manualDriftOf(f) > 2 && (
-                        <div style={{ fontSize:9, fontWeight:700, color:'#92400E',
-                                      background:'#FEF3C7', padding:'1px 4px',
-                                      borderRadius:3, marginTop:2, display:'inline-block' }}>
-                          DRIFT manual {f.manual_visit_count}
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace', fontWeight:700,
-                                 color: remaining <= 0 ? '#FFFFFF' : style.fg }}>
-                      {remaining}
-                    </td>
-                    <td style={tdStyle}>
-                      {f.twentieth_visit_actual_date
-                        ? fmtDate(f.twentieth_visit_actual_date)
-                        : <span style={{ opacity:0.7 }}>proj {fmtDate(f.twentieth_visit_projected_date)}</span>}
-                      {f.twentieth_visit_discharge_note_date && (
-                        <div style={{ fontSize:9, opacity:0.7 }}>DC note {fmtDate(f.twentieth_visit_discharge_note_date)}</div>
-                      )}
-                    </td>
-                    <td style={{ ...tdStyle, maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      {f.roster_notes || '-'}
-                    </td>
-                    <td style={tdStyle}>
-                      <FlagCell flag={f} bucketStyle={style} onDischarge={() => setConfirmDischarge(f)} />
-                    </td>
-                  </tr>
+                  <RosterRow key={f.id}
+                    flag={f}
+                    bucketStyle={style}
+                    bucketLabel={style.label}
+                    onSelect={() => setSelectedPatient(f)}
+                    onDischarge={() => setConfirmDischarge(f)} />
                 );
               })}
             </tbody>
@@ -882,16 +849,173 @@ export default function MedicareTrackerPage() {
         </div>
       )}
 
-      {/* Discharge result toast */}
+      {/* Discharge result toast — green on success, red on failure */}
       {dischargeMsg && (
         <div style={{
           position:'fixed', bottom:24, right:24, zIndex:3100,
-          background: dischargeMsg.startsWith('✓') ? '#065F46' : '#7F1D1D',
+          background: /failed/i.test(dischargeMsg) ? '#7F1D1D' : '#065F46',
           color:'#fff', padding:'12px 18px', borderRadius:10, fontSize:13, fontWeight:600,
           boxShadow:'0 10px 30px rgba(0,0,0,0.25)', maxWidth:380,
         }}>{dischargeMsg}</div>
       )}
     </div>
+  );
+}
+
+// =============================================================================
+// KPI TILE — single tappable summary tile in the top strip
+// =============================================================================
+function KpiTile({ label, value, accent, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        textAlign:'left',
+        padding:'12px 14px',
+        borderRadius:10,
+        border: `1px solid ${active ? accent : 'var(--border)'}`,
+        background: active ? `${accent}10` : 'var(--card-bg)',
+        cursor:'pointer',
+        transition:'background 120ms, border-color 120ms',
+        display:'flex', flexDirection:'column', gap:4,
+        boxShadow: active ? `inset 3px 0 0 ${accent}` : 'none',
+      }}
+    >
+      <span style={{ fontSize:10, fontWeight:600, letterSpacing:0.6,
+                     textTransform:'uppercase', color:'var(--gray)' }}>
+        {label}
+      </span>
+      <span style={{ fontSize:24, fontWeight:800, color: accent === '#0F1117' ? 'var(--text)' : accent,
+                     fontFamily:'DM Mono, monospace', lineHeight:1 }}>
+        {value}
+      </span>
+    </button>
+  );
+}
+
+// =============================================================================
+// ROSTER ROW — one Medicare patient, compact 7-column layout
+// =============================================================================
+// Visual rules (2026-06-30):
+//   * 4px colored left stripe on every row to signal bucket — the only
+//     row-level color signal apart from over_cap (which keeps a faint tint).
+//   * Patient column stacks name + region/discipline/ref/address as a quiet
+//     secondary line. Insurance goes there too.
+//   * Status column shows census status + bucket chip when not 'ok'.
+//   * Progress column shows N/20 + a visit-completion bar + 10th/20th dates
+//     on a second line. Single source of progress instead of four columns.
+//   * Therapists column stacks PT/OT primary and PTA/COTA secondary.
+// =============================================================================
+function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge }) {
+  const f = flag;
+  const visits = visitsForCap(f);
+  const pct = Math.min(100, Math.round((visits / 20) * 100));
+  const driftAmount = manualDriftOf(f);
+  const tenth = f.tenth_visit_actual_date
+    ? `10th ${fmtDate(f.tenth_visit_actual_date)}`
+    : `10th proj ${fmtDate(f.tenth_visit_projected_date)}`;
+  const twentieth = f.twentieth_visit_actual_date
+    ? `20th ${fmtDate(f.twentieth_visit_actual_date)}`
+    : `20th proj ${fmtDate(f.twentieth_visit_projected_date)}`;
+
+  return (
+    <tr
+      onClick={onSelect}
+      style={{ background: bucketStyle.tint, borderBottom:'1px solid var(--border)', cursor:'pointer' }}>
+      {/* Left accent stripe — bucket signal */}
+      <td style={{ width:4, padding:0, background: bucketStyle.accent }} />
+
+      {/* Patient */}
+      <td style={tdStyle}>
+        <div style={{ fontWeight:700, fontSize:13 }}>{f.patient_name}</div>
+        <div style={{ fontSize:10, color:'var(--gray)', marginTop:2 }}>
+          {[
+            f.region && `Region ${f.region}`,
+            f.discipline,
+            f.ref_source && `ref ${f.ref_source}`,
+            f.address,
+          ].filter(Boolean).join('  ' + String.fromCharCode(183) + '  ')}
+        </div>
+        {f.insurance && (
+          <div style={{ fontSize:10, color:'var(--gray)', opacity:0.7 }}>{f.insurance}</div>
+        )}
+      </td>
+
+      {/* Status — census status text + bucket chip */}
+      <td style={tdStyle}>
+        <div style={{ fontWeight:600 }}>{f.patient_status || '-'}</div>
+        {bucketLabel && (
+          <span style={{
+            display:'inline-block', marginTop:4,
+            background: `${bucketStyle.accent}15`,
+            color: bucketStyle.accent,
+            border: `1px solid ${bucketStyle.accent}40`,
+            borderRadius:999, padding:'1px 8px',
+            fontSize:9, fontWeight:700, letterSpacing:0.4,
+          }}>
+            {bucketLabel}
+          </span>
+        )}
+      </td>
+
+      {/* Eval */}
+      <td style={{ ...tdStyle, fontFamily:'DM Mono, monospace', color:'var(--gray)' }}>
+        {fmtDate(f.evaluation_date)}
+      </td>
+
+      {/* Therapists — PT/OT primary + PTA/COTA secondary */}
+      <td style={tdStyle}>
+        <div>{f.evaluating_pt || 'Unassigned'}</div>
+        {f.assistant_therapist && (
+          <div style={{ fontSize:10, color:'var(--gray)', marginTop:2 }}>
+            asst {f.assistant_therapist}
+          </div>
+        )}
+      </td>
+
+      {/* Progress — N/20 + bar + milestones */}
+      <td style={tdStyle}>
+        <div style={{ display:'flex', alignItems:'baseline', gap:6, fontFamily:'DM Mono, monospace' }}>
+          <span style={{ fontSize:16, fontWeight:800, color: visits >= 20 ? bucketStyle.accent : 'var(--text)' }}>
+            {visits}
+          </span>
+          <span style={{ fontSize:11, color:'var(--gray)' }}>/ 20</span>
+          {f.current_episode_number > 1 && (
+            <span style={{ fontSize:9, color:'var(--gray)' }}>
+              ep {f.current_episode_number}/{f.episode_count}
+            </span>
+          )}
+        </div>
+        <div style={{ marginTop:4, height:4, background:'var(--border)', borderRadius:2, overflow:'hidden' }}>
+          <div style={{ width: `${pct}%`, height:'100%', background: bucketStyle.accent === 'transparent' ? '#10B981' : bucketStyle.accent }} />
+        </div>
+        <div style={{ fontSize:9, color:'var(--gray)', marginTop:3, lineHeight:1.3 }}>
+          {tenth}{' '}{String.fromCharCode(183)}{' '}{twentieth}
+        </div>
+        {driftAmount > 2 && (
+          <div style={{ fontSize:9, fontWeight:700, color:'#92400E',
+                        background:'#FEF3C7', padding:'1px 5px',
+                        borderRadius:3, marginTop:3, display:'inline-block' }}>
+            drift {driftAmount}
+          </div>
+        )}
+      </td>
+
+      {/* Notes — truncated */}
+      <td style={{ ...tdStyle, maxWidth:260, color: f.roster_notes ? 'var(--text)' : 'var(--gray)' }}>
+        <div style={{
+          display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical',
+          overflow:'hidden', lineHeight:1.4,
+        }}>
+          {f.roster_notes || 'No notes'}
+        </div>
+      </td>
+
+      {/* Action */}
+      <td style={tdStyle}>
+        <FlagCell flag={f} bucketStyle={bucketStyle} onDischarge={onDischarge} />
+      </td>
+    </tr>
   );
 }
 
@@ -916,9 +1040,11 @@ export default function MedicareTrackerPage() {
 function FlagCell({ flag, bucketStyle, onDischarge }) {
   const status = (flag.patient_status || '').toLowerCase();
   const showDischarge = !!flag.ready_for_discharge || status === 'discharge';
-  // Match the button accent to the row tint so it harmonizes with the bucket
-  // color (dark red on pale red, dark gray on white, etc.).
-  const accent = bucketStyle?.fg && bucketStyle.fg !== 'var(--gray)' ? bucketStyle.fg : 'var(--text)';
+  // Match the button accent to the bucket so the button harmonizes with the
+  // row's left accent stripe instead of fighting it.
+  const accent = bucketStyle?.accent && bucketStyle.accent !== 'transparent'
+    ? bucketStyle.accent
+    : 'var(--text)';
 
   if (!showDischarge && !flag.cap_override_by) return null;
 
