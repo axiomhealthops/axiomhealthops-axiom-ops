@@ -225,6 +225,11 @@ export default function MedicareTrackerPage() {
   const [dischargeNote, setDischargeNote] = useState('');
   const [dischargeBusy, setDischargeBusy] = useState(false);
   const [dischargeMsg, setDischargeMsg] = useState('');
+  // Clinician picker (used by Audit rows). pickerState = { flag, slot } or null
+  // where slot is 'lead' | 'assistant'.
+  const [allClinicians, setAllClinicians] = useState([]);
+  const [assignmentsByPatient, setAssignmentsByPatient] = useState({});
+  const [pickerState, setPickerState] = useState(null);
 
   // ─── Discharge action (one-tap from row) ──────────────────────────────
   // Marks the patient's census status as Discharge, deactivates the Medicare
@@ -807,6 +812,77 @@ export default function MedicareTrackerPage() {
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
 
   useEffect(() => { loadFlags(); }, [loadFlags]);
+
+  // ─── Clinician + assignments loader (for the Audit page dropdowns) ───
+  // Pulls the full active-clinician roster once + every active assignment
+  // for any patient currently in the audit lane. Builds two structures:
+  //   allClinicians          — array used by the "Add therapist" picker
+  //   assignmentsByPatient   — { [patient_name]: [{clinician_id, name, discipline, role}] }
+  const loadAuditSupport = useCallback(async () => {
+    const auditPatientNames = flags.filter(f => f.needs_audit).map(f => f.patient_name);
+    const { data: clRows } = await supabase.from('clinicians')
+      .select('id, full_name, discipline, region, is_active')
+      .eq('is_active', true)
+      .order('full_name');
+    setAllClinicians(clRows || []);
+    if (auditPatientNames.length === 0) { setAssignmentsByPatient({}); return; }
+    const { data: assigns } = await supabase.from('patient_clinician_assignments')
+      .select('patient_name, clinician_id, role, discipline, is_active, assigned_at')
+      .in('patient_name', auditPatientNames)
+      .eq('is_active', true);
+    const byId = new Map((clRows || []).map(c => [c.id, c]));
+    const byPatient = {};
+    for (const a of (assigns || [])) {
+      const cl = byId.get(a.clinician_id);
+      if (!cl) continue;
+      const item = {
+        clinician_id: a.clinician_id,
+        clinician_name: cl.full_name,
+        discipline: a.discipline || cl.discipline,
+        role: a.role,
+      };
+      (byPatient[a.patient_name] = byPatient[a.patient_name] || []).push(item);
+    }
+    setAssignmentsByPatient(byPatient);
+  }, [flags]);
+  useEffect(() => { if (view === 'audit') loadAuditSupport(); }, [view, loadAuditSupport]);
+
+  // ─── Add a clinician to the patient's chart (patient_clinician_assignments) ─
+  async function addClinicianAssignment(flag, clinician, role) {
+    const actor = profile?.full_name || profile?.email || 'Unknown';
+    // Use the clinician's own discipline; lead role typically lines up with
+    // PT/OT and assistant with PTA/COTA, but we trust whatever the clinician
+    // record says rather than enforcing it here.
+    const { error } = await supabase.from('patient_clinician_assignments').insert({
+      patient_key: (flag.patient_name || '').toLowerCase().trim(),
+      patient_name: flag.patient_name,
+      clinician_id: clinician.id,
+      role,
+      discipline: clinician.discipline,
+      is_active: true,
+      assigned_at: new Date().toISOString(),
+      assigned_by: actor,
+    });
+    if (error) {
+      setDischargeMsg(`Add therapist failed: ${error.message}`);
+      return false;
+    }
+    logActivity({
+      coordinatorId: profile?.id,
+      coordinatorName: profile?.full_name,
+      coordinatorRole: profile?.role,
+      actionType: 'patient_clinician_assigned',
+      actionDetail: `Assigned ${clinician.full_name} (${role}) to ${flag.patient_name}`,
+      patientName: flag.patient_name,
+      tableName: 'patient_clinician_assignments',
+      recordId: flag.id,
+      metadata: { source: 'medicare_tracker_audit', actor, role, clinician_id: clinician.id },
+    });
+    setDischargeMsg(`Added ${clinician.full_name} (${role}) to ${flag.patient_name}'s chart.`);
+    setTimeout(() => setDischargeMsg(''), 3000);
+    await loadAuditSupport();
+    return true;
+  }
   useRealtimeTable(['census_data', 'visit_schedule_data', 'medicare_visit_flags'], loadFlags);
 
   // --- derived view ----------------------------------------------------
@@ -1042,9 +1118,11 @@ export default function MedicareTrackerPage() {
                 sorted.map(f => (
                   <AuditRosterRow key={f.id}
                     flag={f}
+                    assignments={assignmentsByPatient[f.patient_name] || []}
                     onSave={patch => saveAuditEdits(f, patch)}
                     onRestart={() => restartTracker(f)}
-                    onResolve={() => resolveAudit(f)} />
+                    onResolve={() => resolveAudit(f)}
+                    onOpenPicker={slot => setPickerState({ flag: f, slot })} />
                 ))
               ) : (
                 sorted.map(f => {
@@ -1212,6 +1290,22 @@ export default function MedicareTrackerPage() {
           </div>
         </div>
       )}
+
+      {/* Clinician picker modal — opened from the audit row's Add Therapist
+          button. On select, inserts a new patient_clinician_assignments row
+          and refreshes the assignments map so the new clinician appears in
+          the dropdown immediately. */}
+      <ClinicianPickerModal
+        open={!!pickerState}
+        slot={pickerState?.slot}
+        flag={pickerState?.flag}
+        clinicians={allClinicians}
+        busy={auditBusy}
+        onClose={() => setPickerState(null)}
+        onPick={async (cl) => {
+          const ok = await addClinicianAssignment(pickerState.flag, cl, pickerState.slot);
+          if (ok) setPickerState(null);
+        }} />
 
       {/* Discharge result toast — green on success, red on failure */}
       {dischargeMsg && (
@@ -1476,12 +1570,160 @@ function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge, onAu
 }
 
 // =============================================================================
+// THERAPIST SELECT — dropdown of clinicians ASSIGNED to a patient
+// =============================================================================
+// "Assignments" come from patient_clinician_assignments (active rows only).
+// If the patient's currently-saved name (fallbackName) isn't in the
+// assignments list yet — e.g., a legacy text value populated by Pariox before
+// the chart was wired up — we still expose it as a sticky "(legacy)" option
+// so the dropdown doesn't show empty when there's actually a value behind it.
+// "Add therapist" opens the system-wide picker (handled at the page level).
+function TherapistSelect({ label, slot, value, assignments, fallbackName, onChange, onAdd, inputBase }) {
+  const options = assignments.map(a => a.clinician_name);
+  const hasFallback = fallbackName && !options.includes(fallbackName);
+  const allOptions = hasFallback ? [fallbackName, ...options] : options;
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+      <div style={{ fontSize:9, color:'var(--gray)', fontWeight:600, letterSpacing:0.3, textTransform:'uppercase' }}>
+        {label}
+      </div>
+      <div style={{ display:'flex', gap:4 }}>
+        <select value={value || ''}
+                onChange={e => onChange(e.target.value)}
+                style={{ ...inputBase, flex:1 }}>
+          <option value="">{slot === 'lead' ? 'Unassigned' : '- none -'}</option>
+          {allOptions.map(name => (
+            <option key={name} value={name}>
+              {name}{hasFallback && name === fallbackName ? '  (legacy)' : ''}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={onAdd}
+          title="Pick a clinician from the full system roster and add them to this patient's chart"
+          style={{
+            padding:'4px 10px',
+            background:'transparent',
+            color:'#1565C0',
+            border:'1px solid #1565C055',
+            borderRadius:6,
+            fontSize:10,
+            fontWeight:600,
+            cursor:'pointer',
+            whiteSpace:'nowrap',
+          }}>
+          + Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// CLINICIAN PICKER MODAL — full-system clinician search + assignment
+// =============================================================================
+// Mounted at the page level. When opened from a Therapist Select's "Add"
+// button, it scopes the visible roster to the appropriate discipline tier
+// (PT/OT for lead slot, PTA/COTA for assistant slot) by default; "Show all"
+// disables the filter for edge cases.
+function ClinicianPickerModal({ open, slot, flag, clinicians, onPick, onClose, busy }) {
+  const [q, setQ] = useState('');
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => { if (open) { setQ(''); setShowAll(false); } }, [open, flag?.id, slot]);
+
+  if (!open || !flag) return null;
+
+  const defaultDisciplines = slot === 'lead' ? ['PT', 'OT'] : ['PTA', 'COTA'];
+  const tierLabel = slot === 'lead' ? 'Lead (PT / OT)' : 'Assistant (PTA / COTA)';
+
+  const filtered = clinicians
+    .filter(c => showAll || defaultDisciplines.includes(c.discipline))
+    .filter(c => {
+      if (!q) return true;
+      const needle = q.toLowerCase();
+      return (c.full_name || '').toLowerCase().includes(needle)
+          || (c.discipline || '').toLowerCase().includes(needle)
+          || (c.region || '').toLowerCase().includes(needle);
+    })
+    .slice(0, 60);
+
+  return (
+    <div onClick={() => !busy && onClose()}
+      style={{
+        position:'fixed', inset:0, background:'rgba(15,23,42,0.6)', zIndex:3200,
+        display:'flex', alignItems:'center', justifyContent:'center', padding:24,
+      }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:560,
+                 boxShadow:'0 24px 60px rgba(0,0,0,0.3)', display:'flex', flexDirection:'column',
+                 maxHeight:'80vh' }}>
+        <div style={{ padding:'14px 20px', borderBottom:'1px solid var(--border)' }}>
+          <div style={{ fontSize:15, fontWeight:700 }}>Add Therapist - {tierLabel}</div>
+          <div style={{ fontSize:11, color:'var(--gray)', marginTop:2 }}>
+            Adds the selected clinician to {flag.patient_name}'s chart and makes them selectable in the dropdown.
+          </div>
+        </div>
+        <div style={{ padding:'10px 20px', display:'flex', gap:8, alignItems:'center',
+                      borderBottom:'1px solid var(--border)' }}>
+          <input autoFocus
+                 value={q}
+                 onChange={e => setQ(e.target.value)}
+                 placeholder="Search by name, discipline, or region"
+                 style={{ flex:1, padding:'7px 10px', border:'1px solid var(--border)',
+                          borderRadius:7, fontSize:13, outline:'none' }} />
+          <label style={{ fontSize:11, color:'var(--gray)', display:'inline-flex',
+                          alignItems:'center', gap:6, cursor:'pointer' }}>
+            <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />
+            Show all disciplines
+          </label>
+        </div>
+        <div style={{ overflowY:'auto', flex:1 }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding:24, color:'var(--gray)', fontSize:12, textAlign:'center' }}>
+              No clinicians match. Try widening the search or toggling "Show all disciplines".
+            </div>
+          ) : filtered.map(c => (
+            <button key={c.id}
+                    disabled={busy}
+                    onClick={() => onPick(c)}
+                    style={{
+                      width:'100%', textAlign:'left', padding:'10px 20px',
+                      border:'none', borderBottom:'1px solid var(--border)',
+                      background:'transparent', cursor: busy ? 'wait' : 'pointer',
+                      display:'flex', justifyContent:'space-between', alignItems:'center', gap:12,
+                    }}>
+              <div>
+                <div style={{ fontWeight:600, fontSize:13 }}>{c.full_name}</div>
+                <div style={{ fontSize:10, color:'var(--gray)', marginTop:2 }}>
+                  {[c.discipline, c.region && `Region ${c.region}`].filter(Boolean).join('  ' + String.fromCharCode(183) + '  ')}
+                </div>
+              </div>
+              <span style={{ fontSize:10, color:'#1565C0', fontWeight:700 }}>Assign</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ padding:'10px 20px', borderTop:'1px solid var(--border)',
+                      display:'flex', justifyContent:'flex-end' }}>
+          <button onClick={onClose} disabled={busy}
+            style={{ padding:'7px 14px', border:'1px solid var(--border)', borderRadius:7,
+                     fontSize:13, background:'var(--card-bg)', cursor:busy?'wait':'pointer' }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // AUDIT ROSTER ROW — Needs Audit lane, inline-editable fields
 // =============================================================================
 // Each row holds local edit state in a single `edits` object. Save commits to
 // medicare_visit_flags; Restart Tracker resets episode counters; Resolve Audit
 // returns the row to the Active roster (and re-enables recalc on the row).
-function AuditRosterRow({ flag, onSave, onRestart, onResolve }) {
+function AuditRosterRow({ flag, assignments, onSave, onRestart, onResolve, onOpenPicker }) {
   const f = flag;
   const initial = {
     patient_status: f.patient_status || '',
@@ -1576,16 +1818,30 @@ function AuditRosterRow({ flag, onSave, onRestart, onResolve }) {
                style={inputBase} />
       </td>
 
-      {/* Therapists (editable text — primary above, assistant below) */}
+      {/* Therapists — dropdowns of clinicians ASSIGNED to this patient
+          (patient_clinician_assignments). "Add therapist" opens the system
+          clinician picker; selection writes a new assignment row to the
+          patient's chart, then shows up in the dropdown automatically. */}
       <td style={tdStyle}>
-        <input type="text" value={edits.evaluating_pt}
-               onChange={e => setEdits(s => ({ ...s, evaluating_pt: e.target.value }))}
-               placeholder="PT / OT (primary)"
-               style={inputBase} />
-        <input type="text" value={edits.assistant_therapist}
-               onChange={e => setEdits(s => ({ ...s, assistant_therapist: e.target.value }))}
-               placeholder="PTA / COTA (optional)"
-               style={{ ...inputBase, marginTop:4 }} />
+        <TherapistSelect
+          label="Lead (PT / OT)"
+          slot="lead"
+          value={edits.evaluating_pt}
+          assignments={(assignments || []).filter(a => a.role === 'lead')}
+          fallbackName={initial.evaluating_pt}
+          onChange={v => setEdits(s => ({ ...s, evaluating_pt: v }))}
+          onAdd={() => onOpenPicker && onOpenPicker('lead')}
+          inputBase={inputBase} />
+        <div style={{ height:6 }} />
+        <TherapistSelect
+          label="Assistant (PTA / COTA)"
+          slot="assistant"
+          value={edits.assistant_therapist}
+          assignments={(assignments || []).filter(a => a.role === 'assistant')}
+          fallbackName={initial.assistant_therapist}
+          onChange={v => setEdits(s => ({ ...s, assistant_therapist: v }))}
+          onAdd={() => onOpenPicker && onOpenPicker('assistant')}
+          inputBase={inputBase} />
       </td>
 
       {/* Progress — used visit count is editable */}
