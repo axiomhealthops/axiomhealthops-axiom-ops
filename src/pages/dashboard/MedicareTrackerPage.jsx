@@ -185,10 +185,17 @@ export default function MedicareTrackerPage() {
   const [dischargeMsg, setDischargeMsg] = useState('');
 
   // ─── Discharge action (one-tap from row) ──────────────────────────────
-  // Marks the patient's census status as Discharge, acknowledges the Medicare
-  // ready-for-DC flag so the row drops off the "needs attention" view, and
-  // writes a high-priority alert routed to the regional care coordination
+  // Marks the patient's census status as Discharge, deactivates the Medicare
+  // flag row so it drops off the tracker (the page filters by is_active=true),
+  // and writes a high-priority alert routed to the regional care coordination
   // team so they know to start the transition-of-care workflow.
+  //
+  // 2026-06-30: every write is error-checked. Two of the three Supabase calls
+  // used to swallow errors silently (pattern #15 in CLAUDE.md) — Ariel reported
+  // discharges that "succeeded" but left the row stuck on the roster. The
+  // missing `is_active=false` was the actual cause of the stuck rows; the
+  // error-check guards against the same UX lie returning under a different
+  // failure mode (RLS, trigger raise, network blip).
   async function dischargePatient(flag, note) {
     setDischargeBusy(true);
     setDischargeMsg('');
@@ -201,24 +208,30 @@ export default function MedicareTrackerPage() {
         .from('census_data')
         .update({ status: 'Discharge', updated_by: actor, status_changed_at: new Date().toISOString() })
         .eq('patient_name', flag.patient_name);
-      if (censusErr) throw censusErr;
+      if (censusErr) throw new Error(`census_data update failed: ${censusErr.message}`);
 
-      // 2) Acknowledge the 20-visit flag so it stops appearing as urgent
-      await supabase
+      // 2) Deactivate the Medicare flag row so it drops off the tracker, and
+      //    record the discharge details for the audit trail / re-recalc path.
+      const { error: flagErr } = await supabase
         .from('medicare_visit_flags')
         .update({
+          is_active: false,
           flag_20th_acknowledged: true,
           ready_for_discharge: false,
           twentieth_visit_discharge_note_date: today,
+          patient_status: 'Discharge',
+          updated_at: new Date().toISOString(),
           roster_notes: note
             ? `${flag.roster_notes ? flag.roster_notes + ' | ' : ''}Discharged ${today} by ${actor}: ${note}`
             : `${flag.roster_notes ? flag.roster_notes + ' | ' : ''}Discharged ${today} by ${actor}`,
         })
         .eq('patient_name', flag.patient_name);
+      if (flagErr) throw new Error(`medicare_visit_flags update failed: ${flagErr.message}`);
 
-      // 3) Notify care coordination team (regional)
+      // 3) Notify care coordination team (regional). Non-fatal — if the alert
+      //    insert fails the discharge itself has already succeeded.
       const region = flag.region || null;
-      await supabase.from('alerts').insert({
+      const { error: alertErr } = await supabase.from('alerts').insert({
         alert_type: 'patient_discharged',
         priority: 'high',
         title: `Discharge: ${flag.patient_name}${region ? ` (Region ${region})` : ''}`,
@@ -241,6 +254,7 @@ export default function MedicareTrackerPage() {
         is_read: false,
         is_dismissed: false,
       });
+      if (alertErr) console.warn('Discharge alert insert failed (non-fatal):', alertErr.message);
 
       // 4) Audit trail
       logActivity({
@@ -255,7 +269,8 @@ export default function MedicareTrackerPage() {
         metadata: { source: 'medicare_tracker', region, visits_completed: flag.total_completed_visits },
       });
 
-      setDischargeMsg(`✓ ${flag.patient_name} discharged. Care coord notified.`);
+      const alertWarning = alertErr ? ' (care-coord alert pending — see console)' : ' Care coord notified.';
+      setDischargeMsg(`${flag.patient_name} discharged and cleared from tracker.${alertWarning}`);
       setConfirmDischarge(null);
       setDischargeNote('');
       setTimeout(() => setDischargeMsg(''), 4000);
@@ -324,7 +339,9 @@ export default function MedicareTrackerPage() {
 
         if (ptVisits.length === 0) {
           // Patient is on Medicare census but has no completed visits yet.
-          // Upsert a minimal row so the roster shows them.
+          // Upsert a minimal row so the roster shows them. is_active is omitted
+          // so the column default (true) applies on insert and existing values
+          // are preserved on update — never resurrect a manually-discharged row.
           await supabase.from('medicare_visit_flags').upsert({
             patient_name: pt.patient_name,
             region: pt.region,
@@ -334,7 +351,6 @@ export default function MedicareTrackerPage() {
             ref_source: pt.ref_source,
             patient_status: pt.status,
             total_completed_visits: 0,
-            is_active: true,
             last_calculated_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           }, { onConflict: 'patient_name' });
@@ -371,7 +387,7 @@ export default function MedicareTrackerPage() {
 
         // Rolling progress-note clock (preserved from prior implementation).
         const { data: existing } = await supabase.from('medicare_visit_flags')
-          .select('id, flag_10th_acknowledged, flag_20th_acknowledged, last_progress_note_date, last_progress_note_visit, ready_for_discharge, cap_override_by, roster_notes, kx_modifier_applied, tenth_visit_note_submitted_date, twentieth_visit_discharge_note_date')
+          .select('id, is_active, flag_10th_acknowledged, flag_20th_acknowledged, last_progress_note_date, last_progress_note_visit, ready_for_discharge, cap_override_by, roster_notes, kx_modifier_applied, tenth_visit_note_submitted_date, twentieth_visit_discharge_note_date')
           .eq('patient_name', pt.patient_name).maybeSingle();
 
         const anchorDate  = existing?.last_progress_note_date  || careStartDate;
@@ -426,7 +442,11 @@ export default function MedicareTrackerPage() {
           flag_10th_acknowledged: ack10,
           flag_20th_discharge: flag20,
           flag_20th_acknowledged: ack20,
-          is_active: true,
+          // Preserve is_active=false when the row was cleared via the Discharge
+          // button (signaled by existing.flag_20th_acknowledged=true). Patients
+          // who got is_active=false from goneNames purging but are now back in
+          // census (and never went through the discharge button) re-activate.
+          is_active: !(existing?.is_active === false && existing?.flag_20th_acknowledged === true),
           last_calculated_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
