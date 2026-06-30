@@ -792,30 +792,7 @@ export default function MedicareTrackerPage() {
                       {f.roster_notes || '-'}
                     </td>
                     <td style={tdStyle}>
-                      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:4 }}>
-                        {f.ready_for_discharge && !f.flag_20th_acknowledged && (
-                          <span style={{ background:'#DC2626', color:'#fff', padding:'3px 8px',
-                                         borderRadius:999, fontSize:10, fontWeight:800, whiteSpace:'nowrap' }}>
-                            READY FOR DC
-                          </span>
-                        )}
-                        {f.cap_override_by && (
-                          <div style={{ fontSize:9, opacity:0.7 }}>override by {f.cap_override_by}</div>
-                        )}
-                        {/* Quick-discharge action — only show when patient is not already discharged */}
-                        {(f.patient_status || '').toLowerCase() !== 'discharge' && (
-                          <button
-                            onClick={e => { e.stopPropagation(); setConfirmDischarge(f); }}
-                            title="Mark this patient as Discharged and notify the Care Coord team"
-                            style={{
-                              background:'#7F1D1D', color:'#fff', border:'none',
-                              borderRadius:6, padding:'4px 10px', fontSize:10, fontWeight:700,
-                              cursor:'pointer', whiteSpace:'nowrap',
-                            }}>
-                            Discharge
-                          </button>
-                        )}
-                      </div>
+                      <FlagCell flag={f} bucketStyle={style} onDischarge={() => setConfirmDischarge(f)} />
                     </td>
                   </tr>
                 );
@@ -913,6 +890,64 @@ export default function MedicareTrackerPage() {
           color:'#fff', padding:'12px 18px', borderRadius:10, fontSize:13, fontWeight:600,
           boxShadow:'0 10px 30px rgba(0,0,0,0.25)', maxWidth:380,
         }}>{dischargeMsg}</div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// FLAG CELL — right-hand action column on each roster row
+// =============================================================================
+// Quiet by default. The roster is dense (~120 rows) and the previous design —
+// a red READY FOR DC pill plus a maroon Discharge button on every row — turned
+// the column into a wall of red. Liam 2026-06-30: "overwhelming and confusing".
+//
+// New rules:
+//   * No "READY FOR DC" pill. The row tint + bucket label + 20-of-20 visit
+//     count already say it three times — a fourth red pill is noise.
+//   * The Discharge button appears ONLY when the row is actually clearable:
+//       - ready_for_discharge=true   (cap reached, DB trigger fired)
+//       - patient_status='Discharge' (clinically discharged, needs tracker
+//         cleanup — covers patients marked Discharge in Pariox)
+//     Otherwise the cell is empty. No CTA on a fresh 2-visit patient.
+//   * Button style is a ghost outline at rest, fills maroon on hover. Quiet
+//     enough to disappear into a clean row, obvious once you reach for it.
+// =============================================================================
+function FlagCell({ flag, bucketStyle, onDischarge }) {
+  const status = (flag.patient_status || '').toLowerCase();
+  const showDischarge = !!flag.ready_for_discharge || status === 'discharge';
+  // Match the button accent to the row tint so it harmonizes with the bucket
+  // color (dark red on pale red, dark gray on white, etc.).
+  const accent = bucketStyle?.fg && bucketStyle.fg !== 'var(--gray)' ? bucketStyle.fg : 'var(--text)';
+
+  if (!showDischarge && !flag.cap_override_by) return null;
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:4 }}>
+      {flag.cap_override_by && (
+        <div style={{ fontSize:9, opacity:0.7 }}>override by {flag.cap_override_by}</div>
+      )}
+      {showDischarge && (
+        <button
+          onClick={e => { e.stopPropagation(); onDischarge(); }}
+          title="Confirm clinical discharge and clear this patient from the tracker"
+          style={{
+            background:'transparent',
+            color: accent,
+            border:`1px solid ${accent}`,
+            borderRadius:6,
+            padding:'3px 10px',
+            fontSize:10,
+            fontWeight:600,
+            cursor:'pointer',
+            whiteSpace:'nowrap',
+            transition:'background 120ms, color 120ms',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = accent; e.currentTarget.style.color = '#fff'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = accent; }}
+        >
+          Mark Discharged
+        </button>
       )}
     </div>
   );
