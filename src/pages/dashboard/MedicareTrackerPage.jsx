@@ -1074,9 +1074,15 @@ export default function MedicareTrackerPage() {
           style={{ ...selStyle, width:220 }} />
         <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
           <button onClick={exportXlsx} style={btnSecondaryStyle}>Export XLSX</button>
-          <button onClick={recalculate} disabled={calculating} style={btnPrimaryStyle}>
-            {calculating ? 'Recalculating...' : 'Recalculate'}
-          </button>
+          {/* Recalculate only on the Active view. On the Audit tab it would
+              be a no-op for the visible rows (audited rows are intentionally
+              skipped so manual edits aren't clobbered), and the button being
+              there reads as "this will refresh what I see" — it wouldn't. */}
+          {view === 'active' && (
+            <button onClick={recalculate} disabled={calculating} style={btnPrimaryStyle}>
+              {calculating ? 'Recalculating...' : 'Recalculate'}
+            </button>
+          )}
         </div>
       </div>
 
