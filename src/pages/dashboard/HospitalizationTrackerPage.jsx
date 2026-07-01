@@ -64,6 +64,23 @@ const OUTCOMES = [
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
+// 2026-06-30 — Census-status pill colors. Same palette family as the Medicare
+// Tracker so the status chips feel consistent across pages. Anything not in
+// this map falls back to a neutral gray "unknown" chip.
+const STATUS_STYLE = {
+  'Active':                    { color:'#065F46', bg:'#ECFDF5' },
+  'Active - Auth Pending':     { color:'#1E40AF', bg:'#EFF6FF' },
+  'Active - Auth Pendin':      { color:'#1E40AF', bg:'#EFF6FF' }, // known Pariox truncation
+  'Hospitalized':              { color:'#7F1D1D', bg:'#FEF2F2' },
+  'On Hold':                   { color:'#9C5700', bg:'#FEF3C7' },
+  'SOC Pending':               { color:'#78350F', bg:'#FEF3C7' },
+  'Waitlist':                  { color:'#6B21A8', bg:'#F3E8FF' },
+  'Discharge':                 { color:'#374151', bg:'#F3F4F6' },
+  'Discharge - Change Insurance':{ color:'#374151', bg:'#F3F4F6' },
+  'Non-Admit':                 { color:'#4B5563', bg:'#F3F4F6' },
+  _unknown:                    { color:'#6B7280', bg:'#F3F4F6' },
+};
+
 function rateColor(rate, benchmark) {
   if (rate <= benchmark * 0.7) return '#065F46';
   if (rate <= benchmark) return '#10B981';
@@ -278,11 +295,19 @@ export default function HospitalizationTrackerPage() {
   const [editRecord, setEditRecord] = useState(null);
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [filterCategory, setFilterCategory] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState('ALL');
   const [filterPeriod, setFilterPeriod] = useState('ytd'); // ytd | quarter | month | all
   const [searchQ, setSearchQ] = useState('');
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard | log | preventable
+  const [sortKey, setSortKey] = useState('admission_date'); // sortable in Log tab
+  const [sortDir, setSortDir] = useState('desc');
 
-  const canEdit = ['super_admin','ceo','admin','pod_leader'].includes(profile?.role);
+  // 2026-06-30: Added assoc_director (Lia, Samantha, Ariel, Earl) and director
+  // per Liam — ADs need to update hospitalization records for any patient
+  // across all their acting territories, matching the all-region visibility
+  // shipped in useAssignedRegions. The 'director' role maps to super_admin
+  // permissions per CLAUDE.md; added here for consistency.
+  const canEdit = ['super_admin','ceo','admin','pod_leader','assoc_director','director'].includes(profile?.role);
 
   const regionScope = useAssignedRegions();
 
@@ -312,15 +337,68 @@ export default function HospitalizationTrackerPage() {
     return '2000-01-01';
   }, [filterPeriod]);
 
+  // 2026-06-30: Enrich each hospitalization record with the patient's census
+  // status (Active / Waitlist / On Hold / SOC Pending / Hospitalized /
+  // Discharge / Non-Admit). Some patients on this list have never actually
+  // started care — the status makes that visible so Ariel can triage them.
+  const statusByPatient = useMemo(() => {
+    const m = new Map();
+    for (const c of (census || [])) {
+      if (c.patient_name) m.set(c.patient_name.toLowerCase().trim(), c.status || null);
+    }
+    return m;
+  }, [census]);
+  const statusOf = (patientName) =>
+    patientName ? (statusByPatient.get(patientName.toLowerCase().trim()) || null) : null;
+
+  // Distinct census-status values across everyone in the loaded hospitalization
+  // records, used to populate the status filter dropdown. Fall back to a stable
+  // baseline list so the dropdown never appears empty on a slow first load.
+  const distinctStatuses = useMemo(() => {
+    const s = new Set();
+    for (const r of records) {
+      const v = statusOf(r.patient_name);
+      if (v) s.add(v);
+    }
+    if (s.size === 0) {
+      ['Active', 'SOC Pending', 'On Hold', 'Hospitalized', 'Discharge', 'Non-Admit', 'Waitlist']
+        .forEach(v => s.add(v));
+    }
+    return Array.from(s).sort();
+  }, [records, statusByPatient]);
+
   const filtered = useMemo(() => {
-    return records.filter(r => {
+    const list = records.filter(r => {
       if (filterRegion !== 'ALL' && r.region !== filterRegion) return false;
       if (filterCategory !== 'ALL' && r.cause_category !== filterCategory) return false;
+      if (filterStatus !== 'ALL') {
+        const st = statusOf(r.patient_name);
+        if (filterStatus === 'UNKNOWN') { if (st) return false; }
+        else if (st !== filterStatus) return false;
+      }
       if (r.admission_date < periodStart) return false;
       if (searchQ && !`${r.patient_name} ${r.admitting_diagnosis} ${r.hospital_name}`.toLowerCase().includes(searchQ.toLowerCase())) return false;
       return true;
     });
-  }, [records, filterRegion, filterCategory, periodStart, searchQ]);
+    // Sort by chosen key. patient_status sorts by the census-derived value;
+    // everything else pulls straight off the row. Nulls sink to the bottom.
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...list].sort((a, b) => {
+      const av = sortKey === 'patient_status' ? statusOf(a.patient_name) : a[sortKey];
+      const bv = sortKey === 'patient_status' ? statusOf(b.patient_name) : b[sortKey];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+  }, [records, filterRegion, filterCategory, filterStatus, periodStart, searchQ, sortKey, sortDir, statusByPatient]);
+
+  function toggleSort(key) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('asc'); }
+  }
 
   // Rate calculations
   // Denominator = active census patients
@@ -379,6 +457,15 @@ export default function HospitalizationTrackerPage() {
             style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
             <option value="ALL">All Categories</option>
             {CAUSE_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
+          {/* Patient census status — Active / Waitlist / On Hold / SOC Pending
+              / Hospitalized / Discharge / Non-Admit. Surfaces patients who
+              never started care but are still on the hospitalization list. */}
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+            style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)' }}>
+            <option value="ALL">All Statuses</option>
+            {distinctStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+            <option value="UNKNOWN">(no status)</option>
           </select>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search patient, diagnosis…"
             style={{ padding:'6px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--card-bg)', width:200 }} />
@@ -642,8 +729,27 @@ export default function HospitalizationTrackerPage() {
                 </div>
               ) : (
                 <>
-                  <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.6fr 0.7fr 0.7fr 1fr 1fr 0.7fr 0.7fr auto', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
-                    <span>Patient</span><span>Region</span><span>Admitted</span><span>Stay</span><span>Diagnosis</span><span>Category</span><span>Outcome</span><span>Returned</span><span></span>
+                  {/* 10 columns now (added Status after Region). Header cells
+                      are click-to-sort; ^/v arrow marks the active key/dir. */}
+                  <div style={{ display:'grid', gridTemplateColumns:'1.5fr 0.55fr 0.9fr 0.75fr 0.7fr 1fr 0.9fr 0.7fr 0.7fr auto', padding:'8px 20px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:10, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
+                    {[
+                      ['patient_name',     'Patient'],
+                      ['region',           'Region'],
+                      ['patient_status',   'Status'],
+                      ['admission_date',   'Admitted'],
+                      ['stay_type',        'Stay'],
+                      ['admitting_diagnosis','Diagnosis'],
+                      ['cause_category',   'Category'],
+                      ['outcome',          'Outcome'],
+                      ['returned_to_service','Returned'],
+                    ].map(([k, l]) => (
+                      <span key={k} onClick={() => toggleSort(k)}
+                        style={{ cursor:'pointer', userSelect:'none' }}>
+                        {l}
+                        {sortKey === k && <span style={{ marginLeft:4, opacity:0.7 }}>{sortDir === 'asc' ? '^' : 'v'}</span>}
+                      </span>
+                    ))}
+                    <span></span>
                   </div>
                   <div style={{ maxHeight:500, overflowY:'auto' }}>
                     {filtered.map((r,i) => {
@@ -651,13 +757,16 @@ export default function HospitalizationTrackerPage() {
                       const outCfg = OUTCOMES.find(o=>o.value===r.outcome);
                       const stCfg  = STAY_TYPE_MAP[r.stay_type || 'inpatient'] || STAY_TYPE_MAP.inpatient;
                       const stShort = { inpatient: 'Inpatient', observation: 'Obs (<24h)', ed_only: 'ED only', unknown: '?' }[r.stay_type || 'inpatient'];
+                      const status = statusOf(r.patient_name);
+                      const statusCfg = STATUS_STYLE[status] || STATUS_STYLE._unknown;
                       return (
-                        <div key={r.id} style={{ display:'grid', gridTemplateColumns:'1.5fr 0.6fr 0.7fr 0.7fr 1fr 1fr 0.7fr 0.7fr auto', padding:'10px 20px', borderBottom:'1px solid var(--border)', background:i%2===0?'var(--card-bg)':'var(--bg)', alignItems:'center', fontSize:12 }}>
+                        <div key={r.id} style={{ display:'grid', gridTemplateColumns:'1.5fr 0.55fr 0.9fr 0.75fr 0.7fr 1fr 0.9fr 0.7fr 0.7fr auto', padding:'10px 20px', borderBottom:'1px solid var(--border)', background:i%2===0?'var(--card-bg)':'var(--bg)', alignItems:'center', fontSize:12 }}>
                           <div>
                             <div style={{ fontWeight:700 }}>{r.patient_name}</div>
                             {r.potentially_preventable && <span style={{ fontSize:9, color:'#D97706', fontWeight:700 }}>⚠ PREVENTABLE</span>}
                           </div>
                           <span>{r.region||'—'}</span>
+                          <Badge label={status || 'unknown'} color={statusCfg.color} bg={statusCfg.bg} />
                           <span style={{ fontFamily:'DM Mono, monospace', fontSize:11 }}>{r.admission_date}</span>
                           <Badge label={stShort} color={stCfg.color} bg={stCfg.bg} />
                           <span style={{ color:'var(--gray)' }}>{r.admitting_diagnosis?.slice(0,35)}{r.admitting_diagnosis?.length>35?'…':''}</span>
