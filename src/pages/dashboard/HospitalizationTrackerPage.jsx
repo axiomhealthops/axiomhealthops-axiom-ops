@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
-import { supabase, fetchAllPages } from '../../lib/supabase';
+import { supabase, fetchAllPages, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
@@ -64,6 +64,14 @@ const OUTCOMES = [
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
+// 2026-06-30 — canonical census-status options for the Edit Hospitalization
+// dropdown. Keep in sync with the Medicare Tracker's PATIENT_STATUS_OPTIONS
+// and with the STATUS_STYLE keys below.
+const PATIENT_STATUS_OPTIONS = [
+  'Active', 'Active - Auth Pending', 'SOC Pending', 'On Hold',
+  'Hospitalized', 'Discharge', 'Non-Admit', 'Waitlist',
+];
+
 // 2026-06-30 — Census-status pill colors. Same palette family as the Medicare
 // Tracker so the status chips feel consistent across pages. Anything not in
 // this map falls back to a neutral gray "unknown" chip.
@@ -125,7 +133,7 @@ const emptyForm = {
   reported_by:'', review_notes:'',
 };
 
-function HospForm({ initial, onClose, onSaved, profile, censusNames }) {
+function HospForm({ initial, onClose, onSaved, profile, censusNames, statusByPatient }) {
   const [form, setForm] = useState(initial ? { ...emptyForm, ...initial,
     admission_date: initial.admission_date||'',
     discharge_date: initial.discharge_date||'',
@@ -136,6 +144,21 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
   const isEdit = !!initial?.id;
+
+  // Census status is stored on census_data, not on the hospitalization row.
+  // Pre-fill it by looking up the current patient in the parent's status Map,
+  // and re-lookup whenever patient_name changes (typing a new name in Log
+  // New mode). initialStatus is the baseline — save() only writes to
+  // census_data if patient_status differs from it.
+  const lookupStatus = (name) => (name ? (statusByPatient?.get((name || '').toLowerCase().trim()) || '') : '');
+  const [patientStatus, setPatientStatus] = useState(() => lookupStatus(form.patient_name));
+  const [initialStatus, setInitialStatus] = useState(() => lookupStatus(form.patient_name));
+  useEffect(() => {
+    const s = lookupStatus(form.patient_name);
+    setPatientStatus(s);
+    setInitialStatus(s);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.patient_name, statusByPatient]);
 
   function set(k, v) { setForm(p => ({...p, [k]: v})); }
 
@@ -155,8 +178,40 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames }) {
     let error;
     if (isEdit) ({ error } = await supabase.from('hospitalizations').update(payload).eq('id', initial.id));
     else ({ error } = await supabase.from('hospitalizations').insert(payload));
+    if (error) { setSaving(false); setErr(error.message); return; }
+
+    // Patient census status — only write if the user changed it. Writes to
+    // census_data by patient_name (the same key the rest of the app joins
+    // on). Non-fatal: if this fails we still consider the hospitalization
+    // save a success and surface the status write separately.
+    if (patientStatus && patientStatus !== initialStatus) {
+      const actor = profile?.full_name || profile?.email || 'Unknown';
+      const { error: statusErr } = await supabase
+        .from('census_data')
+        .update({
+          status: patientStatus,
+          updated_by: actor,
+          status_changed_at: new Date().toISOString(),
+        })
+        .eq('patient_name', form.patient_name);
+      if (statusErr) {
+        setSaving(false);
+        setErr(`Hospitalization saved, but status update failed: ${statusErr.message}`);
+        return;
+      }
+      logActivity({
+        coordinatorId: profile?.id,
+        coordinatorName: profile?.full_name,
+        coordinatorRole: profile?.role,
+        actionType: 'census_status_manual_update',
+        actionDetail: `Changed ${form.patient_name} from ${initialStatus || '(unknown)'} to ${patientStatus} via Hospitalization Tracker`,
+        patientName: form.patient_name,
+        tableName: 'census_data',
+        metadata: { source: 'hospitalization_tracker_edit_form', prev: initialStatus || null, next: patientStatus },
+      });
+    }
+
     setSaving(false);
-    if (error) { setErr(error.message); return; }
     onSaved();
   }
 
@@ -205,6 +260,23 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames }) {
             <F label="Clinician">{input('clinician_name','text','Clinician name')}</F>
             <F label="Visit Frequency at Admission">{sel('visit_frequency_at_admission', [{value:'',label:'Select…'},...FREQUENCIES.map(f=>({value:f,label:f}))])}</F>
             <F label="Last Visit Date">{input('last_visit_date','date')}</F>
+            {/* Patient Status (2026-06-30) — writes to census_data on save.
+                Use this to correct a mislabeled census status (e.g., a
+                Waitlist patient showing as Active). Next Pariox import may
+                overwrite unless the upstream chart is also corrected. */}
+            <F label="Patient Status (census)">
+              <select value={patientStatus}
+                onChange={e => setPatientStatus(e.target.value)}
+                style={{ width:'100%', padding:'8px 10px', border:`1px solid ${patientStatus !== initialStatus ? '#F59E0B' : 'var(--border)'}`, borderRadius:6, fontSize:13, outline:'none', background:'var(--card-bg)' }}>
+                <option value="">- select status -</option>
+                {PATIENT_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              {patientStatus && patientStatus !== initialStatus && (
+                <div style={{ fontSize:10, color:'#B45309', marginTop:4 }}>
+                  Will update census: {initialStatus || '(none)'} {String.fromCharCode(8594)} {patientStatus}
+                </div>
+              )}
+            </F>
           </div>
 
           {/* Admission */}
@@ -842,6 +914,7 @@ export default function HospitalizationTrackerPage() {
           onSaved={() => { setShowForm(false); setEditRecord(null); load(); }}
           profile={profile}
           censusNames={censusNames}
+          statusByPatient={statusByPatient}
         />
       )}
     </div>
