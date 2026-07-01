@@ -131,7 +131,19 @@ const emptyForm = {
   outcome:'still_admitted', returned_to_service: false, return_date:'',
   visit_frequency_at_admission:'', days_since_last_visit:'', last_visit_date:'',
   reported_by:'', review_notes:'',
+  // 2026-06-30: underlying care state at the moment of admission — separate
+  // from census_data.status which reflects the current state. Distinguishes
+  // a hospitalized-Active patient from a hospitalized-Waitlist patient.
+  care_status_at_admission: '',
 };
+
+// Options for the care_status_at_admission dropdown. Same set as
+// PATIENT_STATUS_OPTIONS minus 'Hospitalized' (which is redundant — the
+// patient is already on the hospitalization tracker).
+const CARE_STATUS_OPTIONS = [
+  'Active', 'Active - Auth Pending', 'SOC Pending', 'On Hold',
+  'Discharge', 'Non-Admit', 'Waitlist',
+];
 
 function HospForm({ initial, onClose, onSaved, profile, censusNames, statusByPatient }) {
   const [form, setForm] = useState(initial ? { ...emptyForm, ...initial,
@@ -260,7 +272,18 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames, statusByPat
             <F label="Clinician">{input('clinician_name','text','Clinician name')}</F>
             <F label="Visit Frequency at Admission">{sel('visit_frequency_at_admission', [{value:'',label:'Select…'},...FREQUENCIES.map(f=>({value:f,label:f}))])}</F>
             <F label="Last Visit Date">{input('last_visit_date','date')}</F>
-            {/* Patient Status (2026-06-30) — writes to census_data on save.
+            {/* Care Status at Admission (2026-06-30) — captures the
+                UNDERLYING care state at the moment of admission (Active vs
+                Waitlist vs SOC Pending). Separate from census status
+                because the patient IS hospitalized — we already know that;
+                what we're capturing here is what they WERE care-wise. */}
+            <F label="Care Status at Admission">
+              {sel('care_status_at_admission', [
+                { value:'', label:'- select -' },
+                ...CARE_STATUS_OPTIONS.map(s => ({ value:s, label:s })),
+              ])}
+            </F>
+            {/* Patient Status (census) — writes to census_data on save.
                 Use this to correct a mislabeled census status (e.g., a
                 Waitlist patient showing as Active). Next Pariox import may
                 overwrite unless the upstream chart is also corrected. */}
@@ -838,7 +861,19 @@ export default function HospitalizationTrackerPage() {
                             {r.potentially_preventable && <span style={{ fontSize:9, color:'#D97706', fontWeight:700 }}>⚠ PREVENTABLE</span>}
                           </div>
                           <span>{r.region||'—'}</span>
-                          <Badge label={status || 'unknown'} color={statusCfg.color} bg={statusCfg.bg} />
+                          <div style={{ display:'flex', flexDirection:'column', gap:3, alignItems:'flex-start' }}>
+                            <Badge label={status || 'unknown'} color={statusCfg.color} bg={statusCfg.bg} />
+                            {r.care_status_at_admission && r.care_status_at_admission !== status && (
+                              <span style={{ fontSize:9, color:'var(--gray)' }}>
+                                was {String.fromCharCode(183)}
+                                <span style={{
+                                  fontWeight:700,
+                                  color:(STATUS_STYLE[r.care_status_at_admission]||STATUS_STYLE._unknown).color,
+                                  marginLeft:3,
+                                }}>{r.care_status_at_admission}</span>
+                              </span>
+                            )}
+                          </div>
                           <span style={{ fontFamily:'DM Mono, monospace', fontSize:11 }}>{r.admission_date}</span>
                           <Badge label={stShort} color={stCfg.color} bg={stCfg.bg} />
                           <span style={{ color:'var(--gray)' }}>{r.admitting_diagnosis?.slice(0,35)}{r.admitting_diagnosis?.length>35?'…':''}</span>
