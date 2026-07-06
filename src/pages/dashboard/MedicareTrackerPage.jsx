@@ -900,7 +900,16 @@ export default function MedicareTrackerPage() {
       if (filterStatus !== 'ALL' && f.patient_status !== filterStatus) return false;
       // Bucket filter only applies on the Active view — audit rows aren't
       // bucketed by clinical urgency, they're triaged by Ariel directly.
-      if (view === 'active' && filterBucket !== 'ALL' && bucketOf(f) !== filterBucket) return false;
+      // note_overdue is a special case: bucketOf() is mutually exclusive
+      // (a v>=18 patient with progress_note_due shows as DC SOON / READY DC /
+      // OVER CAP, and a v<10 patient hit by the 30-day timer shows as OK),
+      // but the KPI counts every progress_note_due=true row. Click filter
+      // must match the KPI so all 25 note-due patients are reachable.
+      if (view === 'active' && filterBucket !== 'ALL') {
+        if (filterBucket === 'note_overdue') {
+          if (!f.progress_note_due) return false;
+        } else if (bucketOf(f) !== filterBucket) return false;
+      }
       if (searchQ) {
         const q = searchQ.toLowerCase();
         if (!(f.patient_name || '').toLowerCase().includes(q) &&
