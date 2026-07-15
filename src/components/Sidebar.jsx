@@ -21,8 +21,11 @@ const ALL_SECTIONS = [
   { key: 'MARKETING',           label: 'MARKETING' },
   { key: 'PERFORMANCE',         label: 'PERFORMANCE' },
   // 2026-06-02: New PAYROLL section per docs/Payroll_Review_Design.md (rev 2).
-  // Gated to super_admin + admin (Liam + Carla initially). Sits between
-  // PERFORMANCE and ADMIN so it's reachable without expanding ADMIN.
+  // 2026-07-14: Locked to super_admin only (Liam). The variance/audit layer
+  // inspects Dustin's payroll portal, so admins (Dustin, Carla, Ashley, Randi)
+  // are intentionally excluded until Liam explicitly opens access via User
+  // Management. Section header auto-hides for them because the item filter
+  // below drops sections with zero accessible pages.
   { key: 'PAYROLL',             label: 'PAYROLL' },
   { key: 'ADMIN',               label: 'ADMIN' },
 ];
