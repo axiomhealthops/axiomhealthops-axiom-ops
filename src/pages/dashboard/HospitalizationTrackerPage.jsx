@@ -157,7 +157,7 @@ function HospForm({ initial, onClose, onSaved, onDeleted, profile, censusNames, 
   const [deleting, setDeleting] = useState(false);
   const [err, setErr] = useState('');
   const isEdit = !!initial?.id;
-  const canDelete = ['super_admin','admin','director'].includes(profile?.role);
+  const canDelete = ['super_admin','ceo','admin','pod_leader','assoc_director','director'].includes(profile?.role);
 
   // Census status is stored on census_data, not on the hospitalization row.
   // Pre-fill it by looking up the current patient in the parent's status Map,
@@ -437,7 +437,7 @@ export default function HospitalizationTrackerPage() {
   // shipped in useAssignedRegions. The 'director' role maps to super_admin
   // permissions per CLAUDE.md; added here for consistency.
   const canEdit = ['super_admin','ceo','admin','pod_leader','assoc_director','director'].includes(profile?.role);
-  const canDelete = ['super_admin','admin','director'].includes(profile?.role);
+  const canDelete = ['super_admin','ceo','admin','pod_leader','assoc_director','director'].includes(profile?.role);
 
   const regionScope = useAssignedRegions();
 
