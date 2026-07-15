@@ -145,7 +145,7 @@ const CARE_STATUS_OPTIONS = [
   'Discharge', 'Non-Admit', 'Waitlist',
 ];
 
-function HospForm({ initial, onClose, onSaved, profile, censusNames, statusByPatient }) {
+function HospForm({ initial, onClose, onSaved, onDeleted, profile, censusNames, statusByPatient }) {
   const [form, setForm] = useState(initial ? { ...emptyForm, ...initial,
     admission_date: initial.admission_date||'',
     discharge_date: initial.discharge_date||'',
@@ -154,8 +154,10 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames, statusByPat
     reported_by: initial.reported_by || profile?.full_name || '',
   } : { ...emptyForm, reported_by: profile?.full_name || '' });
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [err, setErr] = useState('');
   const isEdit = !!initial?.id;
+  const canDelete = ['super_admin','admin','director'].includes(profile?.role);
 
   // Census status is stored on census_data, not on the hospitalization row.
   // Pre-fill it by looking up the current patient in the parent's status Map,
@@ -225,6 +227,27 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames, statusByPat
 
     setSaving(false);
     onSaved();
+  }
+
+  async function del() {
+    if (!isEdit || !canDelete) return;
+    const label = `${initial.patient_name || 'this record'} (admitted ${initial.admission_date || 'unknown'})`;
+    if (!window.confirm(`Permanently delete the hospitalization record for ${label}? This removes it from reporting numbers and cannot be undone.`)) return;
+    setDeleting(true); setErr('');
+    const { error } = await supabase.from('hospitalizations').delete().eq('id', initial.id);
+    if (error) { setDeleting(false); setErr(`Delete failed: ${error.message}`); return; }
+    logActivity({
+      coordinatorId: profile?.id,
+      coordinatorName: profile?.full_name,
+      coordinatorRole: profile?.role,
+      actionType: 'hospitalization_delete',
+      actionDetail: `Deleted hospitalization for ${initial.patient_name} (admitted ${initial.admission_date})`,
+      patientName: initial.patient_name,
+      tableName: 'hospitalizations',
+      metadata: { record: initial },
+    });
+    setDeleting(false);
+    (onDeleted || onSaved)();
   }
 
   const input = (k, type='text', placeholder='') => (
@@ -368,12 +391,23 @@ function HospForm({ initial, onClose, onSaved, profile, censusNames, statusByPat
           </div>
         </div>
 
-        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
-          <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
-          <button onClick={save} disabled={saving}
-            style={{ padding:'8px 22px', background:'#DC2626', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor:'pointer' }}>
-            {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Log Hospitalization'}
-          </button>
+        <div style={{ padding:'14px 22px', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, background:'var(--bg)' }}>
+          <div>
+            {isEdit && canDelete && (
+              <button onClick={del} disabled={deleting || saving}
+                title="Admin only — permanently remove this record from reporting"
+                style={{ padding:'8px 16px', background:'var(--card-bg)', color:'#B91C1C', border:'1px solid #FCA5A5', borderRadius:7, fontSize:13, fontWeight:600, cursor: (deleting || saving) ? 'not-allowed' : 'pointer' }}>
+                {deleting ? 'Deleting…' : 'Delete Record'}
+              </button>
+            )}
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={onClose} style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7, fontSize:13, background:'var(--card-bg)', cursor:'pointer' }}>Cancel</button>
+            <button onClick={save} disabled={saving || deleting}
+              style={{ padding:'8px 22px', background:'#DC2626', color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor: (saving || deleting) ? 'not-allowed' : 'pointer' }}>
+              {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Log Hospitalization'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -403,8 +437,28 @@ export default function HospitalizationTrackerPage() {
   // shipped in useAssignedRegions. The 'director' role maps to super_admin
   // permissions per CLAUDE.md; added here for consistency.
   const canEdit = ['super_admin','ceo','admin','pod_leader','assoc_director','director'].includes(profile?.role);
+  const canDelete = ['super_admin','admin','director'].includes(profile?.role);
 
   const regionScope = useAssignedRegions();
+
+  async function deleteRecord(r) {
+    if (!canDelete) return;
+    const label = `${r.patient_name || 'this record'} (admitted ${r.admission_date || 'unknown'})`;
+    if (!window.confirm(`Permanently delete the hospitalization record for ${label}? This removes it from reporting numbers and cannot be undone.`)) return;
+    const { error } = await supabase.from('hospitalizations').delete().eq('id', r.id);
+    if (error) { window.alert(`Delete failed: ${error.message}`); return; }
+    logActivity({
+      coordinatorId: profile?.id,
+      coordinatorName: profile?.full_name,
+      coordinatorRole: profile?.role,
+      actionType: 'hospitalization_delete',
+      actionDetail: `Deleted hospitalization for ${r.patient_name} (admitted ${r.admission_date})`,
+      patientName: r.patient_name,
+      tableName: 'hospitalizations',
+      metadata: { record: r, source: 'inline_row_delete' },
+    });
+    load();
+  }
 
   async function load() {
     if (regionScope.loading) return;
@@ -880,12 +934,21 @@ export default function HospitalizationTrackerPage() {
                           <Badge label={catCfg.label} color={catCfg.color} bg={catCfg.bg} />
                           <span style={{ fontSize:11 }}>{outCfg?.label||r.outcome||'—'}</span>
                           <span style={{ fontSize:11, color:r.returned_to_service?'#065F46':'var(--gray)' }}>{r.returned_to_service?`✅ ${r.return_date||'Yes'}`:'—'}</span>
-                          {canEdit && (
-                            <button onClick={() => { setEditRecord(r); setShowForm(true); }}
-                              style={{ padding:'3px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:11, cursor:'pointer', background:'var(--bg)', color:'var(--gray)' }}>
-                              Edit
-                            </button>
-                          )}
+                          <div style={{ display:'flex', gap:4, justifyContent:'flex-end' }}>
+                            {canEdit && (
+                              <button onClick={() => { setEditRecord(r); setShowForm(true); }}
+                                style={{ padding:'3px 8px', border:'1px solid var(--border)', borderRadius:5, fontSize:11, cursor:'pointer', background:'var(--bg)', color:'var(--gray)' }}>
+                                Edit
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button onClick={() => deleteRecord(r)}
+                                title="Permanently delete this record (removes from reporting)"
+                                style={{ padding:'3px 8px', border:'1px solid #FCA5A5', borderRadius:5, fontSize:11, cursor:'pointer', background:'var(--card-bg)', color:'#B91C1C', fontWeight:600 }}>
+                                Delete
+                              </button>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
@@ -947,6 +1010,7 @@ export default function HospitalizationTrackerPage() {
           initial={editRecord}
           onClose={() => { setShowForm(false); setEditRecord(null); }}
           onSaved={() => { setShowForm(false); setEditRecord(null); load(); }}
+          onDeleted={() => { setShowForm(false); setEditRecord(null); load(); }}
           profile={profile}
           censusNames={censusNames}
           statusByPatient={statusByPatient}
