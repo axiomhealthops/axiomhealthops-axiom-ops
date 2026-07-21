@@ -5,421 +5,323 @@ import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import ManagerScorecards from '../../components/director/ManagerScorecards';
 import ExceptionFeed from '../../components/director/ExceptionFeed';
 import WeekSelector, { readPersistedWeekOffset } from '../../components/WeekSelector';
-// 2026-05-31 CEO redesign — subtractive layout per docs/CEO_Dashboard_Design.md.
-// StateToggle auto-hides until GA has ≥10 active patients; mapping helper
-// folds in marketing_territories so the toggle reflects live data the
-// moment ops adds region letters to Georgia Territory.
 import StateToggle from '../../components/StateToggle';
 import { useStateMapping, getRegionsForState, readPersistedState } from '../../lib/stateMapping';
-import { EXPANSION } from '../../lib/constants';
-// LieutenantSnapshots removed in v2.1 rework — redundant with Manager Scorecards.
-// Carla's scorecard IS her snapshot; Hervylie's scorecard IS his. One source of truth.
-// Visit math from shared module (2026-05-17 refactor)
-import { BLENDED_RATE, WEEKLY_REVENUE_TARGET as REVENUE_TARGET,
-         isCancelled, isAttempted, isMissed, isCompleted, dedupEncounters } from '../../lib/visitMath';
-// 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup. Drops
-// ghost rows that survive in visit_schedule_data when Pariox reassigns a slot
-// across uploads. See src/lib/visitDedup.js for the rationale.
-import { dedupVisitsByLatestUpload } from '../../lib/visitDedup';
+import {
+  BLENDED_RATE,
+  WEEKLY_REVENUE_TARGET as REVENUE_TARGET,
+  WEEKLY_VISIT_TARGET,
+  classifyWeekSlots,
+} from '../../lib/visitMath';
+// 2026-07-21: switched from dedupVisitsByLatestUpload to the authoritative-batch
+// rule. The old rule left 268 phantom slots in the week of Jul 19 (935 vs 667)
+// because Pariox sends full-week snapshots and the per-(patient,date) key can
+// never notice a dropped slot. See src/lib/visitDedup.js.
+import { dedupVisitsByAuthoritativeBatch } from '../../lib/visitDedup';
 import { getWeekRange } from '../../lib/dateUtils';
+import { bucketCensus } from '../../lib/censusStatus';
 
-const WEEKLY_TARGET = 750;
-const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
+// =====================================================================
+// DIRECTOR COMMAND v4 — "Company Pulse" (2026-07-21)
+//
+// Liam's brief: as COO he must read every major bucket and act inside
+// 10-15 seconds. The v3 page failed that on three counts, all fixed here.
+//
+// 1. THE VISIT NUMBER WAS MISLEADING.
+//    v3 showed one tile, "Visits This Week", wired to COMPLETED only, and
+//    compared it against a locally-hardcoded 750. Mid-week that reads
+//    "104 / 750 = 14%" and looks like a collapse. The company had in fact
+//    booked 749 visits for that week. Delivery risk and booking risk are
+//    different problems with different owners, and the page could not
+//    tell them apart. Now four separate widgets: Booked, Completed,
+//    Remaining, Lost.
+//
+// 2. THE TARGET DISAGREED WITH ITSELF.
+//    v3: `const WEEKLY_TARGET = 750` local to this file, while
+//    visitMath.js exported WEEKLY_VISIT_TARGET = 1000. Two pages, two
+//    targets. The local constant is deleted; the shared one is imported.
+//
+// 3. STATUS BUCKETS WERE INVISIBLE OR WRONG.
+//    - No total-census figure existed anywhere on the page.
+//    - /active/i matched "Active - Auth Pendin" too, so Active Census
+//      read 496 here and 473 on the census page.
+//    - Waitlist, Auth Pending, Eval Pending, Hospitalized and the four
+//      On Hold sub-types had no representation at all.
+//    All nine live buckets now render as individual widgets and sum
+//    exactly to the live roster. See src/lib/censusStatus.js.
+//
+// REMOVED (nothing lost — each still lives on its own page):
+//   Triage 5 cards -> the same records, better sorted, on census/auth/pipeline
+//   Path to $200K x2 -> RevenuePage
+//   Expansion Status -> ExpansionPage
+//   Auth Renewals list -> AuthRenewalsPage
+//   Clinician Underutilization list -> ClinicianAccountabilityPage
+//   Region Health table -> RegionsPage / RM dashboards
+// Manager Scorecards + Exception Feed stay, folded into Detail.
+//
+// Dropped queries: waitlist_assignments (census is the source of truth and
+// the two disagreed: 17 vs 44), patient_discharges, intake_referrals and
+// auth_tracker (all three were fetched but never rendered after the v2.1
+// LieutenantSnapshots removal). 13 round-trips -> 8.
+// =====================================================================
 
 function fmt$(n) { return '$' + Math.round(n).toLocaleString(); }
-function fmtDate(d) {
-  if (!d) return '—';
-  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-function daysAgo(d) {
-  if (!d) return null;
-  return Math.floor((new Date() - new Date(d + 'T00:00:00')) / 86400000);
-}
+function fmtN(n) { return (n || 0).toLocaleString(); }
 
-// ── Triage Card ───────────────────────────────────────────────────────────────
-function TriageCard({ rank, title, count, subtitle, color, bg, border, detail, action, actionLabel, urgent }) {
-  const clickable = typeof action === 'function';
-  return (
-    <div
-      onClick={clickable ? action : undefined}
-      role={clickable ? 'button' : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      onKeyDown={clickable ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); } }) : undefined}
-      onMouseEnter={clickable ? (e => { e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.12)'; e.currentTarget.style.transform = 'translateY(-1px)'; }) : undefined}
-      onMouseLeave={clickable ? (e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'translateY(0)'; }) : undefined}
-      style={{
-        background: bg, border: `2px solid ${border || color}`,
-        borderRadius: 12, padding: '16px 18px', position: 'relative', overflow: 'hidden',
-        cursor: clickable ? 'pointer' : 'default',
-        transition: 'transform 0.1s ease, box-shadow 0.15s ease',
-      }}>
-      {urgent && (
-        <div style={{ position:'absolute', top:0, left:0, right:0, height:3, background:`linear-gradient(90deg, ${color}, transparent)` }} />
-      )}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <div style={{ width:22, height:22, borderRadius:'50%', background:color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:900, color:'#fff', flexShrink:0 }}>
-            {rank}
-          </div>
-          <div style={{ fontSize:12, fontWeight:700, color:'#0F1117', lineHeight:1.3 }}>{title}</div>
-        </div>
-        <div style={{ fontSize:28, fontWeight:900, fontFamily:'DM Mono, monospace', color, lineHeight:1 }}>{count}</div>
-      </div>
-      <div style={{ fontSize:11, color:'#6B7280', marginBottom: detail ? 10 : 0 }}>{subtitle}</div>
-      {detail && (
-        <div style={{ fontSize:11, color, fontWeight:600, background:`${color}15`, borderRadius:6, padding:'5px 8px', marginBottom:action?8:0 }}>
-          {detail}
-        </div>
-      )}
-      {action && (
-        <button
-          onClick={(e) => { e.stopPropagation(); action(); }}
-          style={{ fontSize:10, fontWeight:700, color:'#fff', background:color, border:'none', borderRadius:5, padding:'4px 10px', cursor:'pointer', width:'100%', marginTop:4 }}>
-          {actionLabel || 'View →'}
-        </button>
-      )}
-    </div>
-  );
-}
+// Restrained palette. Colour means "a threshold was crossed", never
+// decoration — if every widget is coloured, none of them signal anything.
+const INK = '#0F172A';
+const MUTED = '#64748B';
+const GOOD = '#059669';
+const WARN = '#D97706';
+const BAD = '#DC2626';
+const TEAL = '#06B6D4';
 
-// ── Revenue Gauge ─────────────────────────────────────────────────────────────
-function RevenueGauge({ actual, target }) {
-  const pct = Math.min(100, Math.round((actual / target) * 100));
-  const color = pct >= 80 ? '#059669' : pct >= 60 ? '#D97706' : '#DC2626';
-  const gap = target - actual;
+// ── Delivery band ─────────────────────────────────────────────────────
+// The single most important read on the page: is the week's work booked,
+// and is it being delivered? Booking health and delivery health are shown
+// as two separate bars because they fail independently and get escalated
+// to two different people.
+function DeliveryBand({ slots, target, weekLabel, isPastWeek, wow, capacity }) {
+  // Headline is in SCHEDULING units to match Pariox and the target; revenue
+  // below converts to billable encounters. See classifyWeekSlots.
+  const booked = slots.bookedVisits;
+  const bookedPct = target > 0 ? Math.round((booked / target) * 100) : 0;
+  const resolved = slots.completedVisits + slots.missedVisits + slots.cancelledVisits;
+  const deliveredPct = resolved > 0 ? Math.round((slots.completedVisits / resolved) * 100) : null;
+
+  const bookColor = bookedPct >= 95 ? '#34D399' : bookedPct >= 80 ? '#FBBF24' : '#F87171';
+  const delColor = deliveredPct === null ? 'rgba(255,255,255,0.35)'
+    : deliveredPct >= 92 ? '#34D399' : deliveredPct >= 85 ? '#FBBF24' : '#F87171';
+
+  // Revenue uses ENCOUNTERS, not visits — a co-treat bills once. Multiplying
+  // `booked` (a visit count) by BLENDED_RATE would overstate by ~12%.
+  const bookedRevenue = slots.booked * BLENDED_RATE;
+  const bookedRevPct = Math.round((bookedRevenue / REVENUE_TARGET) * 100);
+  const lost = slots.missedVisits + slots.cancelledVisits;
+  const lostRevenue = (slots.missed + slots.cancelled) * BLENDED_RATE;
+
   return (
-    <div style={{ background:'#0F1117', borderRadius:12, padding:'18px 20px', color:'#fff' }}>
-      <div style={{ fontSize:11, fontWeight:700, color:'rgba(255,255,255,0.5)', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:4 }}>
-        Weekly Revenue Pace
+    <div style={{ background: INK, borderRadius: 14, padding: '20px 24px', color: '#fff' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+          Visit Delivery {'·'} {weekLabel}
+        </div>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>
+          Clinician capacity {fmtN(capacity)} visits/wk
+        </div>
       </div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', marginBottom:12 }}>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
+        {/* Booking health */}
         <div>
-          <div style={{ fontSize:36, fontWeight:900, fontFamily:'DM Mono, monospace', color, lineHeight:1 }}>{fmt$(actual)}</div>
-          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:2 }}>of {fmt$(target)} target</div>
-        </div>
-        <div style={{ textAlign:'right' }}>
-          <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', color }}>{pct}%</div>
-          <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)' }}>to target</div>
-        </div>
-      </div>
-      <div style={{ background:'rgba(255,255,255,0.1)', borderRadius:999, height:8, marginBottom:10 }}>
-        <div style={{ width:`${pct}%`, height:'100%', background:color, borderRadius:999, transition:'width 0.8s ease' }} />
-      </div>
-      <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'rgba(255,255,255,0.4)' }}>
-        <span>Gap to target: <span style={{ color:'#FBBF24', fontWeight:700 }}>{fmt$(gap)}</span></span>
-        <span>{fmt$(target)} = {Math.ceil(target / BLENDED_RATE)} visits/wk @ ${BLENDED_RATE}/visit</span>
-      </div>
-    </div>
-  );
-}
-
-// ── Region Heat Row ───────────────────────────────────────────────────────────
-function RegionRow({ region, active, inactiveActive, onHold, pending, completedVisits, revenueGap }) {
-  const activityRate = active > 0 ? Math.round(((active - inactiveActive) / active) * 100) : 0;
-  const barColor = activityRate >= 80 ? '#059669' : activityRate >= 60 ? '#D97706' : '#DC2626';
-  return (
-    <div style={{ display:'grid', gridTemplateColumns:'0.5fr 0.7fr 1.2fr 0.7fr 0.7fr 0.7fr 0.9fr', padding:'9px 16px', borderBottom:'1px solid var(--border)', alignItems:'center', gap:8, background:'var(--card-bg)' }}
-      onMouseEnter={e => e.currentTarget.style.background='#F8F9FF'}
-      onMouseLeave={e => e.currentTarget.style.background='var(--card-bg)'}>
-      <div style={{ fontSize:13, fontWeight:800, color:'#0F1117' }}>Rgn {region}</div>
-      <div style={{ fontSize:14, fontWeight:700, fontFamily:'DM Mono, monospace' }}>{active}</div>
-      <div>
-        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <div style={{ flex:1, height:6, background:'#E5E7EB', borderRadius:999 }}>
-            <div style={{ width:`${activityRate}%`, height:'100%', background:barColor, borderRadius:999 }} />
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 52, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: bookColor, lineHeight: 1 }}>
+              {fmtN(booked)}
+            </div>
+            <div style={{ fontSize: 16, color: 'rgba(255,255,255,0.45)', fontWeight: 600 }}>
+              booked of {fmtN(target)}
+            </div>
+            <div style={{ padding: '3px 9px', background: bookColor + '22', color: bookColor, borderRadius: 6, fontSize: 13, fontWeight: 800, fontFamily: 'DM Mono, monospace' }}>
+              {bookedPct}%
+            </div>
           </div>
-          <span style={{ fontSize:11, fontWeight:700, color:barColor, minWidth:28 }}>{activityRate}%</span>
+          <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 999, height: 8, marginTop: 12, overflow: 'hidden' }}>
+            <div style={{ width: Math.min(100, bookedPct) + '%', height: '100%', background: bookColor, borderRadius: 999, transition: 'width 0.8s ease' }} />
+          </div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 8 }}>
+            Worth <strong style={{ color: '#fff' }}>{fmt$(bookedRevenue)}</strong> if fully delivered
+            {' '}({bookedRevPct}% of the {fmt$(REVENUE_TARGET)} target)
+          </div>
         </div>
-        {inactiveActive > 0 && <div style={{ fontSize:9, color:'#DC2626', marginTop:2 }}>{inactiveActive} overdue vs freq</div>}
-      </div>
-      <div style={{ fontSize:13, fontWeight:inactiveActive>10?700:400, color:inactiveActive>10?'#DC2626':'var(--gray)' }}>{inactiveActive}</div>
-      <div style={{ fontSize:13, color:'var(--gray)' }}>{onHold}</div>
-      <div style={{ fontSize:13, color:'var(--gray)' }}>{pending}</div>
-      <div style={{ fontSize:11, fontWeight:700, color:revenueGap>5000?'#DC2626':revenueGap>2000?'#D97706':'#059669' }}>
-        {revenueGap > 0 ? `-${fmt$(revenueGap)}/wk` : '✓ Active'}
-      </div>
-    </div>
-  );
-}
 
-// ── Hero Band (Director Command v2.1 rework) ─────────────────────────────────
-// The hero band is the only thing Liam sees in the first 5 seconds of his
-// daily standup. Per his explicit answer (2026-05-16):
-//   "Are we hitting revenue this week?" is THE question this page must answer.
-// So we lead with a massive revenue number, the ops score beside it, and one
-// declarative summary sentence with the today's-action counts baked in.
-//
-// 2026-05-31: added wow prop for week-over-week delta indicator.
-function HeroBand({ weeklyRevenue, target, score, scoreColor, p1Count, redManagerCount, daysLeftInWeek, pathTiles, wow, isPastWeek }) {
-  const pct = Math.min(100, Math.round((weeklyRevenue / target) * 100));
-  const gap = Math.max(0, target - weeklyRevenue);
-  const paceColor = pct >= 80 ? '#34D399' : pct >= 60 ? '#FBBF24' : '#F87171';
-
-  return (
-    <div style={{ background: '#0F1117', borderRadius: 14, padding: '20px 24px', color: '#fff' }}>
-      {/* Headline strip: revenue mega-number + ops score */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 24, alignItems: 'center', marginBottom: 16 }}>
+        {/* Delivery health */}
         <div>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
-            Weekly Revenue Pace
-          </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 56, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: paceColor, lineHeight: 1 }}>
-              {fmt$(weeklyRevenue)}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 52, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: delColor, lineHeight: 1 }}>
+              {deliveredPct === null ? '--' : deliveredPct + '%'}
             </div>
-            <div style={{ fontSize: 18, color: 'rgba(255,255,255,0.45)', fontWeight: 600 }}>
-              of {fmt$(target)} target
+            <div style={{ fontSize: 16, color: 'rgba(255,255,255,0.45)', fontWeight: 600 }}>
+              delivered
             </div>
-            <div style={{
-              padding: '4px 10px', background: paceColor + '22', color: paceColor,
-              borderRadius: 6, fontSize: 14, fontWeight: 800, fontFamily: 'DM Mono, monospace',
-            }}>
-              {pct}%
-            </div>
-            {/* Week-over-week revenue delta — added 2026-05-31. Hidden if no prior data. */}
-            {wow && wow.revenue > 0 && (() => {
-              const delta = weeklyRevenue - wow.revenue;
-              const pctDelta = wow.revenue > 0 ? Math.round((delta / wow.revenue) * 100) : 0;
-              const up = delta >= 0;
-              const dColor = up ? '#34D399' : '#F87171';
+            {wow && wow.deliveredPct !== null && deliveredPct !== null && (() => {
+              const d = deliveredPct - wow.deliveredPct;
+              const up = d >= 0;
+              const c = up ? '#34D399' : '#F87171';
               return (
-                <div title={'vs ' + wow.label + ': ' + fmt$(wow.revenue)} style={{
-                  padding: '4px 10px', background: dColor + '22', color: dColor,
-                  borderRadius: 6, fontSize: 13, fontWeight: 800, fontFamily: 'DM Mono, monospace',
-                }}>
-                  {up ? '▲' : '▼'} {fmt$(Math.abs(delta))} ({up ? '+' : ''}{pctDelta}%) vs prior
+                <div title={'vs ' + wow.label} style={{ padding: '3px 9px', background: c + '22', color: c, borderRadius: 6, fontSize: 12, fontWeight: 800, fontFamily: 'DM Mono, monospace' }}>
+                  {up ? '+' : ''}{d} pts vs prior
                 </div>
               );
             })()}
           </div>
-          {/* Progress bar */}
-          <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 999, height: 10, marginTop: 14, overflow: 'hidden' }}>
-            <div style={{ width: pct + '%', height: '100%', background: paceColor, borderRadius: 999, transition: 'width 0.8s ease' }} />
+          <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 999, height: 8, marginTop: 12, overflow: 'hidden' }}>
+            <div style={{ width: (deliveredPct === null ? 0 : deliveredPct) + '%', height: '100%', background: delColor, borderRadius: 999, transition: 'width 0.8s ease' }} />
           </div>
-        </div>
-        <div style={{
-          padding: '14px 22px', background: 'rgba(255,255,255,0.05)', borderRadius: 10,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 130,
-          border: '1px solid rgba(255,255,255,0.08)',
-        }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Ops Score
-          </div>
-          <div style={{ fontSize: 44, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: scoreColor, lineHeight: 1, marginTop: 4 }}>
-            {score}
-          </div>
-          <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)' }}>/ 100</div>
-          <div style={{ fontSize: 9, color: scoreColor, marginTop: 4, fontWeight: 700 }}>
-            {score >= 80 ? 'STRONG' : score >= 60 ? 'NEEDS WORK' : 'CRITICAL'}
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 8 }}>
+            {fmtN(slots.completedVisits)} completed of {fmtN(resolved)} resolved so far
+            {lost > 0 && (
+              <> {'·'} <strong style={{ color: '#F87171' }}>{fmtN(lost)} lost</strong> ({fmt$(lostRevenue)})</>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Headline summary sentence — Liam's 5-second read.
-          2026-05-31: when viewing a past week, swap "on pace for" / "days left
-          in week" framing to a final-result framing — those phrases imply a
-          live week and would mislead on historical reads. */}
-      <div style={{
-        padding: '12px 16px', background: 'rgba(255,255,255,0.04)', borderRadius: 8,
-        fontSize: 13, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5, marginBottom: 16,
-        border: '1px solid rgba(255,255,255,0.06)',
-      }}>
-        {pct >= 80 ? '✓ ' : pct >= 60 ? '⚠ ' : '✗ '}
-        {isPastWeek ? (
+      {/* One-sentence read. Booking and delivery are diagnosed separately
+          so the sentence names the actual failing system, not just a colour. */}
+      <div style={{ marginTop: 16, padding: '11px 15px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, fontSize: 13, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
+        {bookedPct < 90 ? (
           <>
-            <strong style={{ color: paceColor }}>Finished at {fmt$(weeklyRevenue)}</strong> of {fmt$(target)} target
-            {gap > 0 && <span style={{ color: 'rgba(255,255,255,0.55)' }}> (gap {fmt$(gap)})</span>}
+            <strong style={{ color: '#F87171' }}>Booking gap.</strong> {fmtN(Math.max(0, target - booked))} visits short of a full week
+            {' '}(about {fmt$(Math.max(0, target - booked) * BLENDED_RATE)}). Scheduling and assignment own this, not the clinicians.
+          </>
+        ) : deliveredPct !== null && deliveredPct < 88 ? (
+          <>
+            <strong style={{ color: '#FBBF24' }}>Delivery gap.</strong> The week is booked at {bookedPct}%, but {100 - deliveredPct}% of
+            {' '}resolved slots fell out ({fmtN(lost)} visits, {fmt$(lostRevenue)}). This is a clinician and same-day-recovery problem.
           </>
         ) : (
           <>
-            <strong style={{ color: paceColor }}>On pace for {fmt$(weeklyRevenue)}</strong> of {fmt$(target)} this week
-            {gap > 0 && <span style={{ color: 'rgba(255,255,255,0.55)' }}> (gap {fmt$(gap)})</span>}
+            <strong style={{ color: '#34D399' }}>On track.</strong> {bookedPct}% booked, {deliveredPct === null ? 'no' : deliveredPct + '%'} delivered
+            {isPastWeek ? ' for the week.' : '. Remaining risk is the ' + fmtN(slots.scheduledVisits) + ' visits still to run.'}
           </>
         )}
-        {' · '}
-        {p1Count > 0 ? (
-          <><strong style={{ color: '#F87171' }}>{p1Count} P1 {p1Count === 1 ? 'issue' : 'issues'}</strong> need your eyes</>
-        ) : (
-          <span style={{ color: '#34D399' }}>no P1 issues</span>
-        )}
-        {' · '}
-        {redManagerCount > 0 ? (
-          <><strong style={{ color: '#F87171' }}>{redManagerCount} {redManagerCount === 1 ? 'manager' : 'managers'} in red</strong></>
-        ) : (
-          <span style={{ color: '#34D399' }}>all managers green/amber</span>
-        )}
-        {!isPastWeek && (
-          <>
-            {' · '}
-            <span style={{ color: 'rgba(255,255,255,0.5)' }}>{daysLeftInWeek} days left in week</span>
-          </>
-        )}
-      </div>
-
-      {/* Path to $200K — supporting context for the headline */}
-      <div>
-        <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
-          Path to {fmt$(target)}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-          {pathTiles.map(function(item) {
-            return (
-              <div key={item.label} style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '10px 12px' }}>
-                <div style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
-                  {item.label}
-                </div>
-                <div style={{ fontSize: 20, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: item.color, lineHeight: 1 }}>
-                  {item.val}
-                </div>
-                <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>
-                  {item.sub}
-                </div>
-              </div>
-            );
-          })}
-        </div>
       </div>
     </div>
   );
 }
 
-// ── CEO KPI Strip (2026-05-31 redesign) ──────────────────────────────────────
-// Five tiles below the hero. Every tile is clickable and shows a WoW delta
-// where the data honestly supports one. Where it doesn't (point-in-time
-// snapshots like census, no historical version of derived stalled counts),
-// we show contextual info instead of fabricating a delta.
-function CeoKpiTile({ label, value, sub, deltaText, deltaDirection, onClick, color = '#0F1117', accent }) {
+// ── Unresolved-slot warning ───────────────────────────────────────────
+// RETRACTION (2026-07-21, same day): an earlier version of this component
+// claimed ~30% of booked slots never resolved from the week of Jun 7
+// onward, and framed it as a Pariox feed regression worth ~$68K/week.
+// That was wrong. It was an artifact of dedupVisitsByLatestUpload leaving
+// stale slots alive when a full-week Pariox snapshot dropped them. Under
+// dedupVisitsByAuthoritativeBatch every finished week from May 24 to
+// Jul 12 resolves to 0-2 unresolved slots. There is no feed regression.
+//
+// The component is kept because the underlying check is still worth
+// running — a finished week SHOULD be fully resolved, and if that stops
+// being true we want to see it. It simply no longer fires on our own bug.
+// Threshold raised to 15% so normal end-of-week lag stays quiet.
+function UnresolvedWarning({ prev, weekLabel }) {
+  if (!prev || prev.booked === 0) return null;
+  const pct = Math.round((prev.scheduled / prev.booked) * 100);
+  if (pct < 15) return null;
+  return (
+    <div style={{ background: '#FFFBEB', border: `1px solid ${WARN}`, borderRadius: 10, padding: '12px 16px', display: 'flex', gap: 14, alignItems: 'baseline', flexWrap: 'wrap' }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: '#92400E', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        Data integrity
+      </div>
+      <div style={{ fontSize: 12, color: '#78350F', lineHeight: 1.5, flex: 1, minWidth: 260 }}>
+        <strong>{fmtN(prev.scheduled)} of {fmtN(prev.booked)} slots ({pct}%) from {weekLabel} are still marked Scheduled</strong>
+        {' '}with no outcome posted. That week is over, so these are either delivered visits Pariox never
+        {' '}closed out ({fmt$(prev.scheduled * BLENDED_RATE)} of unrecognized revenue) or visits that
+        {' '}never happened and were never marked. Worth asking whoever owns the Pariox export.
+      </div>
+    </div>
+  );
+}
+
+// ── Metric widget ─────────────────────────────────────────────────────
+// Used for both the visit row and the census row. One number, one owner,
+// one risk line, one click. Nothing else earns the space.
+function Widget({ label, value, sub, risk, owner, accent, tone, onClick, size = 'md' }) {
   const clickable = typeof onClick === 'function';
+  const valueColor = tone === 'bad' ? BAD : tone === 'warn' ? WARN : tone === 'good' ? GOOD : INK;
   return (
     <div
       onClick={clickable ? onClick : undefined}
       role={clickable ? 'button' : undefined}
       tabIndex={clickable ? 0 : undefined}
       onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
-      onMouseEnter={clickable ? (e) => { e.currentTarget.style.boxShadow = '0 4px 14px rgba(0,0,0,0.10)'; e.currentTarget.style.transform = 'translateY(-1px)'; } : undefined}
+      onMouseEnter={clickable ? (e) => { e.currentTarget.style.boxShadow = '0 4px 14px rgba(15,23,42,0.10)'; e.currentTarget.style.transform = 'translateY(-1px)'; } : undefined}
       onMouseLeave={clickable ? (e) => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'translateY(0)'; } : undefined}
       style={{
         background: 'var(--card-bg)',
         border: '1px solid var(--border)',
         borderRadius: 12,
-        padding: '14px 16px',
+        padding: size === 'lg' ? '18px 20px' : '14px 16px',
         cursor: clickable ? 'pointer' : 'default',
         transition: 'transform 0.1s ease, box-shadow 0.15s ease',
         position: 'relative',
         overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      {accent && (
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: accent }} />
-      )}
-      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+      {accent && <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 3, background: accent }} />}
+      <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
         {label}
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 30, fontWeight: 900, fontFamily: 'DM Mono, monospace', color, lineHeight: 1 }}>
-          {value}
-        </div>
-        {deltaText && (
-          <div style={{
-            padding: '2px 8px',
-            background: deltaDirection === 'up' ? '#ECFDF5' : deltaDirection === 'down' ? '#FEF2F2' : '#F3F4F6',
-            color: deltaDirection === 'up' ? '#059669' : deltaDirection === 'down' ? '#DC2626' : '#6B7280',
-            borderRadius: 5,
-            fontSize: 11,
-            fontWeight: 800,
-            fontFamily: 'DM Mono, monospace',
-          }}>
-            {deltaDirection === 'up' ? '▲ ' : deltaDirection === 'down' ? '▼ ' : ''}{deltaText}
-          </div>
-        )}
+      <div style={{ fontSize: size === 'lg' ? 40 : 30, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: valueColor, lineHeight: 1 }}>
+        {value}
       </div>
-      {sub && (
-        <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 6 }}>{sub}</div>
+      {sub && <div style={{ fontSize: 11, color: MUTED, marginTop: 6, lineHeight: 1.4 }}>{sub}</div>}
+      {risk && (
+        <div style={{ fontSize: 11, fontWeight: 700, color: BAD, background: '#FEF2F2', borderRadius: 5, padding: '4px 7px', marginTop: 8, lineHeight: 1.3 }}>
+          {risk}
+        </div>
       )}
-      {clickable && (
-        <div style={{ fontSize: 10, color: color, marginTop: 8, fontWeight: 600, opacity: 0.7 }}>open →</div>
+      {owner && (
+        <div style={{ fontSize: 10, color: MUTED, marginTop: 'auto', paddingTop: 8, fontWeight: 600 }}>
+          {owner}
+        </div>
       )}
     </div>
   );
 }
 
-// ── Needs You Today (2026-05-31) ─────────────────────────────────────────────
-// Top 5 ranked action items — replaces the "scroll-and-hunt" exception feed
-// at the top-of-page. Each row: 1 line, 1 action button. Hard-capped at 5.
+// ── Section heading ───────────────────────────────────────────────────
+function SectionHead({ title, note }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: INK, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{title}</div>
+      {note && <div style={{ fontSize: 11, color: MUTED }}>{note}</div>}
+    </div>
+  );
+}
+
+// ── Needs You Today ───────────────────────────────────────────────────
+// Carried over from v3 largely intact — it was the one part of the page
+// that already answered "what do I do now". Hard cap of 5 retained.
 function NeedsYouToday({ items, onAction }) {
   const top5 = (items || []).slice(0, 5);
   return (
-    <div style={{
-      background: 'var(--card-bg)',
-      border: '1px solid var(--border)',
-      borderRadius: 12,
-      overflow: 'hidden',
-    }}>
-      <div style={{
-        padding: '12px 16px',
-        borderBottom: '1px solid var(--border)',
-        background: '#FFF5F0',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-      }}>
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: '#F8FAFC', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
-            background: '#DC2626', color: '#fff', borderRadius: 5,
-            padding: '2px 8px', fontSize: 10, fontWeight: 800, letterSpacing: '0.05em',
-          }}>FOCUS</span>
-          <span style={{ fontSize: 13, fontWeight: 800, color: '#0F1117' }}>Needs you today</span>
+          <span style={{ background: BAD, color: '#fff', borderRadius: 5, padding: '2px 8px', fontSize: 10, fontWeight: 800, letterSpacing: '0.05em' }}>FOCUS</span>
+          <span style={{ fontSize: 13, fontWeight: 800, color: INK }}>Needs you today</span>
         </div>
-        <span style={{ fontSize: 11, color: 'var(--gray)' }}>
-          {top5.length === 0 ? 'nothing critical — green across the board' : `top ${top5.length} of ${items.length} open`}
+        <span style={{ fontSize: 11, color: MUTED }}>
+          {top5.length === 0 ? 'nothing critical' : `top ${top5.length} of ${items.length} open`}
         </span>
       </div>
       {top5.length === 0 ? (
-        <div style={{ padding: '20px 16px', textAlign: 'center', color: '#059669', fontSize: 13, fontWeight: 600 }}>
-          ✓ No critical issues. Spend the morning on growth, not triage.
+        <div style={{ padding: '20px 16px', textAlign: 'center', color: GOOD, fontSize: 13, fontWeight: 600 }}>
+          No critical issues. Spend the morning on growth, not triage.
         </div>
       ) : (
         <div>
           {top5.map(function (it, i) {
             const sev = it.severity || 'medium';
-            const sevColor = sev === 'p1' ? '#DC2626' : sev === 'high' ? '#D97706' : '#1565C0';
+            const sevColor = sev === 'p1' ? BAD : sev === 'high' ? WARN : '#0EA5E9';
             const sevBg = sev === 'p1' ? '#FEF2F2' : sev === 'high' ? '#FEF3C7' : '#EFF6FF';
             return (
-              <div key={i} style={{
-                display: 'grid',
-                gridTemplateColumns: 'auto 1fr auto',
-                gap: 12,
-                padding: '11px 16px',
-                borderBottom: i < top5.length - 1 ? '1px solid var(--border)' : 'none',
-                alignItems: 'center',
-              }}>
-                <span style={{
-                  background: sevBg, color: sevColor,
-                  padding: '3px 8px', borderRadius: 999,
-                  fontSize: 10, fontWeight: 800, letterSpacing: '0.05em',
-                  textTransform: 'uppercase', minWidth: 30, textAlign: 'center',
-                }}>
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 12, padding: '11px 16px', borderBottom: i < top5.length - 1 ? '1px solid var(--border)' : 'none', alignItems: 'center' }}>
+                <span style={{ background: sevBg, color: sevColor, padding: '3px 8px', borderRadius: 999, fontSize: 10, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', minWidth: 30, textAlign: 'center' }}>
                   {sev}
                 </span>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#0F1117', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {it.title}
-                  </div>
-                  {it.detail && (
-                    <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 1 }}>{it.detail}</div>
-                  )}
+                  <div style={{ fontSize: 13, fontWeight: 600, color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</div>
+                  {it.detail && <div style={{ fontSize: 11, color: MUTED, marginTop: 1 }}>{it.detail}</div>}
                 </div>
                 {it.actionLabel && (
                   <button
                     type="button"
                     onClick={function () { if (typeof onAction === 'function') onAction(it); }}
-                    style={{
-                      padding: '6px 12px',
-                      background: '#0F1117', color: '#fff',
-                      border: 'none', borderRadius: 6,
-                      fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
+                    style={{ padding: '6px 12px', background: INK, color: '#fff', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
                   >
                     {it.actionLabel}
                   </button>
@@ -433,1004 +335,442 @@ function NeedsYouToday({ items, onAction }) {
   );
 }
 
-// ── Expansion Status tile (2026-05-31) ───────────────────────────────────────
-// Shows Georgia (and any future state) credentialing/staffing progress as
-// executive context. Lives in the Detail block so the CEO sees expansion
-// momentum without an empty toggle tab. Source: src/lib/constants.js EXPANSION.
-function ExpansionStatus({ territories }) {
-  // Group: how many territories per state? GA might have multiple over time.
-  const territoryByState = useMemo(function () {
-    const out = {};
-    (territories || []).forEach(function (t) {
-      if (!out[t.state]) out[t.state] = [];
-      out[t.state].push(t);
-    });
-    return out;
-  }, [territories]);
-  return (
-    <div style={{
-      background: 'var(--card-bg)',
-      border: '1px solid var(--border)',
-      borderRadius: 12,
-      overflow: 'hidden',
-    }}>
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: 13, fontWeight: 800 }}>📍 Expansion Status</div>
-        <div style={{ fontSize: 11, color: 'var(--gray)' }}>credentialing · staffing · first-patient target</div>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', padding: 16, gap: 12 }}>
-        {EXPANSION.map(function (e) {
-          const ts = territoryByState[e.state === 'Georgia' ? 'GA' : e.state.slice(0,2).toUpperCase()] || [];
-          const credColor = e.credentialing >= 80 ? '#059669' : e.credentialing >= 50 ? '#D97706' : '#DC2626';
-          return (
-            <div key={e.state} style={{ background: 'var(--bg)', borderRadius: 10, padding: '12px 14px', border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: '#0F1117' }}>{e.state}</div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gray)', textTransform: 'uppercase' }}>{e.status}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 8 }}>
-                <div style={{ fontSize: 22, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: credColor, lineHeight: 1 }}>
-                  {e.credentialing}%
-                </div>
-                <div style={{ fontSize: 10, color: 'var(--gray)' }}>credentialed</div>
-              </div>
-              <div style={{ background: 'var(--border)', borderRadius: 999, height: 5, marginBottom: 8 }}>
-                <div style={{ width: `${e.credentialing}%`, height: '100%', background: credColor, borderRadius: 999 }} />
-              </div>
-              <div style={{ fontSize: 11, color: '#0F1117' }}>
-                <span style={{ fontWeight: 700 }}>{e.staffHired}</span> staff hired
-                {' · '}
-                <span style={{ color: 'var(--gray)' }}>target {e.target}</span>
-              </div>
-              {ts.length > 0 && (
-                <div style={{ fontSize: 10, color: 'var(--gray)', marginTop: 6 }}>
-                  {ts.length} territor{ts.length === 1 ? 'y' : 'ies'}: {ts.map(function (t) { return t.name; }).join(', ')}
-                  {' · '}
-                  {ts.reduce(function (s, t) { return s + ((t.legacy_region_letters || []).length); }, 0)} region letters mapped
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Main Dashboard ────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────
 export default function DirectorDashboard({ onNavigate }) {
   const go = (page, intent) => { if (typeof onNavigate === 'function') onNavigate(page, intent); };
   const [loading, setLoading] = useState(true);
   const [census, setCensus] = useState([]);
   const [visits, setVisits] = useState([]);
-  const [prevVisits, setPrevVisits] = useState([]); // 2026-05-31: prior-week visits for WoW deltas
+  const [prevVisits, setPrevVisits] = useState([]);
   const [authRenewals, setAuthRenewals] = useState([]);
-  const [onHold, setOnHold] = useState([]);
-  const [waitlist, setWaitlist] = useState([]);
+  const [onHoldRecovery, setOnHoldRecovery] = useState([]);
   const [clinicians, setClinicians] = useState([]);
-  const [discharges, setDischarges] = useState([]);
-  // Added for Manager Accountability layer (Director Command v2):
-  //   - coordinators: org tree → who maps to which scorecard row
-  //   - statusLog: not strictly required by current scorecard logic but
-  //     wired through so we can add trend math without another fetch round
-  //   - activityLog: powers response-latency + inactive-coordinator alerts
-  //   - intakeReferrals + auths: feed Carla's Lieutenant Snapshot
   const [coordinators, setCoordinators] = useState([]);
   const [statusLog, setStatusLog] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
-  const [intakeReferrals, setIntakeReferrals] = useState([]);
-  const [auths, setAuths] = useState([]);
   const [lastRefresh, setLastRefresh] = useState(null);
 
-  // 2026-05-31: week-toggle state. Lazy init reads localStorage so refreshing
-  // the page doesn't reset to "this week" if Liam was investigating a past week.
-  const [weekOffset, setWeekOffset] = useState(function() {
+  const [weekOffset, setWeekOffset] = useState(function () {
     return readPersistedWeekOffset('directorCommand');
   });
-
-  // 2026-05-31 CEO redesign: state filter (ALL/FL/GA). The toggle UI
-  // auto-hides until GA has ≥10 active patients (see StateToggle), but the
-  // filter value is wired through every query unconditionally so the
-  // plumbing is in place. Default 'ALL' matches the pre-redesign behavior.
-  const [stateFilter, setStateFilter] = useState(function() {
+  const [stateFilter, setStateFilter] = useState(function () {
     return readPersistedState('directorCommand', 'ALL');
   });
 
-  // marketing_territories → region letter mapping. Live, with a static fallback
-  // so the page never blocks on this fetch. See src/lib/stateMapping.js.
   const mapping = useStateMapping();
-
-  // Active region letters for the current state filter. When ALL, this is the
-  // full canonical region set. When FL/GA, it's the per-state list pulled from
-  // marketing_territories. We thread this list into every server query that
-  // supports a region filter, narrowing the result set at the database edge
-  // instead of fetching all rows and discarding them client-side.
-  const activeRegions = useMemo(function() {
+  const activeRegions = useMemo(function () {
     return getRegionsForState(stateFilter, mapping.stateToRegions);
   }, [stateFilter, mapping.stateToRegions]);
 
   const load = useCallback(async () => {
-    // 2026-05-17: Work week is SUN-SAT per Liam. Uses canonical getWeekRange
-    // helper so this never drifts from other dashboards.
-    // 2026-05-31: now driven by weekOffset so the page reactively re-queries
-    // when Liam toggles weeks. Prior-week range pulled in parallel for WoW deltas.
     const wk = getWeekRange(new Date(), weekOffset);
-    const weekStartStr = wk.startStr;
-    const weekEndStr = wk.endStr;
     const prevWk = getWeekRange(new Date(), weekOffset + 1);
-    const prevWeekStartStr = prevWk.startStr;
-    const prevWeekEndStr = prevWk.endStr;
-
-    // 30-day window for status_log (powers sparkline trend math without
-    // pulling all 4K+ historical transitions).
     const thirtyDaysAgoIso = new Date(Date.now() - 30 * 86400000).toISOString();
-    // 7-day window for activity_log — sufficient for response-latency
-    // proxy and "inactive coordinator" detection on the Director view.
     const sevenDaysAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
-    const thirtyDaysAgoDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 
-    // 2026-05-31 CEO redesign: wire state filter to every region-keyed query.
-    // applyRegion narrows the .in('region', activeRegions) clause when a
-    // state is selected; for 'ALL' it returns the unmodified query so the
-    // pre-redesign behavior is preserved exactly.
     const isFiltered = stateFilter && stateFilter !== 'ALL' && activeRegions && activeRegions.length > 0;
     const applyRegion = function (q) { return isFiltered ? q.in('region', activeRegions) : q; };
-    // patient_discharges has no region column today — left unfiltered. If a
-    // future migration adds region, wrap this query too.
-    // coordinators is filtered by overlap (any of their assigned regions
-    // intersects the active state's letters). For ALL we keep everyone.
-    const applyCoords = function (q) {
-      if (!isFiltered) return q;
-      // Postgres array-overlap operator '&&' via .overlaps()
-      return q.overlaps('regions', activeRegions);
-    };
+    const applyCoords = function (q) { return isFiltered ? q.overlaps('regions', activeRegions) : q; };
 
-    // All paginated — census (750+), visits this week (800+), and auth
-    // tables are each capable of exceeding the 1000-row PostgREST cap.
-    const [c, v, pv, ar, oh, wl, cl, dc, co, sl, al, ir, au] = await Promise.all([
+    const [c, v, pv, ar, oh, cl, co, sl, al] = await Promise.all([
       fetchAllPages(applyRegion(supabase.from('census_data').select('patient_name,region,status,insurance,last_visit_date,days_since_last_visit,first_seen_date,inferred_frequency,overdue_threshold_days,days_overdue,status_changed_at,pipeline_assigned_to'))),
-      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,uploaded_at').gte('visit_date', weekStartStr).lte('visit_date', weekEndStr))),
-      // Prior-week visits — for week-over-week delta indicators on KPI tiles.
-      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,uploaded_at').gte('visit_date', prevWeekStartStr).lte('visit_date', prevWeekEndStr))),
+      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,uploaded_at').gte('visit_date', wk.startStr).lte('visit_date', wk.endStr))),
+      fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,uploaded_at').gte('visit_date', prevWk.startStr).lte('visit_date', prevWk.endStr))),
       fetchAllPages(applyRegion(supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")'))),
       fetchAllPages(applyRegion(supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold'))),
-      fetchAllPages(applyRegion(supabase.from('waitlist_assignments').select('patient_name,region,assignment_status,assigned_clinician,waitlisted_since,priority'))),
       fetchAllPages(applyRegion(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active').eq('is_active', true))),
-      // patient_discharges: no region column — load unfiltered. If a future
-      // migration adds region, wrap with applyRegion.
-      fetchAllPages(supabase.from('patient_discharges').select('patient_name,discharge_date,followup_30day_required,followup_30day_completed')),
-      // Director Command v2 — manager accountability layer:
       fetchAllPages(applyCoords(supabase.from('coordinators').select('id,full_name,role,job_title,team,regions,is_active').eq('is_active', true))),
       fetchAllPages(applyRegion(supabase.from('census_status_log').select('patient_name,region,old_status,new_status,changed_at').gte('changed_at', thirtyDaysAgoIso))),
-      // activity_log has no region column — power-of-the-team metric reads
-      // unfiltered so quiet-coordinator detection stays accurate.
       fetchAllPages(supabase.from('coordinator_activity_log').select('coordinator_name,coordinator_role,action_type,created_at').gte('created_at', sevenDaysAgoIso)),
-      fetchAllPages(applyRegion(supabase.from('intake_referrals').select('patient_name,region,insurance,referral_status,date_received,welcome_call').gte('date_received', thirtyDaysAgoDate))),
-      fetchAllPages(applyRegion(supabase.from('auth_tracker').select('patient_name,region,auth_status,auth_submitted_date,auth_approved_date,is_currently_active,assigned_to').eq('is_currently_active', true))),
     ]);
 
     setCensus(c);
-    // 2026-06-06: per-(patient_name, visit_date) latest-uploaded_at dedup —
-    // strip ghost rows BEFORE all downstream classifyVisits/dedupEncounters/
-    // revenue math. Same rule applied across all 8 reader pages this sweep.
-    setVisits(dedupVisitsByLatestUpload(v));
-    setPrevVisits(dedupVisitsByLatestUpload(pv));
+    setVisits(dedupVisitsByAuthoritativeBatch(v));
+    setPrevVisits(dedupVisitsByAuthoritativeBatch(pv));
     setAuthRenewals(ar);
-    setOnHold(oh);
-    setWaitlist(wl);
+    setOnHoldRecovery(oh);
     setClinicians(cl);
-    setDischarges(dc);
     setCoordinators(co);
     setStatusLog(sl);
     setActivityLog(al);
-    setIntakeReferrals(ir);
-    setAuths(au);
     setLastRefresh(new Date());
     setLoading(false);
   }, [weekOffset, stateFilter, activeRegions]);
 
   useEffect(() => { load(); }, [load]);
-  useRealtimeTable(['census_data', 'visit_schedule_data', 'auth_renewal_tasks', 'on_hold_recovery', 'patient_discharges', 'clinicians', 'waitlist_assignments', 'coordinators', 'census_status_log', 'coordinator_activity_log', 'intake_referrals', 'auth_tracker'], load);
+  useRealtimeTable(
+    ['census_data', 'visit_schedule_data', 'auth_renewal_tasks', 'on_hold_recovery', 'clinicians', 'coordinators', 'census_status_log', 'coordinator_activity_log'],
+    load
+  );
 
-  // ── Week-over-week deltas (added 2026-05-31) ─────────────────────────
-  // Computed independently of the main `metrics` memo so they update as soon
-  // as prevVisits changes, and so we don't bloat the main memo.
-  const wow = useMemo(function() {
+  // ── Census buckets — the nine live widgets ──────────────────────────
+  const cb = useMemo(() => bucketCensus(census), [census]);
+
+  // ── This week's slots ───────────────────────────────────────────────
+  const slots = useMemo(() => classifyWeekSlots(visits), [visits]);
+
+  const wow = useMemo(() => {
     if (!prevVisits || prevVisits.length === 0) return null;
-    const prevCompleted = dedupEncounters(prevVisits.filter(isCompleted));
-    const prevRevenue = prevCompleted.length * BLENDED_RATE;
+    const p = classifyWeekSlots(prevVisits);
+    const resolved = p.completed + p.missed + p.cancelled;
     return {
-      completed: prevCompleted.length,
-      revenue: prevRevenue,
+      ...p,
+      // Delivery rate is measured over RESOLVED slots only. Using `booked` as
+      // the denominator would silently fold the ~30% unresolved backlog into
+      // the failure rate and make delivery look far worse than it is. See
+      // UnresolvedWarning above — that backlog gets its own callout instead
+      // of being smeared across this metric.
+      deliveredPct: resolved > 0 ? Math.round((p.completed / resolved) * 100) : null,
       label: getWeekRange(new Date(), weekOffset + 1).label,
     };
   }, [prevVisits, weekOffset]);
 
   const metrics = useMemo(() => {
-    if (!census.length) return null;
-
-    const active = census.filter(p => /active/i.test(p.status || ''));
-    // Frequency-aware overdue: each patient has their own threshold (4w4→3d, 2w4→4d, 1w4→10d, 1em1→30d, 1em2→60d).
-    const inactiveActive = active.filter(p => (p.days_overdue || 0) > 0);
-    const onHoldPts = census.filter(p => /on.?hold/i.test(p.status || ''));
-    const pendingStart = census.filter(p => /soc.?pending|eval.?pending/i.test(p.status || ''));
-
-    // Visits this week — uses shared visitMath helpers (2026-05-17 refactor).
-    // Raw rows kept for per-clinician utilization; deduped encounters drive revenue.
-    const rawCompleted = visits.filter(isCompleted);
-    const rawCancelled = visits.filter(isCancelled);
-    const rawMissed = visits.filter(isMissed);
-
-    const completedThisWeek = dedupEncounters(rawCompleted);
-    const cancelledThisWeek = dedupEncounters(rawCancelled);
-    const missedThisWeek = dedupEncounters(rawMissed);
-
-    // Revenue — based on encounters (billing events), not raw clinician rows
-    const weeklyRevenue = completedThisWeek.length * BLENDED_RATE;
-    const revenueGap = REVENUE_TARGET - weeklyRevenue;
-    const inactiveRevGap = inactiveActive.length * BLENDED_RATE * 2;
-
-    // Auth renewals
+    const capacity = clinicians.reduce((s, c) => s + (c.weekly_visit_target || 0), 0);
     const urgentAuths = authRenewals.filter(a => a.priority === 'urgent');
     const highAuths = authRenewals.filter(a => a.priority === 'high');
+    const onHoldOverdue = onHoldRecovery.filter(p => (p.days_on_hold || 0) > 21);
 
-    // Clinician utilization — use raw rows (each clinician's individual visits count
-    // toward their productivity, even if it was a co-treat)
-    const visitMap = {};
-    rawCompleted.forEach(v => {
-      const k = (v.staff_name || '').toLowerCase().trim();
-      visitMap[k] = (visitMap[k] || 0) + 1;
-    });
-    const underutilized = clinicians.filter(cl => {
-      const done = visitMap[(cl.full_name || '').toLowerCase().trim()] || 0;
-      const pct = cl.weekly_visit_target > 0 ? (done / cl.weekly_visit_target) * 100 : 0;
-      return pct < 60 && cl.weekly_visit_target >= 10;
-    });
-
-    // On hold overdue (21+ days)
-    const onHoldOverdue = onHold.filter(p => (p.days_on_hold || 0) > 21);
-
-    // Discharge follow-up overdue
-    const dischargeOverdue = discharges.filter(d => {
-      if (!d.followup_30day_required || d.followup_30day_completed) return false;
-      if (!d.discharge_date) return false;
-      return daysAgo(d.discharge_date) >= 30;
-    });
-
-    // Waitlist unassigned
-    const waitlistUnassigned = waitlist.filter(w => w.assignment_status === 'pending' && !w.assigned_clinician);
-
-    // Region breakdown
-    const regionData = REGIONS.map(r => {
-      const rActive = active.filter(p => p.region === r);
-      const rInactive = inactiveActive.filter(p => p.region === r);
-      const rOnHold = onHoldPts.filter(p => p.region === r);
-      const rPending = pendingStart.filter(p => p.region === r);
-      const rVisits = completedThisWeek.filter(v => v.region === r);
-      return {
-        region: r,
-        active: rActive.length,
-        inactiveActive: rInactive.length,
-        onHold: rOnHold.length,
-        pending: rPending.length,
-        completedVisits: rVisits.length,
-        revenueGap: rInactive.length * BLENDED_RATE * 2,
-      };
-    }).filter(r => r.active > 0 || r.onHold > 0 || r.pending > 0);
-
-    // 2026-05-31 CEO redesign: census WoW proxy using statusLog. Honest
-    // "delta" since census is point-in-time, not a snapshot — we count
-    // transitions INTO 'active' this week vs the prior week. Imperfect but
-    // directional (and clearly labeled in the UI).
-    const wk = getWeekRange(new Date(), weekOffset);
-    const prevWk = getWeekRange(new Date(), weekOffset + 1);
-    const wkStartMs = wk.start.getTime();
-    const wkEndMs = wk.end.getTime();
-    const prevStartMs = prevWk.start.getTime();
-    const prevEndMs = prevWk.end.getTime();
-    const newActiveThisWk = statusLog.filter(function (e) {
-      if (!/active/i.test(e.new_status || '')) return false;
-      if (/active/i.test(e.old_status || '')) return false; // exclude sub-active churn
-      const t = e.changed_at ? new Date(e.changed_at).getTime() : 0;
-      return t >= wkStartMs && t <= wkEndMs;
-    }).length;
-    const newActivePrevWk = statusLog.filter(function (e) {
-      if (!/active/i.test(e.new_status || '')) return false;
-      if (/active/i.test(e.old_status || '')) return false;
-      const t = e.changed_at ? new Date(e.changed_at).getTime() : 0;
-      return t >= prevStartMs && t <= prevEndMs;
-    }).length;
-
-    // Team engagement: of the coordinators on staff, how many have at least
-    // one mutation in the last 2 business days? Quiet = no mutation in 2+ days.
-    // Uses the already-loaded 7-day activity_log slice so no extra query.
+    // Team engagement — coordinators with no logged mutation in 2 days.
     const twoDaysAgoMs = Date.now() - 2 * 86400000;
-    const recentlyActiveNames = new Set();
-    activityLog.forEach(function (a) {
+    const recent = new Set();
+    activityLog.forEach(a => {
       if (!a.coordinator_name) return;
       const t = a.created_at ? new Date(a.created_at).getTime() : 0;
-      if (t >= twoDaysAgoMs) recentlyActiveNames.add(a.coordinator_name);
+      if (t >= twoDaysAgoMs) recent.add(a.coordinator_name);
     });
     const teamSize = coordinators.length;
-    const teamActive = coordinators.filter(function (c) { return recentlyActiveNames.has(c.full_name); }).length;
-    const teamQuiet = Math.max(0, teamSize - teamActive);
+    const teamActive = coordinators.filter(c => recent.has(c.full_name)).length;
 
-    // Prior-week team engagement proxy: coords active in 7-day window minus
-    // those active in last 2 days. Imperfect (overlapping windows), but
-    // gives a sense of whether more or fewer people are showing up this week.
-    const sevenDaysAgoMs = Date.now() - 7 * 86400000;
-    const last7Names = new Set();
-    activityLog.forEach(function (a) {
-      if (!a.coordinator_name) return;
-      const t = a.created_at ? new Date(a.created_at).getTime() : 0;
-      if (t >= sevenDaysAgoMs && t < twoDaysAgoMs) last7Names.add(a.coordinator_name);
-    });
-    const teamActivePrev5d = coordinators.filter(function (c) { return last7Names.has(c.full_name); }).length;
-
-    // Pipeline stalled count + "newly stalled this week" proxy from status_log
-    const stuck = census.filter(function (p) {
-      const s = p.status || '';
-      const d = p.status_changed_at ? Math.ceil((Date.now() - new Date(p.status_changed_at).getTime()) / 86400000) : null;
-      if (d === null) return false;
-      if (/soc.*pending/i.test(s)) return d > 3;
-      if (/auth.*pending/i.test(s) && !/active/i.test(s)) return d > 5;
-      if (/eval.*pending/i.test(s)) return d > 2;
-      return false;
-    });
+    // Net census movement this week, from the status log. Census itself is
+    // point-in-time so it cannot produce a delta on its own.
+    const wk = getWeekRange(new Date(), weekOffset);
+    const inWeek = (e) => {
+      const t = e.changed_at ? new Date(e.changed_at).getTime() : 0;
+      return t >= wk.start.getTime() && t <= wk.end.getTime();
+    };
+    const newActiveThisWk = statusLog.filter(e =>
+      inWeek(e) && /active/i.test(e.new_status || '') && !/active/i.test(e.old_status || '')
+    ).length;
+    const dischargedThisWk = statusLog.filter(e =>
+      inWeek(e) && /^discharge/i.test(e.new_status || '') && !/^discharge/i.test(e.old_status || '')
+    ).length;
 
     return {
-      active: active.length, inactiveActive, onHoldPts, pendingStart,
-      completedThisWeek, cancelledThisWeek, missedThisWeek, rawCompleted,
-      weeklyRevenue, revenueGap, inactiveRevGap,
-      urgentAuths, highAuths, underutilized, onHoldOverdue,
-      dischargeOverdue, waitlistUnassigned, regionData,
-      clinicianCapacity: clinicians.reduce((s, c) => s + (c.weekly_visit_target || 0), 0),
-      cancelRate: completedThisWeek.length > 0 ? Math.round((cancelledThisWeek.length / (completedThisWeek.length + cancelledThisWeek.length + missedThisWeek.length)) * 100) : 0,
-      // CEO-strip additions
-      newActiveThisWk, newActivePrevWk,
-      teamSize, teamActive, teamQuiet, teamActivePrev5d,
-      stuck,
+      capacity, urgentAuths, highAuths, onHoldOverdue,
+      teamSize, teamActive, teamQuiet: Math.max(0, teamSize - teamActive),
+      newActiveThisWk, dischargedThisWk,
     };
-  }, [census, visits, authRenewals, onHold, waitlist, clinicians, discharges, statusLog, activityLog, coordinators, weekOffset]);
+  }, [clinicians, authRenewals, onHoldRecovery, activityLog, coordinators, statusLog, weekOffset]);
 
   if (loading) return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Director Command" subtitle="Loading live data..." />
-      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--gray)' }}>
-        <div style={{ textAlign:'center' }}>
-          <div style={{ fontSize:32, marginBottom:8 }}>⚡</div>
-          <div>Pulling live operations data...</div>
-        </div>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: MUTED }}>
+        Pulling live operations data...
       </div>
     </div>
   );
 
   const m = metrics;
-  const today = new Date().toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
-  const totalInactiveGap = m.inactiveActive.length * BLENDED_RATE * 2;
+  const wk = getWeekRange(new Date(), weekOffset);
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const isPastWeek = weekOffset > 0;
 
-  // Days left in week (counts Mon-Sun = 7; if today is Wed = 4 days left)
-  const now = new Date();
-  const dow = now.getDay(); // 0=Sun
-  const daysLeftInWeek = dow === 0 ? 0 : 7 - dow;
+  const activeBucket = cb.byKey.active || { count: 0, riskCount: 0 };
+  const activeAuthBucket = cb.byKey.active_auth || { count: 0 };
+  const treating = activeBucket.count + activeAuthBucket.count;
 
-  // For the hero headline sentence — needs proxies for "P1 exceptions" and
-  // "red managers". We compute lightweight versions here so we don't need to
-  // round-trip through the ExceptionFeed/ManagerScorecards components.
-  function _stuckPatients() {
-    return census.filter(function(p) {
-      var s = p.status || '';
-      var d = p.status_changed_at ? Math.ceil((Date.now() - new Date(p.status_changed_at).getTime()) / 86400000) : null;
-      if (d === null) return false;
-      if (/soc.*pending/i.test(s)) return d > 3;
-      if (/auth.*pending/i.test(s) && !/active/i.test(s)) return d > 5;
-      if (/eval.*pending/i.test(s)) return d > 2;
-      return false;
-    });
-  }
-  const headlineP1Count = (() => {
-    // P1 proxy: dead spots + unassigned-stuck-7d+ + inactive coords 48h+
-    var stuck = _stuckPatients();
-    var unassignedDeep = stuck.filter(function(p) {
-      var d = Math.ceil((Date.now() - new Date(p.status_changed_at).getTime()) / 86400000);
-      return !p.pipeline_assigned_to && d >= 7;
-    }).length;
-    // Dead spots — count stuck patients whose owner has zero activity in 48h
-    var coordLast = {};
-    activityLog.forEach(function(a) {
-      if (!a.coordinator_name) return;
-      if (!coordLast[a.coordinator_name] || a.created_at > coordLast[a.coordinator_name]) {
-        coordLast[a.coordinator_name] = a.created_at;
-      }
-    });
-    var deadSpots = stuck.filter(function(p) {
-      if (!p.pipeline_assigned_to) return false;
-      var last = coordLast[p.pipeline_assigned_to];
-      if (!last) return true;
-      var hrs = (Date.now() - new Date(last).getTime()) / 3600000;
-      return hrs >= 48;
-    }).length;
-    return unassignedDeep + deadSpots;
-  })();
-  const headlineRedManagerCount = (() => {
-    // Red proxy: managers whose span has median stuck > 7d
-    // We approximate by counting ADs whose region spans have any patient
-    // stuck > 7d (the simpler and faster proxy than rebuilding the full
-    // scorecard math here).
-    var byRegionStuckDays = {};
-    _stuckPatients().forEach(function(p) {
-      var d = Math.ceil((Date.now() - new Date(p.status_changed_at).getTime()) / 86400000);
-      if (!byRegionStuckDays[p.region]) byRegionStuckDays[p.region] = [];
-      byRegionStuckDays[p.region].push(d);
-    });
-    function medianArr(arr) {
-      var s = arr.slice().sort(function(a,b){return a-b;});
-      var k = Math.floor(s.length / 2);
-      return s.length % 2 === 0 ? Math.round((s[k-1] + s[k]) / 2) : s[k];
-    }
-    var redCount = 0;
-    // FL_PARENT_REGIONS check — inline here to avoid pulling in another import
-    var parents = { 'FL North': ['B','C','G'], 'FL Central': ['A','H','M','N'], 'FL South': ['J','T','V'] };
-    Object.values(parents).forEach(function(regions) {
-      var pool = [];
-      regions.forEach(function(r) { if (byRegionStuckDays[r]) pool = pool.concat(byRegionStuckDays[r]); });
-      if (pool.length > 0 && medianArr(pool) > 7) redCount++;
-    });
-    return redCount;
-  })();
+  // Total pipeline waiting to start care — the buckets that generate zero
+  // revenue today but represent already-won demand.
+  const pipelineKeys = ['soc_pending', 'eval_pending', 'auth_pending', 'waitlist'];
+  const pipelineCount = pipelineKeys.reduce((s, k) => s + (cb.byKey[k] ? cb.byKey[k].count : 0), 0);
+  const pipelineNeverSeen = pipelineKeys.reduce((s, k) => s + (cb.byKey[k] ? cb.byKey[k].riskCount : 0), 0);
 
-  // Path-to-target tiles — promoted from below into the hero band
-  const pathTiles = [
-    {
-      label: 'Current Pace',
-      val: fmt$(m.weeklyRevenue),
-      sub: `${m.completedThisWeek.length} visits @ $${BLENDED_RATE}`,
-      color: m.weeklyRevenue >= 150000 ? '#34D399' : m.weeklyRevenue >= 100000 ? '#FBBF24' : '#F87171',
-    },
-    {
-      label: 'Recover Inactives',
-      val: `+${fmt$(totalInactiveGap)}`,
-      sub: `${m.inactiveActive.length} pts × 2 visits`,
-      color: '#FBBF24',
-    },
-    {
-      label: 'Convert Pipeline',
-      val: `+${fmt$(m.pendingStart.length * BLENDED_RATE * 2)}`,
-      sub: `${m.pendingStart.length} SOC/Eval pending`,
-      color: '#FBBF24',
-    },
-    {
-      label: 'Full Recovery',
-      val: fmt$(m.weeklyRevenue + totalInactiveGap + (m.pendingStart.length * BLENDED_RATE * 2)),
-      sub: `vs ${fmt$(REVENUE_TARGET)} target`,
-      color: (m.weeklyRevenue + totalInactiveGap + (m.pendingStart.length * BLENDED_RATE * 2)) >= REVENUE_TARGET ? '#34D399' : '#FBBF24',
-    },
-  ];
-
-  // Score: 5 critical checks, each worth 20 pts
-  const score = Math.round(
-    (m.urgentAuths.length === 0 ? 20 : Math.max(0, 20 - m.urgentAuths.length * 2)) +
-    (m.inactiveActive.length < 50 ? 20 : Math.max(0, 20 - Math.round((m.inactiveActive.length - 50) / 10))) +
-    (m.onHoldOverdue.length === 0 ? 20 : Math.max(0, 20 - m.onHoldOverdue.length)) +
-    (m.completedThisWeek.length >= 600 ? 20 : Math.round((m.completedThisWeek.length / 600) * 20)) +
-    (m.cancelRate < 8 ? 20 : Math.max(0, 20 - (m.cancelRate - 8) * 2))
-  );
-  const scoreColor = score >= 80 ? '#059669' : score >= 60 ? '#D97706' : '#DC2626';
-
-  // ── "Needs You Today" — unified, ranked top 5 ───────────────────────────
-  // Pull from every alert source the dashboard already loads, score each by
-  // severity + dollar impact, take the top 5. Hard cap = 5. The point is a
-  // CEO who can act on the morning's 5 most important calls in 60 seconds —
-  // not scroll a 50-item queue.
+  // ── Needs You Today ─────────────────────────────────────────────────
   const needsYouToday = (function () {
     const items = [];
-    // P1: urgent auth renewals (≤7d expiry or ≤4 visits remaining)
-    m.urgentAuths.slice(0, 5).forEach(function (a) {
+
+    // A finished week should be fully resolved. Fires only above 15% so
+    // ordinary end-of-week documentation lag stays quiet. NOTE: an earlier
+    // build of this fired constantly on our own dedup bug -- see the
+    // retraction on UnresolvedWarning above.
+    if (wow && wow.booked > 0 && wow.scheduled / wow.booked >= 0.15) {
+      items.push({
+        severity: 'p1',
+        score: 120,
+        title: `${wow.scheduled} visits from ${wow.label} never got an outcome posted`,
+        detail: `${Math.round((wow.scheduled / wow.booked) * 100)}% of that week unresolved ${'·'} ${fmt$(wow.scheduled * BLENDED_RATE)} unrecognized`,
+        actionLabel: 'Visit schedule',
+        target: 'visits',
+      });
+    }
+
+    m.urgentAuths.slice(0, 5).forEach(a => {
       items.push({
         severity: 'p1',
         score: 100 - (a.days_until_expiry || 0),
-        title: `Auth renewal expires in ${a.days_until_expiry}d — ${a.patient_name}`,
-        detail: `${a.visits_remaining} visits left · Rgn ${a.region} · est $${(a.visits_remaining * BLENDED_RATE).toLocaleString()} at risk`,
+        title: `Auth renewal expires in ${a.days_until_expiry}d -- ${a.patient_name}`,
+        detail: `${a.visits_remaining} visits left ${'·'} Rgn ${a.region} ${'·'} ${fmt$((a.visits_remaining || 0) * BLENDED_RATE)} at risk`,
         actionLabel: 'Open auth',
         target: 'auth-renewals',
       });
     });
-    // P1: red manager region (median stuck >7d in a parent region)
-    if (headlineRedManagerCount > 0) {
+
+    // Pipeline patients on the roster with no visit ever booked. This is the
+    // metric v3 tried to capture with `stuck`, but it read status_changed_at
+    // which is null on ~95% of rows -- so it was evaluating 2 of 38 SOC
+    // Pending patients. last_visit_date is fully populated.
+    if (pipelineNeverSeen > 0) {
       items.push({
-        severity: 'p1',
-        score: 95,
-        title: `${headlineRedManagerCount} manager${headlineRedManagerCount === 1 ? '' : 's'} in red`,
-        detail: 'Parent region with median patient stuck >7 days. Review scorecards.',
-        actionLabel: 'Scorecards',
-        target: 'ops-dashboard',
-      });
-    }
-    // HIGH: inactive actives generating $0 (top 1 line aggregating, plus 1 patient-detail row if egregious)
-    if (m.inactiveActive.length > 0) {
-      items.push({
-        severity: 'high',
-        score: 80 + Math.min(15, Math.floor(m.inactiveActive.length / 10)),
-        title: `${m.inactiveActive.length} active patients not seen past their frequency`,
-        detail: `${fmt$(totalInactiveGap)}/wk revenue idle · sort census by Last Seen`,
+        severity: pipelineNeverSeen >= 30 ? 'p1' : 'high',
+        score: 90 + Math.min(9, Math.floor(pipelineNeverSeen / 10)),
+        title: `${pipelineNeverSeen} pipeline patients never seen, 14d+ on roster`,
+        detail: `Accepted but never started ${'·'} ${fmt$(pipelineNeverSeen * BLENDED_RATE * 2)}/wk once converted`,
         actionLabel: 'Open census',
         target: 'census',
+        intent: { status: 'soc_pending' },
       });
     }
-    // HIGH: on-hold overdue (>21d on hold — need recovery call)
-    if (m.onHoldOverdue.length > 0) {
+
+    if (activeBucket.riskCount > 0) {
       items.push({
         severity: 'high',
-        score: 70 + Math.min(15, m.onHoldOverdue.length),
-        title: `${m.onHoldOverdue.length} patients on hold >21 days`,
-        detail: 'Recovery calls needed to convert back to active or discharge.',
+        score: 80 + Math.min(15, Math.floor(activeBucket.riskCount / 10)),
+        title: `${activeBucket.riskCount} active patients past their prescribed frequency`,
+        detail: `${fmt$(activeBucket.riskCount * BLENDED_RATE * 2)}/wk idle ${'·'} sort census by Last Seen`,
+        actionLabel: 'Open census',
+        target: 'census',
+        intent: { status: 'active', lastSeen: 'overdue' },
+      });
+    }
+
+    // visit units for the headline count, encounter units for the dollars
+    const lost = slots.missedVisits + slots.cancelledVisits;
+    const lostRev = (slots.missed + slots.cancelled) * BLENDED_RATE;
+    if (lost >= 25) {
+      items.push({
+        severity: 'high',
+        score: 75 + Math.min(15, Math.floor(lost / 10)),
+        title: `${lost} visits lost this week (${slots.missedVisits} missed, ${slots.cancelledVisits} cancelled)`,
+        detail: `${fmtN(lostRev / BLENDED_RATE)} billable encounters ${'·'} ${fmt$(lostRev)} of booked work fell out`,
+        actionLabel: 'Missed/cancelled',
+        target: 'missed-cancelled',
+      });
+    }
+
+    if (m.onHoldOverdue.length > 0) {
+      items.push({
+        severity: 'medium',
+        score: 60 + Math.min(15, m.onHoldOverdue.length),
+        title: `${m.onHoldOverdue.length} patients on hold over 21 days`,
+        detail: 'Recovery call needed -- convert back to active or discharge.',
         actionLabel: 'On-hold',
         target: 'on-hold',
       });
     }
-    // MEDIUM: pipeline stalled (SOC/Auth/Eval Pending past threshold)
-    if (m.stuck && m.stuck.length > 0) {
-      items.push({
-        severity: 'medium',
-        score: 50 + Math.min(20, m.stuck.length),
-        title: `${m.stuck.length} pipeline patients stalled`,
-        detail: `Won't bill until first visit · est $${(m.pendingStart.length * BLENDED_RATE * 2).toLocaleString()}/wk if converted`,
-        actionLabel: 'Pipeline',
-        target: 'pipeline',
-      });
-    }
-    // MEDIUM: team engagement — coordinators quiet >2 days
+
     if (m.teamQuiet >= 3) {
       items.push({
         severity: 'medium',
         score: 45 + m.teamQuiet,
-        title: `${m.teamQuiet} of ${m.teamSize} coordinators quiet >2 days`,
+        title: `${m.teamQuiet} of ${m.teamSize} coordinators quiet over 2 days`,
         detail: 'No mutations logged. Spot-check before standup.',
         actionLabel: 'Engagement',
         target: 'ops-dashboard',
       });
     }
-    // Sort by score desc, take top 5
-    return items.sort(function (a, b) { return b.score - a.score; }).slice(0, 5);
+
+    return items.sort((a, b) => b.score - a.score).slice(0, 5);
   })();
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', minHeight:'100%', background:'var(--bg)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', background: 'var(--bg)' }}>
       <TopBar
         title="Director Command"
         subtitle={today}
         actions={
-          <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-            {/* 2026-05-31 CEO redesign: state toggle auto-hides until Georgia
-                has ≥10 active patients (see StateToggle). Until then, the
-                page reads exactly as it always has — no visible control,
-                queries unfiltered. Wiring is in place; rendering is gated. */}
-            <StateToggle
-              value={stateFilter}
-              onChange={setStateFilter}
-              storageKey="directorCommand"
-              stateToRegions={mapping.stateToRegions}
-            />
-            {/* Week toggle — 2026-05-31. Persists last-viewed week so a
-                refresh mid-investigation doesn't snap back to this week. */}
-            <WeekSelector
-              value={weekOffset}
-              onChange={setWeekOffset}
-              storageKey="directorCommand"
-              allowFuture={false}
-            />
-            {lastRefresh && <span style={{ fontSize:10, color:'var(--gray)' }}>Updated {lastRefresh.toLocaleTimeString()}</span>}
-            <button onClick={load} style={{ padding:'6px 14px', background:'#0F1117', color:'#fff', border:'none', borderRadius:7, fontSize:11, fontWeight:700, cursor:'pointer' }}>
-              ↻ Refresh
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <StateToggle value={stateFilter} onChange={setStateFilter} storageKey="directorCommand" stateToRegions={mapping.stateToRegions} />
+            <WeekSelector value={weekOffset} onChange={setWeekOffset} storageKey="directorCommand" allowFuture={false} />
+            {lastRefresh && <span style={{ fontSize: 10, color: MUTED }}>Updated {lastRefresh.toLocaleTimeString()}</span>}
+            <button onClick={load} style={{ padding: '6px 14px', background: INK, color: '#fff', border: 'none', borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+              Refresh
             </button>
           </div>
         }
       />
 
-      <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:20 }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 22 }}>
 
-        {/* ═══════════════════════════════════════════════════════════════
-            DIRECTOR COMMAND v3 — CEO Subtractive Layout (2026-05-31)
-            Design doc: docs/CEO_Dashboard_Design.md §3
-            Liam's directive: "CEO-level means LESS on screen, not more."
-            Visible-above-fold:
-              1. HERO          → revenue mega + ops score + WoW + summary
-              2. CEO KPI STRIP → 5 tiles, all clickable, all with deltas
-              3. NEEDS YOU TODAY → top 5 ranked, 1-line each, max 5
-              4. DETAIL (collapsed) → everything else, one click away:
-                 ExceptionFeed, ManagerScorecards, Visit Pulse,
-                 ExpansionStatus, Triage 5, Region Health, Auth, Clinician,
-                 Path-to-$200K
-            Underlying components (ExceptionFeed, ManagerScorecards) are
-            NOT modified — they're wrapped inside the collapse so other
-            pages that import them keep working unchanged.
-            ═══════════════════════════════════════════════════════════════ */}
-
-        {/* ─── 1. HERO BAND ──────────────────────────────────────────── */}
-        <HeroBand
-          weeklyRevenue={m.weeklyRevenue}
-          target={REVENUE_TARGET}
-          score={score}
-          scoreColor={scoreColor}
-          p1Count={headlineP1Count}
-          redManagerCount={headlineRedManagerCount}
-          daysLeftInWeek={daysLeftInWeek}
-          pathTiles={pathTiles}
+        {/* 1. DELIVERY BAND */}
+        <DeliveryBand
+          slots={slots}
+          target={WEEKLY_VISIT_TARGET}
+          weekLabel={wk.label}
+          isPastWeek={isPastWeek}
           wow={wow}
-          isPastWeek={weekOffset > 0}
+          capacity={m.capacity}
         />
 
-        {/* ─── 2. CEO KPI STRIP — 5 tiles, all clickable, all delta'd ─── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
-          {/* Visits — clean WoW from prevVisits */}
-          <CeoKpiTile
-            label="Visits This Week"
-            value={m.completedThisWeek.length.toLocaleString()}
-            sub={`of ${WEEKLY_TARGET} target · ${Math.round((m.completedThisWeek.length/WEEKLY_TARGET)*100)}%`}
-            deltaText={wow && wow.completed > 0 ? `${Math.abs(m.completedThisWeek.length - wow.completed)} vs prior` : null}
-            deltaDirection={wow && wow.completed > 0 ? (m.completedThisWeek.length >= wow.completed ? 'up' : 'down') : null}
-            color={m.completedThisWeek.length >= WEEKLY_TARGET ? '#059669' : '#0F1117'}
-            accent="#059669"
-            onClick={() => go('visits')}
-          />
-          {/* Active Census — delta from status_log transitions into 'active' */}
-          <CeoKpiTile
-            label="Active Census"
-            value={m.active.toLocaleString()}
-            sub={`+${m.newActiveThisWk} new this wk · vs ${m.newActivePrevWk} prior`}
-            deltaText={m.newActivePrevWk > 0 || m.newActiveThisWk > 0 ? `${Math.abs(m.newActiveThisWk - m.newActivePrevWk)} new vs prior` : null}
-            deltaDirection={m.newActiveThisWk === m.newActivePrevWk ? 'flat' : (m.newActiveThisWk > m.newActivePrevWk ? 'up' : 'down')}
-            accent="#1565C0"
-            onClick={() => go('census')}
-          />
-          {/* Pipeline Stalled — count + qualified note */}
-          <CeoKpiTile
-            label="Pipeline Stalled"
-            value={(m.stuck ? m.stuck.length : 0).toLocaleString()}
-            sub={`SOC/Auth/Eval pending past threshold · ${fmt$(m.pendingStart.length * BLENDED_RATE * 2)}/wk if converted`}
-            deltaText={(m.stuck && m.stuck.length > 0) ? `${m.stuck.length} open` : null}
-            deltaDirection={(m.stuck && m.stuck.length > 5) ? 'down' : 'flat'}
-            color={(m.stuck && m.stuck.length > 5) ? '#D97706' : '#0F1117'}
-            accent="#D97706"
-            onClick={() => go('pipeline')}
-          />
-          {/* Auth Renewals Urgent */}
-          <CeoKpiTile
-            label="Auth Urgent"
-            value={m.urgentAuths.length.toLocaleString()}
-            sub={`${m.highAuths.length} high priority also open · expiring ≤7d or ≤4 visits`}
-            deltaText={m.urgentAuths.length > 0 ? `${m.urgentAuths.length} ≤7d` : null}
-            deltaDirection={m.urgentAuths.length > 3 ? 'down' : (m.urgentAuths.length === 0 ? 'up' : 'flat')}
-            color={m.urgentAuths.length > 3 ? '#DC2626' : '#0F1117'}
-            accent="#DC2626"
-            onClick={() => go('auth-renewals')}
-          />
-          {/* Team Engagement — active coords vs quiet, WoW from activity_log */}
-          <CeoKpiTile
-            label="Team Active"
-            value={`${m.teamActive}/${m.teamSize}`}
-            sub={`${m.teamQuiet} quiet >2d · ${m.teamActivePrev5d} active in prior 5d window`}
-            deltaText={m.teamActive !== m.teamActivePrev5d ? `${Math.abs(m.teamActive - m.teamActivePrev5d)} vs prior` : null}
-            deltaDirection={m.teamActive === m.teamActivePrev5d ? 'flat' : (m.teamActive > m.teamActivePrev5d ? 'up' : 'down')}
-            color={m.teamQuiet > 3 ? '#D97706' : '#0F1117'}
-            accent="#7C3AED"
-            onClick={() => go('ops-dashboard')}
-          />
-        </div>
+        {/* 1b. DATA INTEGRITY — silent unless a finished week is unresolved */}
+        <UnresolvedWarning prev={wow} weekLabel={wow ? wow.label : ''} />
 
-        {/* ─── 3. NEEDS YOU TODAY — top 5 ranked actions ────────────── */}
-        <NeedsYouToday
-          items={needsYouToday}
-          onAction={(it) => { if (it && it.target) go(it.target); }}
-        />
-
-        {/* ─── 4. DETAIL — Collapsed by default. Everything below is one click. */}
-        <details style={{ background: 'white', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-          <summary style={{
-            padding: '12px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: '#111827',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              🔎 Detail — Scorecards · Exceptions · Visit Pulse · Region Health · Auth · Clinician · Expansion
-              <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
-                Folded by default · open for weekly review
-              </span>
-            </span>
-            <span style={{ fontSize: 10, color: '#6B7280' }}>click to expand ▾</span>
-          </summary>
-          <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 16, borderTop: '1px solid var(--border)' }}>
-
-        {/* MOVED INSIDE DETAIL — Manager Scorecards (formerly above-fold).
-            Underlying component unchanged. Other pages that import it keep
-            working. CEO sees it via the Detail expand. */}
-        <ManagerScorecards
-          census={census}
-          statusLog={statusLog}
-          activityLog={activityLog}
-          coordinators={coordinators}
-          onScorecardClick={(sc) => {
-            if (sc.regions === 'ALL') {
-              go('ops-dashboard');
-            } else if (sc.regions && sc.regions.length === 1) {
-              go('rm-dashboard', { region: sc.regions[0] });
-            } else {
-              go('rm-dashboard', { regions: sc.regions });
-            }
-          }}
-        />
-
-        {/* MOVED INSIDE DETAIL — Exception Feed (formerly above-fold). */}
-        <ExceptionFeed
-          census={census}
-          activityLog={activityLog}
-          coordinators={coordinators}
-          onJumpTo={(target, intent) => go(target, intent)}
-        />
-
-        {/* MOVED INSIDE DETAIL — Visit Pulse strip (formerly above-fold).
-            Kept as a deeper view; the CEO strip above is the at-a-glance. */}
+        {/* 2. VISITS THIS WEEK — four separate widgets */}
         <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-            📊 {weekOffset === 0 ? "This Week's Pulse" : (weekOffset === 1 ? "Last Week's Pulse" : `Pulse — ${getWeekRange(new Date(), weekOffset).label}`)}
-            <span style={{ fontSize: 10, fontWeight: 400, color: '#6B7280' }}>
-              Visit numbers · click any tile to drill in
-              {wow && wow.completed > 0 && (() => {
-                const d = m.completedThisWeek.length - wow.completed;
-                const up = d >= 0;
-                return (
-                  <span style={{ marginLeft: 8, color: up ? '#059669' : '#DC2626', fontWeight: 700 }}>
-                    {up ? '▲' : '▼'} {Math.abs(d)} visits vs prior week
-                  </span>
-                );
-              })()}
-            </span>
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
-            {[
-              { label:'Completed', val:m.completedThisWeek.length, color:'#059669', sub:`of ${WEEKLY_TARGET} target`, bg:'#F0FFF4', target:'visits', hint:'visit schedule' },
-              { label:'Cancelled', val:m.cancelledThisWeek.length, color:'#DC2626', sub:`${m.cancelRate}% cancel rate`, bg:m.cancelRate>10?'#FEF2F2':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
-              { label:'Missed', val:m.missedThisWeek.length, color:'#D97706', sub:'this week', bg:m.missedThisWeek.length>30?'#FEF3C7':'var(--card-bg)', target:'missed-cancelled', hint:'missed/cancelled report' },
-              { label:'Clinician Cap.', val:m.clinicianCapacity, color:'#1565C0', sub:'max visits/week', bg:'#EFF6FF', target:'staff', hint:'staff directory' },
-              { label:'Utilization', val:m.clinicianCapacity > 0 ? Math.round((m.completedThisWeek.length/m.clinicianCapacity)*100)+'%' : '—', color:(m.clinicianCapacity>0 && m.completedThisWeek.length/m.clinicianCapacity>0.75)?'#059669':'#D97706', sub:`${m.completedThisWeek.length}/${m.clinicianCapacity} capacity`, bg:'var(--card-bg)', target:'clinician-accountability', hint:'by clinician' },
-            ].map(c => {
-              const clickable = !!c.target;
-              return (
-                <div key={c.label}
-                  onClick={clickable ? () => go(c.target) : undefined}
-                  role={clickable ? 'button' : undefined}
-                  tabIndex={clickable ? 0 : undefined}
-                  onKeyDown={clickable ? e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); go(c.target); } } : undefined}
-                  style={{ background:c.bg, border:'1px solid var(--border)', borderRadius:10, padding:'10px 12px', textAlign:'center', cursor: clickable ? 'pointer' : 'default', transition:'transform 0.1s ease, box-shadow 0.15s ease' }}
-                  onMouseEnter={clickable ? e => { e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'; } : undefined}
-                  onMouseLeave={clickable ? e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; } : undefined}>
-                  <div style={{ fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
-                  <div style={{ fontSize:24, fontWeight:900, fontFamily:'DM Mono, monospace', color:c.color, marginTop:2 }}>{c.val}</div>
-                  <div style={{ fontSize:9, color:'var(--gray)', marginTop:1 }}>{c.sub}</div>
-                  {clickable && (
-                    <div style={{ fontSize:8, color:c.color, marginTop:3, opacity:0.65, fontWeight:600 }}>open {c.hint} →</div>
-                  )}
-                </div>
-              );
-            })}
+          <SectionHead
+            title="Visits this week"
+            note={`${wk.label} (Sun-Sat) ${'·'} booked = completed + remaining + lost`}
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+            {/* Visit counts below are in SCHEDULING units (patient+date+staff),
+                which is what Pariox and the ops team count and what Liam reads
+                off the schedule. Revenue is computed from ENCOUNTERS
+                (patient+date) because a co-treat bills once. See
+                classifyWeekSlots in visitMath.js. */}
+            <Widget
+              label="Scheduled (booked)"
+              value={fmtN(slots.bookedVisits)}
+              sub={`of ${fmtN(WEEKLY_VISIT_TARGET)} target ${'·'} ${Math.round((slots.bookedVisits / WEEKLY_VISIT_TARGET) * 100)}% ${'·'} ${fmtN(slots.booked)} billable encounters`}
+              owner="Scheduling / Assignment"
+              accent={TEAL}
+              tone={slots.bookedVisits >= WEEKLY_VISIT_TARGET * 0.95 ? 'good' : slots.bookedVisits >= WEEKLY_VISIT_TARGET * 0.8 ? 'warn' : 'bad'}
+              onClick={() => go('visits')}
+            />
+            <Widget
+              label="Completed so far"
+              value={fmtN(slots.completedVisits)}
+              // NOT "vs same point last week" -- prevVisits is the prior week
+              // in FULL, so comparing a Tuesday's 104 against a finished
+              // week's 601 would read as a 83% collapse. Labelled as a final
+              // figure so the comparison is honest.
+              sub={`${fmt$(slots.completed * BLENDED_RATE)} banked${wow ? ` ${'·'} prior wk finished at ${fmtN(wow.completed)}` : ''}`}
+              owner="Clinical"
+              accent={GOOD}
+              tone="good"
+              onClick={() => go('visits')}
+            />
+            <Widget
+              label="Remaining to run"
+              value={fmtN(slots.scheduledVisits)}
+              sub={`${fmt$(slots.scheduled * BLENDED_RATE)} still deliverable${wow && wow.booked > 0 ? ` ${'·'} ~${Math.round((wow.completed / wow.booked) * 100)}% of booked converted last wk` : ''}`}
+              owner="Clinical / ADs"
+              accent="#0EA5E9"
+              onClick={() => go('visits')}
+            />
+            <Widget
+              label="Lost"
+              value={fmtN(slots.missedVisits + slots.cancelledVisits)}
+              sub={`${slots.missedVisits} missed ${'·'} ${slots.cancelledVisits} cancelled`}
+              risk={(slots.missedVisits + slots.cancelledVisits) > 0 ? `${fmt$((slots.missed + slots.cancelled) * BLENDED_RATE)} fell out of the week` : null}
+              owner="Care Coord / Clinical"
+              accent={BAD}
+              tone={(slots.missedVisits + slots.cancelledVisits) >= 25 ? 'bad' : undefined}
+              onClick={() => go('missed-cancelled')}
+            />
           </div>
         </div>
 
-        {/* INSIDE DETAIL — Expansion Status (Georgia + future states).
-            Lives in Detail so the CEO has context on expansion momentum
-            without the FL/GA toggle ever showing an empty GA tab.        */}
-        <ExpansionStatus territories={mapping.territories} />
-
-        {/* TRIAGE — 5 Priority Actions */}
+        {/* 3. CENSUS HEADLINE — active + total */}
         <div>
-          <div style={{ fontSize:13, fontWeight:800, color:'#0F1117', marginBottom:10, display:'flex', alignItems:'center', gap:8 }}>
-            <span style={{ background:'#DC2626', color:'#fff', borderRadius:5, padding:'2px 8px', fontSize:11 }}>TRIAGE</span>
-            Today's 5 Priority Actions
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10 }}>
-            <TriageCard
-              rank={1} urgent
-              title="Active Patients Not Seen 14+ Days"
-              count={m.inactiveActive.length}
-              subtitle="Generating $0 despite Active status"
-              color="#DC2626" bg="#FEF2F2" border="#FECACA"
-              detail={`${fmt$(totalInactiveGap)}/wk revenue sitting idle`}
-              actionLabel="Open Census → Sort Last Seen"
-              action={() => go('census', { lastSeen: 'overdue', status: 'active' })}
+          <SectionHead
+            title="Census"
+            note={`live roster excludes ${fmtN(cb.discharged)} discharged and ${fmtN(cb.nonAdmit)} non-admit ${'·'} ${fmtN(cb.total)} all-time`}
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 12 }}>
+            <Widget
+              size="lg"
+              label="Active patients"
+              value={fmtN(activeBucket.count)}
+              sub={`${fmtN(treating)} receiving care incl. ${fmtN(activeAuthBucket.count)} auth-pending ${'·'} +${m.newActiveThisWk} new this wk`}
+              risk={activeBucket.riskCount > 0 ? `${activeBucket.riskCount} past prescribed frequency (${fmt$(activeBucket.riskCount * BLENDED_RATE * 2)}/wk idle)` : null}
+              owner="Clinical / ADs"
+              accent={GOOD}
+              onClick={() => go('census', { status: 'active' })}
             />
-            <TriageCard
-              rank={2} urgent
-              title="Auth Renewals — Urgent"
-              count={m.urgentAuths.length}
-              subtitle="Expiring ≤7 days or ≤4 visits left"
-              color="#DC2626" bg="#FFF5F5" border="#FECACA"
-              detail={`+${m.highAuths.length} high priority also open`}
-              actionLabel="Open Auth Renewals"
-              action={() => go('auth-renewals')}
-            />
-            <TriageCard
-              rank={3}
-              title="Pipeline Stall — Accepted Not Started"
-              count={m.pendingStart.length}
-              subtitle="SOC/Eval Pending — won't bill until first visit"
-              color="#D97706" bg="#FEF3C7" border="#FCD34D"
-              detail={`${fmt$(m.pendingStart.length * BLENDED_RATE * 2)}/wk potential if started`}
-              actionLabel="Open SOC → Active Pipeline"
-              action={() => go('pipeline')}
-            />
-            <TriageCard
-              rank={4}
-              title="Underutilized Clinicians"
-              count={m.underutilized.length}
-              subtitle="Below 60% of weekly visit target"
-              color="#7C3AED" bg="#F5F3FF" border="#DDD6FE"
-              detail="Capacity exists — needs patient assignment"
-              actionLabel="Open Clinician Accountability"
-              action={() => go('clinician-accountability')}
-            />
-            <TriageCard
-              rank={5}
-              title="On-Hold Patients"
-              count={m.onHoldPts.length}
-              subtitle={`${m.onHoldOverdue.length} over 21 days — need recovery call`}
-              color="#1565C0" bg="#EFF6FF" border="#BFDBFE"
-              detail={`${m.waitlistUnassigned.length} waitlist patients unassigned`}
-              actionLabel="Open On-Hold Recovery"
-              action={() => go('on-hold')}
+            <Widget
+              size="lg"
+              label="Total live roster"
+              value={fmtN(cb.liveRoster)}
+              sub={`every patient we can still act on ${'·'} ${fmtN(pipelineCount)} not yet in treatment`}
+              risk={m.dischargedThisWk > 0 ? `${m.dischargedThisWk} discharged this week` : null}
+              owner="All departments"
+              accent={TEAL}
+              onClick={() => go('census', { status: 'live_roster' })}
             />
           </div>
         </div>
 
-        {/* Revenue Gap by Region */}
-        <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-          <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <div style={{ fontSize:13, fontWeight:800, color:'#0F1117' }}>Region Health & Revenue Gap</div>
-            <div style={{ fontSize:11, color:'var(--gray)' }}>Activity rate = active patients seen within their prescribed frequency</div>
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'0.5fr 0.7fr 1.2fr 0.7fr 0.7fr 0.7fr 0.9fr', padding:'7px 16px', background:'var(--bg)', borderBottom:'1px solid var(--border)', fontSize:9, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:'0.05em', gap:8 }}>
-            <span>Region</span><span>Active</span><span>Activity Rate</span><span>Inactive</span><span>On Hold</span><span>Pending</span><span>Rev Gap/Wk</span>
-          </div>
-          {m.regionData.map(r => (
-            <RegionRow key={r.region} {...r} />
-          ))}
-          <div style={{ padding:'10px 16px', background:'#F8F9FF', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'space-between', fontSize:11 }}>
-            <span style={{ fontWeight:700 }}>Total</span>
-            <span style={{ color:'var(--gray)' }}>{m.active} active</span>
-            <span style={{ color:'var(--gray)' }}></span>
-            <span style={{ color:'#DC2626', fontWeight:700 }}>{m.inactiveActive.length} overdue vs freq</span>
-            <span style={{ color:'var(--gray)' }}>{m.onHoldPts.length}</span>
-            <span style={{ color:'var(--gray)' }}>{m.pendingStart.length}</span>
-            <span style={{ color:'#DC2626', fontWeight:700 }}>-{fmt$(totalInactiveGap)}/wk</span>
-          </div>
-        </div>
-
-        {/* Auth Renewals Snapshot + Clinician Underutilization side by side */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
-          {/* Auth snapshot */}
-          <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-            <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontSize:13, fontWeight:800 }}>🔄 Auth Renewals at Risk</div>
-              <div style={{ fontSize:11 }}>
-                <span style={{ color:'#DC2626', fontWeight:700 }}>{m.urgentAuths.length} urgent</span>
-                <span style={{ color:'var(--gray)' }}> · {m.highAuths.length} high</span>
-              </div>
-            </div>
-            {m.urgentAuths.length === 0 && m.highAuths.length === 0 ? (
-              <div style={{ padding:24, textAlign:'center', color:'#059669', fontWeight:700, fontSize:13 }}>✅ No urgent renewals — all clear</div>
-            ) : (
-              <div style={{ maxHeight:240, overflowY:'auto' }}>
-                {[...m.urgentAuths, ...m.highAuths].slice(0,8).map((a, i) => (
-                  <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr auto auto auto', padding:'8px 14px', borderBottom:'1px solid var(--border)', gap:10, alignItems:'center', background:a.priority==='urgent'?'#FFF5F5':'var(--card-bg)' }}>
-                    <div>
-                      <div style={{ fontSize:11, fontWeight:600 }}>{a.patient_name}</div>
-                      <div style={{ fontSize:9, color:'var(--gray)' }}>Rgn {a.region}</div>
-                    </div>
-                    <span style={{ fontSize:10, fontWeight:700, color:a.priority==='urgent'?'#DC2626':'#D97706', background:a.priority==='urgent'?'#FEF2F2':'#FEF3C7', padding:'2px 6px', borderRadius:999 }}>
-                      {a.priority}
-                    </span>
-                    <div style={{ textAlign:'right' }}>
-                      <div style={{ fontSize:11, fontWeight:700, color:a.days_until_expiry<=7?'#DC2626':'#D97706' }}>{a.days_until_expiry}d</div>
-                      <div style={{ fontSize:9, color:'var(--gray)' }}>left</div>
-                    </div>
-                    <div style={{ textAlign:'right' }}>
-                      <div style={{ fontSize:11, fontWeight:700, color:a.visits_remaining<=4?'#DC2626':'#D97706' }}>{a.visits_remaining}</div>
-                      <div style={{ fontSize:9, color:'var(--gray)' }}>visits</div>
-                    </div>
-                  </div>
-                ))}
-                {(m.urgentAuths.length + m.highAuths.length) > 8 && (
-                  <div style={{ padding:'8px 14px', fontSize:11, color:'var(--gray)', textAlign:'center' }}>+{(m.urgentAuths.length + m.highAuths.length) - 8} more — open Auth Renewals page</div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Clinician underutilization */}
-          <div style={{ background:'var(--card-bg)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-            <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontSize:13, fontWeight:800 }}>👤 Clinicians Under 60% Utilization</div>
-              <div style={{ fontSize:11, color:'#7C3AED', fontWeight:700 }}>{m.underutilized.length} clinicians</div>
-            </div>
-            {m.underutilized.length === 0 ? (
-              <div style={{ padding:24, textAlign:'center', color:'#059669', fontWeight:700, fontSize:13 }}>✅ All clinicians above 60% — strong week</div>
-            ) : (
-              <div style={{ maxHeight:240, overflowY:'auto' }}>
-                {(() => {
-                  const visitMap = {};
-                  (m.rawCompleted || []).forEach(v => {
-                    const k = (v.staff_name || '').toLowerCase().trim();
-                    visitMap[k] = (visitMap[k] || 0) + 1;
-                  });
-                  return m.underutilized.slice(0, 8).map((cl, i) => {
-                    const done = visitMap[(cl.full_name || '').toLowerCase().trim()] || 0;
-                    const pct = Math.round((done / cl.weekly_visit_target) * 100);
-                    return (
-                      <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr auto auto', padding:'8px 14px', borderBottom:'1px solid var(--border)', gap:10, alignItems:'center' }}>
-                        <div>
-                          <div style={{ fontSize:11, fontWeight:600 }}>{cl.full_name}</div>
-                          <div style={{ fontSize:9, color:'var(--gray)' }}>{cl.discipline} · Rgn {cl.region}</div>
-                        </div>
-                        <div style={{ textAlign:'right' }}>
-                          <div style={{ fontSize:12, fontWeight:700, color:pct<30?'#DC2626':'#D97706' }}>{done}/{cl.weekly_visit_target}</div>
-                          <div style={{ fontSize:9, color:'var(--gray)' }}>visits</div>
-                        </div>
-                        <div style={{ width:40, textAlign:'right' }}>
-                          <div style={{ fontSize:12, fontWeight:900, fontFamily:'DM Mono, monospace', color:pct<30?'#DC2626':'#D97706' }}>{pct}%</div>
-                        </div>
-                      </div>
-                    );
-                  });
-                })()}
-                {m.underutilized.length > 8 && (
-                  <div style={{ padding:'8px 14px', fontSize:11, color:'var(--gray)', textAlign:'center' }}>+{m.underutilized.length - 8} more — open Staff Directory</div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Path to $200K — kept as full breakdown inside Detail. The compressed
-            version lives in the HeroBand for the daily-glance view; this version
-            keeps the original label phrasing for the weekly-review context.   */}
-        <div style={{ background:'#0F1117', borderRadius:12, padding:'16px 20px', color:'#fff' }}>
-          <div style={{ fontSize:12, fontWeight:800, color:'rgba(255,255,255,0.5)', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:12 }}>
-            📈 Path to $200K Weekly Revenue — Full Breakdown
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
-            {[
-              {
-                label: 'Current Revenue Pace',
-                val: fmt$(m.weeklyRevenue),
-                sub: `${m.completedThisWeek.length} visits @ $${BLENDED_RATE}`,
-                color: m.weeklyRevenue >= 150000 ? '#34D399' : m.weeklyRevenue >= 100000 ? '#FBBF24' : '#F87171',
-              },
-              {
-                label: 'Recover Inactive Actives',
-                val: `+${fmt$(totalInactiveGap)}`,
-                sub: `${m.inactiveActive.length} patients × 2 visits × $${BLENDED_RATE}`,
-                color: '#FBBF24',
-              },
-              {
-                label: 'Convert Pipeline',
-                val: `+${fmt$(m.pendingStart.length * BLENDED_RATE * 2)}`,
-                sub: `${m.pendingStart.length} SOC/Eval pending × 2 visits`,
-                color: '#FBBF24',
-              },
-              {
-                label: 'Projected at Full Recovery',
-                val: fmt$(m.weeklyRevenue + totalInactiveGap + (m.pendingStart.length * BLENDED_RATE * 2)),
-                sub: `vs $${(REVENUE_TARGET/1000).toFixed(0)}K target`,
-                color: (m.weeklyRevenue + totalInactiveGap + (m.pendingStart.length * BLENDED_RATE * 2)) >= REVENUE_TARGET ? '#34D399' : '#FBBF24',
-              },
-            ].map(item => (
-              <div key={item.label} style={{ background:'rgba(255,255,255,0.06)', borderRadius:8, padding:'12px 14px' }}>
-                <div style={{ fontSize:9, fontWeight:700, color:'rgba(255,255,255,0.4)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4 }}>{item.label}</div>
-                <div style={{ fontSize:22, fontWeight:900, fontFamily:'DM Mono, monospace', color:item.color, lineHeight:1 }}>{item.val}</div>
-                <div style={{ fontSize:9, color:'rgba(255,255,255,0.35)', marginTop:4 }}>{item.sub}</div>
-              </div>
+        {/* 4. STATUS GRID — one widget per bucket, with its owning department */}
+        <div>
+          <SectionHead
+            title="By status -- who owns it"
+            note={`the ${cb.buckets.length} buckets below sum to the ${fmtN(cb.liveRoster)} live roster`}
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(178px, 1fr))', gap: 12 }}>
+            {cb.buckets.map(b => (
+              <Widget
+                key={b.key}
+                label={b.label}
+                value={fmtN(b.count)}
+                sub={
+                  b.subTypes && b.subTypes.length > 0
+                    ? b.subTypes.map(s => `${s.count} ${s.label.toLowerCase()}`).join(' · ')
+                    : (b.medianAge !== null ? `median ${b.medianAge}d on roster` : null)
+                }
+                risk={b.riskCount > 0 ? `${b.riskCount} ${b.riskLabel}` : null}
+                owner={b.owner}
+                accent={b.riskCount > 0 ? BAD : 'var(--border)'}
+                tone={b.count === 0 ? undefined : (b.riskCount > 0 && b.riskCount / b.count >= 0.5 ? 'bad' : undefined)}
+                onClick={() => go(b.nav.page, b.nav.intent)}
+              />
             ))}
           </div>
+          {/* Reconciliation guard. Renders only if Pariox introduces a status
+              censusStatus.js does not model, so a new bucket can never quietly
+              disappear from the roster total. */}
+          {cb.unmapped.length > 0 && (
+            <div style={{ marginTop: 12, padding: '10px 14px', background: '#FEF3C7', border: `1px solid ${WARN}`, borderRadius: 8, fontSize: 12, color: '#78350F' }}>
+              <strong>Unmapped status detected:</strong>{' '}
+              {cb.unmapped.map(u => `${u.status} (${u.count})`).join(', ')}
+              {' '}-- counted in the roster total but not in any widget above. Add it to LIVE_BUCKETS in src/lib/censusStatus.js.
+            </div>
+          )}
         </div>
 
+        {/* 5. NEEDS YOU TODAY */}
+        <NeedsYouToday
+          items={needsYouToday}
+          onAction={(it) => { if (it && it.target) go(it.target, it.intent); }}
+        />
+
+        {/* 6. DETAIL — weekly-review depth, folded away from the daily read */}
+        <details style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          <summary style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: INK, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>
+              Detail -- Manager Scorecards {'·'} Exception Feed
+              <span style={{ fontSize: 10, fontWeight: 400, color: MUTED, marginLeft: 8 }}>for the weekly review, not the daily read</span>
+            </span>
+            <span style={{ fontSize: 10, color: MUTED }}>expand</span>
+          </summary>
+          <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, borderTop: '1px solid var(--border)' }}>
+            <ManagerScorecards
+              census={census}
+              statusLog={statusLog}
+              activityLog={activityLog}
+              coordinators={coordinators}
+              onScorecardClick={(sc) => {
+                if (sc.regions === 'ALL') go('ops-dashboard');
+                else if (sc.regions && sc.regions.length === 1) go('rm-dashboard', { region: sc.regions[0] });
+                else go('rm-dashboard', { regions: sc.regions });
+              }}
+            />
+            <ExceptionFeed
+              census={census}
+              activityLog={activityLog}
+              coordinators={coordinators}
+              onJumpTo={(target, intent) => go(target, intent)}
+            />
           </div>
         </details>
 

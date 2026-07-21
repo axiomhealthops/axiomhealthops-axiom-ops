@@ -71,6 +71,54 @@ codebase, and they have different rules:
   duplicate rows for the same slot with different `event_type`s
   (e.g. "Maintenance *e*" + "Level 2 *e*"). Collapse to one row per slot before counting.
 
+### Census status (added 2026-07-21)
+- **`src/lib/censusStatus.js` is the only place that interprets `census_data.status`.**
+  Never regex the raw column. `/active/i` matches `"Active - Auth Pendin"` too — that
+  exact bug made Director Command read 496 Active while the census page read 473.
+- Pariox **truncates status at 20 chars** on the roster import. The DB genuinely
+  contains `"Active - Auth Pendin"` and `"Discharge - Change I"`. `normalizeStatus()`
+  repairs them; call it before any comparison.
+- `bucketCensus(rows)` returns the 9 live buckets plus `liveRoster` / `discharged` /
+  `nonAdmit` / `total`. The buckets sum to `liveRoster`, and
+  `liveRoster + discharged + nonAdmit === total`. If a new Pariox status appears it
+  lands in `.unmapped` and renders a visible warning rather than silently vanishing.
+- **"Total census" is ambiguous — always say which.** Live roster (~720, actionable)
+  vs all-time rows (~1,037, includes ~270 discharged + 47 non-admit). Liam's default
+  is live roster.
+- **`status_changed_at` is NULL on ~95% of census rows.** Pariox does not send it on
+  the bulk upload; it is only stamped by our own UI. Any "days in status" metric built
+  on it under-reports ~20x — this silently broke the old Director Command "Pipeline
+  Stalled" tile, which evaluated 2 of 38 SOC Pending patients. Use `first_seen_date`
+  (100% populated), `last_visit_date` (NULL = never seen — the strongest pipeline-stall
+  signal), `days_since_last_visit`, or `days_overdue` instead.
+
+### Visit counting
+- **Two units, never interchangeable.** A co-treat (PT + PTA, same patient, same day)
+  is **2 visits** on the schedule but **1 billable encounter**.
+  - *Visits* = `(patient, date, staff)` rows. What Pariox and the ops team count, and
+    what Liam reads off the schedule. Use for "how many visits", capacity, productivity.
+  - *Encounters* = `(patient, date)`. Use for revenue: `encounters * BLENDED_RATE`.
+  - **Never multiply a visit count by BLENDED_RATE** — ~12% overstatement (749 vs 657
+    in the week of 2026-07-19).
+  - `classifyWeekSlots()` returns both, named: `booked` / `bookedVisits`,
+    `completed` / `completedVisits`, etc.
+- **Pariox sends full-week SNAPSHOTS, not deltas.** The morning export re-states the
+  whole current week (completed, missed and scheduled together). Use
+  **`dedupVisitsByAuthoritativeBatch()`** — NOT `dedupVisitsByLatestUpload()` — for any
+  count of booked/scheduled work. See incident 10 below.
+- `WEEKLY_VISIT_TARGET` (1000) lives in `visitMath.js`. Do **not** redeclare a local
+  target — Director Command had a local `const WEEKLY_TARGET = 750` disagreeing with it.
+- **Booked != completed.** `classifyWeekSlots(rows)` assigns each (patient, date) slot
+  exactly ONE outcome so the counts are mutually exclusive and
+  `booked === completed + missed + scheduled`. Use it whenever you need those numbers
+  to reconcile on screen. `classifyVisits()` dedups each class independently and is
+  fine only when you read a single field off it.
+- `isScheduled()` excludes cancellations: Pariox emits
+  `status="Scheduled"` + `event_type="Cancelled Treatment"` for same-week cancels.
+  Same trap as `isCompleted()` — never test `status` alone.
+- Run **`npm run check`** before `ship`. Dependency-free, sub-second, and it pins every
+  Pariox trap in the "Things that broke before" list below.
+
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
   in production and supabase-js silently truncates:
@@ -136,7 +184,7 @@ CLINICAL DEPARTMENT · MARKETING · PERFORMANCE · ADMIN
 
 | Page | Role | Job |
 |---|---|---|
-| Director Command | Liam | Hero revenue + exceptions + manager scorecards |
+| Director Command | Liam | Company pulse: visit delivery + 9 census status buckets, each with its owning department |
 | Operations Manager Dashboard | Carla | Pipeline bottlenecks across Intake/Auth/Care Coord |
 | Coordinator Portal | Mary (and care coords) | 2-col workflow: pipeline left, sticky tasks right |
 | Auth Coordinator Dashboard | Auth team | My Queue + insurance tabs + inline status toggle |
@@ -390,6 +438,38 @@ supabase/migrations/
       Form clinic-name field is a CRM-aware typeahead that searches
       `marketing_contacts` and auto-fills region + event address +
       provider_id FK when a CRM provider is picked.
+18. **Booked-visit counts inflated ~24% by stale slots** (2026-07-21). Director
+    Command v4 reported **924 booked visits** for the week of Jul 19 when Liam's
+    Pariox schedule said **764**. Two separate causes, both now fixed:
+    - **Unit confusion.** The page counted `(patient, date)` ENCOUNTERS and
+      labelled them "visits". A co-treat is 2 visits but 1 encounter, so the
+      right comparison was 749 visits / 657 encounters. `classifyWeekSlots()`
+      now returns both, explicitly named. See "Visit counting" above.
+    - **Stale slots.** `dedupVisitsByLatestUpload()` keys on
+      `(patient_name, visit_date)`. When a later Pariox export omits a slot —
+      cancelled, rescheduled, patient discharged — no newer row exists for that
+      key, so the old row wins by default and never dies. For Jul 19-25 that
+      left **935 slots alive vs 760 in the latest current-week export**.
+      `dedupVisitsByAuthoritativeBatch()` now reproduces the export exactly
+      (760 rows; Liam saw 764 live, the 4 being bookings added after our 11:24
+      pull).
+    **Retracted claim from the same session:** I initially reported that ~30% of
+    booked slots never resolved from the week of Jun 7 onward and framed it as a
+    Pariox feed regression worth ~$68K/week. That was wrong — it was this stale-slot
+    artifact. Under the new rule every finished week from May 24 to Jul 12 resolves
+    to 0-2 unresolved slots. There is no feed regression.
+    **STILL UNVERIFIED — do not build on these without checking:** batch scopes in
+    `visit_schedule_data` vary wildly (the Jul 21 batch is 760 rows spanning one
+    week; the Jul 20 17:07 batch is 2,671 rows spanning Jul 2 - Aug 1 yet carries
+    only 64 rows inside Jul 19-25). That is not consistent with `uploaded_at`
+    meaning "rows present in that export", so it may mean "rows CHANGED by that
+    export". Until someone confirms how the importer stamps `uploaded_at`, the
+    authoritative-batch rule is **inference from batch shape, not fact**, and it is
+    deliberately wired into **Director Command only**. Do not roll it out to the
+    other seven readers, and do not restate historical revenue, until that is
+    settled. The real fix is at ingest — a Pariox export should REPLACE its date
+    range rather than upsert into it — which is also what incidents 10 and 11
+    were circling.
 
 ## Territory model (2026-06-09)
 

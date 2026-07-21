@@ -9,6 +9,7 @@ import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useAuth } from '../../hooks/useAuth';
 import { useRiskMap } from '../../hooks/useRiskMap';
 import RiskBadge from '../../components/RiskBadge';
+import { isLiveRoster } from '../../lib/censusStatus';
 
 const FREQUENCY_OPTIONS = ['1x/week','2x/week','3x/week','4x/week','5x/week','1x/month','2x/month','PRN','Daily'];
 function isCancelled(e,s) { return /cancel/i.test(e||'')||/cancel/i.test(s||''); }
@@ -1214,6 +1215,12 @@ export default function PatientCensusPage({ intent } = {}) {
       // Default "ALL" hides discharged — they're not part of the active census
       if (statusFilter === 'ALL' && isDischarged) return false;
       if (statusFilter === 'ALL_WITH_DC') { /* show everything */ }
+      // 2026-07-21: live_roster == the population Director Command counts as
+      // "Total live roster". 'ALL' above drops discharged but KEEPS the 47
+      // Non-Admit rows, so 'ALL' and Director Command disagreed by exactly
+      // that many. This branch is the one that reconciles.
+      // Shares its definition with src/lib/censusStatus.js isLiveRoster().
+      else if (statusFilter === 'live_roster') { if (!isLiveRoster(rawStatus)) return false; }
       else if (statusFilter === 'active') { if (rawStatus !== 'Active' && rawStatus !== 'active') return false; }
       else if (statusFilter === 'active_auth') { if (!lowerStatus.startsWith('active - auth') && !lowerStatus.startsWith('active-auth')) return false; }
       else if (statusFilter === 'soc_pending') { if (!lowerStatus.includes('soc pending')) return false; }
@@ -1297,6 +1304,7 @@ export default function PatientCensusPage({ intent } = {}) {
             style={{ padding:'7px 10px', border:'1px solid var(--border)', borderRadius:6, fontSize:12, outline:'none', background:'var(--bg)' }}>
             {[
               { v:'ALL', l:'All Active (No Discharged)' },
+              { v:'live_roster', l:'Live Roster (no Discharged/Non-Admit)' },
               { v:'active', l:'Active' },
               { v:'active_auth', l:'Active - Auth Pending' },
               { v:'soc_pending', l:'SOC Pending' },
@@ -1306,7 +1314,9 @@ export default function PatientCensusPage({ intent } = {}) {
               { v:'waitlist', l:'Waitlist' },
               { v:'hospitalized', l:'Hospitalized' },
               { v:'discharged', l:'Discharged Only' },
-              { v:'ALL_WITH_DC', l:'All Patients (756)' },
+              // Count was hardcoded as "(756)" and had drifted to 1,037 in
+              // production. Render it live rather than re-hardcoding it.
+              { v:'ALL_WITH_DC', l:`All Patients (${census.length.toLocaleString()})` },
             ].map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
           </select>
           <select value={lastSeenFilter} onChange={e => { setLastSeenFilter(e.target.value); setPage(0); }}
