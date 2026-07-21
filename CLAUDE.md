@@ -119,6 +119,27 @@ codebase, and they have different rules:
 - Run **`npm run check`** before `ship`. Dependency-free, sub-second, and it pins every
   Pariox trap in the "Things that broke before" list below.
 
+### Medicare tracker (added 2026-07-21)
+- **`total_completed_visits` is maintained server-side.** `sync_medicare_visit_counts()`
+  runs every 15 min via pg_cron (same safety-net pattern as `sync_pending_auths`) and
+  recomputes visit counts + the progress-note clock from `visit_schedule_data`.
+  Before this it was only written by the client Recalculate button — last pressed
+  2026-06-30, leaving 12 of 57 patients drifted and 4 sitting 13-23 visits past a
+  required progress note while the page showed `progress_note_due = false`.
+- The sync **deliberately does not touch `current_episode_visit_count`** — that column
+  drives `trg_flag_medicare_ready_for_discharge` (critical alert at 20) and has its own
+  increment trigger. Recomputing it there would risk duplicate discharge escalations.
+- The sync **skips `needs_audit` and `archived_at` rows** so manual work is never
+  clobbered. Client `recalculate()` remains the full pass (new patients, therapist
+  resolution, escalation ladder).
+- Alert creation is gated by `medicare_sync_config.alerts_enabled_at` so a corrective
+  run can fix counts without blasting coordinators. Set it forward to re-mute.
+- **Progress notes are rows, not columns.** `medicare_progress_notes` holds one row per
+  note; files attach via `patient_documents.progress_note_id` in the existing
+  `patient-documents` bucket. The legacy `last_progress_note_*` columns are still
+  written as a denormalised "latest note" pointer because both the cron function and
+  `recalculate()` read them for the clock — do not delete them without rewiring both.
+
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
   in production and supabase-js silently truncates:

@@ -1115,7 +1115,31 @@ export default function MedicareTrackerPage() {
         )}
         <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search patient, PT, PTA..."
           style={{ ...selStyle, width:220 }} />
-        <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
+          {/* Sync freshness. Added 2026-07-21 because the failure that
+              prompted the auto-sync was invisible: the tracker had not been
+              recalculated in 21 days and nothing on screen said so. Counts
+              are now refreshed server-side every 15 minutes by
+              sync_medicare_visit_counts(); this turns amber if that ever
+              stops. */}
+          {(() => {
+            const stamps = liveFlags.map(f => f.last_calculated_at).filter(Boolean).sort();
+            const newest = stamps.length ? stamps[stamps.length - 1] : null;
+            if (!newest) return null;
+            const mins = Math.floor((Date.now() - new Date(newest).getTime()) / 60000);
+            const stale = mins > 60;
+            return (
+              <span title={`Visit counts last synced ${new Date(newest).toLocaleString()}`}
+                    style={{ fontSize:11, fontWeight:600, padding:'4px 9px', borderRadius:999,
+                             color: stale ? '#92400E' : '#065F46',
+                             background: stale ? '#FFFBEB' : '#ECFDF5',
+                             border: `1px solid ${stale ? '#D97706' : '#059669'}` }}>
+                {stale
+                  ? `counts ${mins > 2880 ? Math.floor(mins / 1440) + 'd' : Math.floor(mins / 60) + 'h'} stale`
+                  : `synced ${mins < 1 ? 'just now' : mins + 'm ago'}`}
+              </span>
+            );
+          })()}
           <button onClick={exportXlsx} style={btnSecondaryStyle}>Export XLSX</button>
           {/* Recalculate only on the Active view. On the Audit tab it would
               be a no-op for the visible rows (audited rows are intentionally
@@ -2160,6 +2184,12 @@ function PatientDrawer({ flag, isAdmin, profile, onClose, onSaved }) {
   const [loading, setLoading] = useState(true);
   const [noteDate, setNoteDate] = useState(todayISO());
   const [noteText, setNoteText] = useState('');
+  // Progress-note stack: every note ever submitted for this patient, each
+  // with its attached files. Replaces the single "last note" readout.
+  const [noteHistory, setNoteHistory] = useState([]);
+  const [noteFiles, setNoteFiles] = useState([]);   // File[] staged for upload
+  const [noteMsg, setNoteMsg] = useState('');
+  const [notesLoading, setNotesLoading] = useState(true);
   const [dcDate, setDcDate] = useState(todayISO());
   const [dcText, setDcText] = useState('');
   const [rosterNotes, setRosterNotes] = useState(flag.roster_notes || '');
@@ -2182,9 +2212,108 @@ function PatientDrawer({ flag, isAdmin, profile, onClose, onSaved }) {
     return () => { ignore = true; };
   }, [flag.patient_name]);
 
+  // Load the note stack + every attached file in two queries, then group the
+  // files under their note. Notes with no files still render — a note is a
+  // clinical event whether or not a document came with it.
+  const loadNotes = useCallback(async () => {
+    setNotesLoading(true);
+    const { data: notes } = await supabase
+      .from('medicare_progress_notes')
+      .select('id, note_date, visit_number, note_text, submitted_by, created_at')
+      .eq('patient_name', flag.patient_name)
+      .order('note_date', { ascending: false })
+      .order('created_at', { ascending: false });
+    const ids = (notes || []).map(n => n.id);
+    let docs = [];
+    if (ids.length) {
+      const { data } = await supabase
+        .from('patient_documents')
+        .select('id, progress_note_id, file_name, file_path, file_size, file_type, created_at')
+        .in('progress_note_id', ids);
+      docs = data || [];
+    }
+    const byNote = {};
+    docs.forEach(d => {
+      if (!byNote[d.progress_note_id]) byNote[d.progress_note_id] = [];
+      byNote[d.progress_note_id].push(d);
+    });
+    setNoteHistory((notes || []).map(n => ({ ...n, files: byNote[n.id] || [] })));
+    setNotesLoading(false);
+  }, [flag.patient_name]);
+
+  useEffect(() => { loadNotes(); }, [loadNotes]);
+
+  // Storage bucket is private, so a file is opened through a short-lived
+  // signed URL rather than a public link.
+  async function openNoteFile(doc) {
+    const { data, error } = await supabase.storage
+      .from('patient-documents')
+      .createSignedUrl(doc.file_path, 60);
+    if (error || !data?.signedUrl) {
+      setNoteMsg(`Could not open ${doc.file_name}: ${error?.message || 'no URL returned'}`);
+      return;
+    }
+    window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  // 2026-07-21: a note is now a ROW in medicare_progress_notes, not an
+  // overwrite of four columns on the flag. The legacy last_progress_note_*
+  // columns are still written because the progress-note clock in both
+  // sync_medicare_visit_counts() and recalculate() reads them — they now act
+  // as a denormalised "latest note" pointer over the history table.
   async function submitProgressNote() {
     setSaving(true);
     const visitAtSubmit = flag.total_completed_visits || 0;
+
+    // 1) Append to the stack first. If the file upload fails afterwards the
+    //    note itself still exists, which is the safer failure direction.
+    const { data: noteRow, error: noteErr } = await supabase
+      .from('medicare_progress_notes')
+      .insert({
+        flag_id: flag.id,
+        patient_name: flag.patient_name,
+        note_date: noteDate,
+        visit_number: visitAtSubmit,
+        note_text: noteText || null,
+        submitted_by: profileName,
+      })
+      .select('id').single();
+    if (noteErr) {
+      setSaving(false);
+      setNoteMsg(`Could not save the note: ${noteErr.message}`);
+      return;
+    }
+
+    // 2) Attach files, if any. Each lands in the existing patient-documents
+    //    bucket and is recorded on patient_documents against this note.
+    if (noteFiles.length > 0) {
+      const safeName = (flag.patient_name || 'patient').replace(/[^a-zA-Z0-9_-]/g, '_');
+      for (const file of noteFiles) {
+        const path = `${safeName}/progress_note/${noteRow.id}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const up = await supabase.storage.from('patient-documents')
+          .upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
+        if (up.error) {
+          setNoteMsg(`Note saved, but "${file.name}" failed to upload: ${up.error.message}`);
+          continue;
+        }
+        const { error: docErr } = await supabase.from('patient_documents').insert({
+          patient_name: flag.patient_name,
+          region: flag.region || null,
+          doc_type: 'medicare_progress_note',
+          doc_label: `Progress note - visit ${visitAtSubmit}`,
+          file_name: file.name,
+          file_path: up.data?.path || path,
+          file_type: file.type || null,
+          file_size: file.size,
+          effective_date: noteDate,
+          is_latest: true,
+          uploaded_by: profileName,
+          progress_note_id: noteRow.id,
+        });
+        if (docErr) setNoteMsg(`Note saved, but recording "${file.name}" failed: ${docErr.message}`);
+      }
+    }
+
     await supabase.from('medicare_visit_flags').update({
       last_progress_note_date: noteDate,
       last_progress_note_visit: visitAtSubmit,
@@ -2207,6 +2336,8 @@ function PatientDrawer({ flag, isAdmin, profile, onClose, onSaved }) {
       .eq('auto_generated', true)
       .in('status', ['open', 'in_progress']);
     setSaving(false);
+    setNoteText(''); setNoteFiles([]);
+    await loadNotes();
     onSaved();
     onClose();
   }
@@ -2406,9 +2537,101 @@ function PatientDrawer({ flag, isAdmin, profile, onClose, onSaved }) {
                 <textarea value={noteText} onChange={e => setNoteText(e.target.value)} rows={4} style={textareaStyle}
                   placeholder="e.g. Pariox note ID, signed-off date, EMR record" />
               </Field>
+
+              {/* Attachments. Multiple files per note — a scanned note that
+                  arrives as three pages is one clinical event, not three. */}
+              <Field label="Attach note file(s) — optional, multiple allowed">
+                <input
+                  type="file"
+                  multiple
+                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.tif,.tiff"
+                  onChange={e => setNoteFiles(Array.from(e.target.files || []))}
+                  style={{ fontSize:12 }} />
+                {noteFiles.length > 0 && (
+                  <div style={{ marginTop:6, fontSize:11, color:'var(--gray)' }}>
+                    {noteFiles.length} file{noteFiles.length === 1 ? '' : 's'} ready:{' '}
+                    {noteFiles.map(f => f.name).join(', ')}
+                  </div>
+                )}
+              </Field>
+
               <button onClick={submitProgressNote} disabled={saving} style={btnPrimaryStyle}>
                 {saving ? 'Saving...' : 'Confirm Progress Note Submitted'}
               </button>
+
+              {noteMsg && (
+                <div style={{ fontSize:12, color:'#92400E', background:'#FFFBEB',
+                              border:'1px solid #D97706', borderRadius:7, padding:'8px 12px' }}>
+                  {noteMsg}
+                </div>
+              )}
+
+              {/* ── The stack ──────────────────────────────────────────
+                  Every note ever submitted, newest first, each with its
+                  own files. Before 2026-07-21 only the most recent note
+                  existed — each submission overwrote the one before it. */}
+              <div style={{ borderTop:'1px solid var(--border)', paddingTop:12 }}>
+                <div style={{ fontSize:12, fontWeight:700, marginBottom:8 }}>
+                  Progress note history
+                  <span style={{ fontWeight:400, color:'var(--gray)', marginLeft:6 }}>
+                    {notesLoading ? 'loading...' : `${noteHistory.length} note${noteHistory.length === 1 ? '' : 's'} on file`}
+                  </span>
+                </div>
+
+                {!notesLoading && noteHistory.length === 0 && (
+                  <div style={{ fontSize:12, color:'var(--gray)', padding:'10px 0' }}>
+                    No progress notes recorded for this patient yet.
+                  </div>
+                )}
+
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  {noteHistory.map(n => (
+                    <div key={n.id} style={{ border:'1px solid var(--border)', borderRadius:8,
+                                             padding:'10px 12px', background:'var(--bg)' }}>
+                      <div style={{ display:'flex', justifyContent:'space-between',
+                                    alignItems:'baseline', gap:10, flexWrap:'wrap' }}>
+                        <div style={{ fontSize:12, fontWeight:700 }}>
+                          {fmtDate(n.note_date)}
+                          <span style={{ fontWeight:400, color:'var(--gray)', marginLeft:6 }}>
+                            at visit {n.visit_number ?? 0}
+                          </span>
+                        </div>
+                        <div style={{ fontSize:11, color:'var(--gray)' }}>
+                          {n.submitted_by || 'unknown'}
+                        </div>
+                      </div>
+
+                      {n.note_text && (
+                        <div style={{ fontSize:12, marginTop:5, whiteSpace:'pre-wrap', lineHeight:1.45 }}>
+                          {n.note_text}
+                        </div>
+                      )}
+
+                      {n.files.length > 0 ? (
+                        <div style={{ marginTop:7, display:'flex', flexWrap:'wrap', gap:6 }}>
+                          {n.files.map(d => (
+                            <button
+                              key={d.id}
+                              onClick={() => openNoteFile(d)}
+                              title={`Open ${d.file_name}`}
+                              style={{ fontSize:11, padding:'3px 9px', borderRadius:999,
+                                       border:'1px solid #94A3B8', background:'var(--card-bg)',
+                                       cursor:'pointer', maxWidth:260, overflow:'hidden',
+                                       textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                              {d.file_name}
+                              {d.file_size ? ` (${Math.max(1, Math.round(d.file_size / 1024))} KB)` : ''}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize:11, color:'var(--gray)', marginTop:6, fontStyle:'italic' }}>
+                          No file attached
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
