@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "node scripts/check-census-visit-math.mjs"
+    "check": "node scripts/check-census-visit-math.mjs && node scripts/check-undefined-refs.mjs",
+    "check:refs": "node scripts/check-undefined-refs.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

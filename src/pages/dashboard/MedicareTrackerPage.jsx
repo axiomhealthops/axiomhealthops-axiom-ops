@@ -56,6 +56,153 @@ import { isCompleted, isEval, dedupEncounters } from '../../lib/visitMath';
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 const ADMIN_ROLES = new Set(['super_admin', 'admin', 'director', 'ceo']);
 
+
+// 2026-06-30 — when a chart is flagged "Needs Audit" the following four
+// people get a high-priority alert. Per Liam: these names are intentionally
+// hard-wired (the alert UI has no per-recipient routing yet, and these four
+// all have all-region access so the single alert will land in their bell).
+// IDs sourced from coordinators table on 2026-06-30. Names are kept here for
+// the alert message body; IDs go into metadata so we can grow into per-user
+// routing later without rewriting the trigger logic.
+const AUDIT_ALERT_RECIPIENTS = [
+  { id: '24580169-8fea-4d42-97c3-2e4c779c3101', name: 'Hervylie Senica' },
+  { id: '646223a8-20b0-4d37-805d-b96d79c0f77c', name: 'Carla Smith' },
+  { id: '1fe789dc-ac6e-4289-a48e-8c2bbfa31637', name: "Liam O'Brien" },
+  { id: '7507c50d-0a27-4496-9466-36a989539b2d', name: 'Randi Bonner' },
+];
+
+const PATIENT_STATUS_OPTIONS = [
+  'Active', 'SOC Pending', 'On Hold', 'Hospitalized', 'Discharge', 'Non-Admit', 'Waitlist',
+];
+
+function fmtDate(d) {
+  if (!d) return '-';
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+// Compact "Jun 19 '26" form for in-row dates where horizontal real estate is
+// at a premium. Used in the roster row's Eval column and the 10th/20th
+// milestone sub-line. Full fmtDate stays for headers, modals, and exports.
+function fmtDateShort(d) {
+  if (!d) return '-';
+  const parts = new Date(d + 'T00:00:00').toLocaleDateString('en-US',
+    { month: 'short', day: 'numeric', year: '2-digit' }).split(', ');
+  return parts.length === 2 ? `${parts[0]} '${parts[1]}` : parts[0];
+}
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function addDaysIso(yyyymmdd, days) {
+  if (!yyyymmdd) return null;
+  const d = new Date(yyyymmdd + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function daysBetween(a, b) {
+  if (!a || !b) return null;
+  return Math.floor((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
+}
+// "Last, First" -> "First Last". Pariox stores staff "Last, First"; clinicians
+// table stores full_name "First Last".
+function flipName(name) {
+  if (!name) return '';
+  const m = name.match(/^\s*([^,]+),\s*(.+)$/);
+  return m ? `${m[2].trim()} ${m[1].trim()}` : name.trim();
+}
+
+// Insurance classifier. Single source of truth for "is this Medicare?" — see
+// the long-form comment in the original file (preserved here). Straight
+// Medicare ONLY; Advantage plans (Aetna Medicare, Cigna Medicare, CarePlus,
+// Humana, Devoted) follow private rules, not Medicare's 10/20.
+function buildInsuranceClassifier(rows) {
+  const byId = new Map();
+  for (const r of (rows || [])) {
+    for (const id of [r.display_name, r.insurance_name, r.abbreviation]) {
+      if (id) byId.set(id.toLowerCase().trim(), r.category);
+    }
+  }
+  return byId;
+}
+function isStraightMedicare(insurance, classifier) {
+  if (!insurance) return false;
+  const cat = classifier.get(insurance.toLowerCase().trim());
+  if (cat) return cat === 'Medicare';
+  const stripped = insurance.replace(/^[A-Za-z0-9]{1,3}\s*-\s*/, '').trim().toLowerCase();
+  return stripped === 'medicare';
+}
+
+// Project a future visit-N date from cadence. Uses last-12-week visit
+// frequency. Returns null if there's no history to extrapolate from.
+function projectVisitDate(careStartDate, lastVisitDate, currentCount, targetVisit) {
+  if (!careStartDate || !lastVisitDate || currentCount >= targetVisit) return null;
+  const elapsedDays = daysBetween(careStartDate, lastVisitDate) || 1;
+  const visitsPerDay = currentCount / Math.max(elapsedDays, 1);
+  if (visitsPerDay <= 0) return null;
+  const remaining = targetVisit - currentCount;
+  const daysAhead = Math.ceil(remaining / visitsPerDay);
+  return addDaysIso(todayISO(), Math.min(daysAhead, 365)); // cap forecast at 1y
+}
+
+// --- severity bucket -------------------------------------------------------
+// Per-episode count is the cap-relevant number (Phase 3 / 2026-06-01).
+// Falls back to total_completed_visits for the first time the page is loaded
+// after a fresh patient is added before recalc has populated the episode.
+function visitsForCap(f) {
+  if (f?.current_episode_visit_count != null) return f.current_episode_visit_count;
+  return f?.total_completed_visits || 0;
+}
+function bucketOf(f) {
+  const v = visitsForCap(f);
+  if (v >= 21) return 'over_cap';
+  if (v >= 20) return 'discharge';
+  if (v >= 18) return 'dc_soon';
+  if (v >= 10 && f?.progress_note_due) return 'note_overdue';
+  if (v >= 8) return 'note_soon';
+  return 'ok';
+}
+// True when Pariox-derived current-episode count and Liam's manual import
+// disagree by more than 2 visits. Helps surface mismatches without picking a
+// winner; 2-visit fuzz is normal (timing of upload + reconciliation lag).
+function manualDriftOf(f) {
+  if (f?.manual_visit_count == null || f?.current_episode_visit_count == null) return 0;
+  return Math.abs(f.current_episode_visit_count - f.manual_visit_count);
+}
+// 2026-06-30 redesign: fewer columns, lighter palette, a 4px colored left-
+// accent stripe instead of the cryptic X/!/~/*/.  bucket icon. Only OVER CAP
+// keeps a faint row tint (because it IS an emergency); everything else relies
+// on the stripe + a small bucket chip in the Status column.
+const BUCKET_STYLE = {
+  over_cap:     { accent: '#7F1D1D', tint: '#FEF2F2', label: 'OVER CAP'  },
+  discharge:    { accent: '#DC2626', tint: 'transparent', label: 'READY DC' },
+  dc_soon:      { accent: '#7C3AED', tint: 'transparent', label: 'DC SOON'   },
+  note_overdue: { accent: '#EA580C', tint: 'transparent', label: 'NOTE DUE'  },
+  note_soon:    { accent: '#CA8A04', tint: 'transparent', label: 'NOTE SOON' },
+  ok:           { accent: 'transparent', tint: 'transparent', label: ''     },
+};
+
+// --- column definitions (2026-06-30 condensed layout) ---------------------
+// Was 15 cols (Liam's Excel spec). Reduced to 7 by stacking related fields
+// inside one cell. The XLSX export still emits all 15 fields for parity with
+// Liam's spreadsheet workflow — only the on-screen table is condensed.
+const COLS = [
+  { key: 'patient_name',           label: 'Patient',    w: 240, sortBy: 'patient_name' },
+  { key: 'patient_status',         label: 'Status',     w: 130, sortBy: 'patient_status' },
+  { key: 'evaluation_date',        label: 'Eval',       w: 90,  sortBy: 'evaluation_date' },
+  { key: 'therapists',             label: 'Therapists', w: 200, sortBy: 'evaluating_pt' },
+  { key: 'progress',               label: 'Progress',   w: 180, sortBy: 'total_completed_visits' },
+  { key: 'roster_notes',           label: 'Notes',      w: 240, sortBy: null },
+  { key: 'action',                 label: '',           w: 130, sortBy: null },
+  { key: 'audit',                  label: 'Audit',      w: 70,  sortBy: null },
+];
+
+const AUDIT_COLS = [
+  { key: 'patient_name',           label: 'Patient',      w: 220, sortBy: 'patient_name' },
+  { key: 'audit_reason',           label: 'Audit Reason', w: 240, sortBy: 'needs_audit_flagged_at' },
+  { key: 'patient_status',         label: 'Status',       w: 150, sortBy: 'patient_status' },
+  { key: 'evaluation_date',        label: 'Eval Date',    w: 130, sortBy: 'evaluation_date' },
+  { key: 'therapists',             label: 'Therapists',   w: 240, sortBy: 'evaluating_pt' },
+  { key: 'progress',               label: 'Progress',     w: 170, sortBy: 'total_completed_visits' },
+  { key: 'audit_actions',          label: '',             w: 200, sortBy: null },
+];
+
+
 // =============================================================================
 // MAIN PAGE
 // =============================================================================
