@@ -146,5 +146,32 @@ eq('unknown status surfaces in unmapped',
   bucketCensus([C('Pending Martian Review',null,old,0)]).unmapped,
   [{status:'Pending Martian Review',count:1}]);
 
+// --- Medicare archive eligibility (2026-07-21) ------------------------
+// Guards the Archive button on MedicareTrackerPage. The visit check is the
+// one that matters: status is editable, a completed visit is a billing fact,
+// and archiving a patient we actually treated would hide revenue.
+const {canArchiveFlag,archiveWarnings}=await import(R+'medicareArchive.js');
+const F=(o={})=>({patient_status:'Non-Admit',total_completed_visits:0,archived_at:null,...o});
+eq('non-admit with 0 visits is archivable', canArchiveFlag(F()), true);
+eq('non-admit with visits is NOT archivable', canArchiveFlag(F({total_completed_visits:3})), false);
+eq('active status is NOT archivable', canArchiveFlag(F({patient_status:'Active'})), false);
+eq('soc pending is NOT archivable', canArchiveFlag(F({patient_status:'SOC Pending'})), false);
+eq('already-archived is NOT archivable', canArchiveFlag(F({archived_at:'2026-07-21T00:00:00Z'})), false);
+eq('null visit count treated as zero', canArchiveFlag(F({total_completed_visits:null})), true);
+eq('case/space drift still archivable', canArchiveFlag(F({patient_status:' non-admit '})), true);
+eq('missing flag is not archivable', canArchiveFlag(null), false);
+
+// Warnings never block; they must SURFACE the two real conflicts.
+eq('census mismatch warns',
+  archiveWarnings(F(),{status:'SOC Pending',last_visit_date:null}).length, 1);
+eq('recorded visit warns',
+  archiveWarnings(F(),{status:'Non-Admit',last_visit_date:'2026-07-17'}).length, 1);
+eq('both conflicts warn twice',
+  archiveWarnings(F(),{status:'Waitlist',last_visit_date:'2026-05-29'}).length, 2);
+eq('clean row warns not at all',
+  archiveWarnings(F(),{status:'Non-Admit',last_visit_date:null}), []);
+eq('missing census row warns',
+  archiveWarnings(F(),undefined).length, 1);
+
 console.log(fail?`\n${fail} FAILED`:'\nAll assertions passed');
 process.exit(fail?1:0);

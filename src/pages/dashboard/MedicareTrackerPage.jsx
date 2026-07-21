@@ -43,6 +43,9 @@ import * as XLSX from 'xlsx';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+// Archive rules live in a plain .js lib so scripts/check-census-visit-math.mjs
+// can assert them without a build step. See src/lib/medicareArchive.js.
+import { canArchiveFlag, archiveWarnings } from '../../lib/medicareArchive';
 import { useAssignedRegions } from '../../hooks/useAssignedRegions';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import { REGION_COORD } from '../../lib/alertEngine';
@@ -52,151 +55,6 @@ import { isCompleted, isEval, dedupEncounters } from '../../lib/visitMath';
 
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 const ADMIN_ROLES = new Set(['super_admin', 'admin', 'director', 'ceo']);
-
-// 2026-06-30 — when a chart is flagged "Needs Audit" the following four
-// people get a high-priority alert. Per Liam: these names are intentionally
-// hard-wired (the alert UI has no per-recipient routing yet, and these four
-// all have all-region access so the single alert will land in their bell).
-// IDs sourced from coordinators table on 2026-06-30. Names are kept here for
-// the alert message body; IDs go into metadata so we can grow into per-user
-// routing later without rewriting the trigger logic.
-const AUDIT_ALERT_RECIPIENTS = [
-  { id: '24580169-8fea-4d42-97c3-2e4c779c3101', name: 'Hervylie Senica' },
-  { id: '646223a8-20b0-4d37-805d-b96d79c0f77c', name: 'Carla Smith' },
-  { id: '1fe789dc-ac6e-4289-a48e-8c2bbfa31637', name: "Liam O'Brien" },
-  { id: '7507c50d-0a27-4496-9466-36a989539b2d', name: 'Randi Bonner' },
-];
-
-const PATIENT_STATUS_OPTIONS = [
-  'Active', 'SOC Pending', 'On Hold', 'Hospitalized', 'Discharge', 'Non-Admit', 'Waitlist',
-];
-
-function fmtDate(d) {
-  if (!d) return '-';
-  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-// Compact "Jun 19 '26" form for in-row dates where horizontal real estate is
-// at a premium. Used in the roster row's Eval column and the 10th/20th
-// milestone sub-line. Full fmtDate stays for headers, modals, and exports.
-function fmtDateShort(d) {
-  if (!d) return '-';
-  const parts = new Date(d + 'T00:00:00').toLocaleDateString('en-US',
-    { month: 'short', day: 'numeric', year: '2-digit' }).split(', ');
-  return parts.length === 2 ? `${parts[0]} '${parts[1]}` : parts[0];
-}
-function todayISO() { return new Date().toISOString().slice(0, 10); }
-function addDaysIso(yyyymmdd, days) {
-  if (!yyyymmdd) return null;
-  const d = new Date(yyyymmdd + 'T00:00:00');
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-function daysBetween(a, b) {
-  if (!a || !b) return null;
-  return Math.floor((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
-}
-// "Last, First" -> "First Last". Pariox stores staff "Last, First"; clinicians
-// table stores full_name "First Last".
-function flipName(name) {
-  if (!name) return '';
-  const m = name.match(/^\s*([^,]+),\s*(.+)$/);
-  return m ? `${m[2].trim()} ${m[1].trim()}` : name.trim();
-}
-
-// Insurance classifier. Single source of truth for "is this Medicare?" — see
-// the long-form comment in the original file (preserved here). Straight
-// Medicare ONLY; Advantage plans (Aetna Medicare, Cigna Medicare, CarePlus,
-// Humana, Devoted) follow private rules, not Medicare's 10/20.
-function buildInsuranceClassifier(rows) {
-  const byId = new Map();
-  for (const r of (rows || [])) {
-    for (const id of [r.display_name, r.insurance_name, r.abbreviation]) {
-      if (id) byId.set(id.toLowerCase().trim(), r.category);
-    }
-  }
-  return byId;
-}
-function isStraightMedicare(insurance, classifier) {
-  if (!insurance) return false;
-  const cat = classifier.get(insurance.toLowerCase().trim());
-  if (cat) return cat === 'Medicare';
-  const stripped = insurance.replace(/^[A-Za-z0-9]{1,3}\s*-\s*/, '').trim().toLowerCase();
-  return stripped === 'medicare';
-}
-
-// Project a future visit-N date from cadence. Uses last-12-week visit
-// frequency. Returns null if there's no history to extrapolate from.
-function projectVisitDate(careStartDate, lastVisitDate, currentCount, targetVisit) {
-  if (!careStartDate || !lastVisitDate || currentCount >= targetVisit) return null;
-  const elapsedDays = daysBetween(careStartDate, lastVisitDate) || 1;
-  const visitsPerDay = currentCount / Math.max(elapsedDays, 1);
-  if (visitsPerDay <= 0) return null;
-  const remaining = targetVisit - currentCount;
-  const daysAhead = Math.ceil(remaining / visitsPerDay);
-  return addDaysIso(todayISO(), Math.min(daysAhead, 365)); // cap forecast at 1y
-}
-
-// --- severity bucket -------------------------------------------------------
-// Per-episode count is the cap-relevant number (Phase 3 / 2026-06-01).
-// Falls back to total_completed_visits for the first time the page is loaded
-// after a fresh patient is added before recalc has populated the episode.
-function visitsForCap(f) {
-  if (f?.current_episode_visit_count != null) return f.current_episode_visit_count;
-  return f?.total_completed_visits || 0;
-}
-function bucketOf(f) {
-  const v = visitsForCap(f);
-  if (v >= 21) return 'over_cap';
-  if (v >= 20) return 'discharge';
-  if (v >= 18) return 'dc_soon';
-  if (v >= 10 && f?.progress_note_due) return 'note_overdue';
-  if (v >= 8) return 'note_soon';
-  return 'ok';
-}
-// True when Pariox-derived current-episode count and Liam's manual import
-// disagree by more than 2 visits. Helps surface mismatches without picking a
-// winner; 2-visit fuzz is normal (timing of upload + reconciliation lag).
-function manualDriftOf(f) {
-  if (f?.manual_visit_count == null || f?.current_episode_visit_count == null) return 0;
-  return Math.abs(f.current_episode_visit_count - f.manual_visit_count);
-}
-// 2026-06-30 redesign: fewer columns, lighter palette, a 4px colored left-
-// accent stripe instead of the cryptic X/!/~/*/.  bucket icon. Only OVER CAP
-// keeps a faint row tint (because it IS an emergency); everything else relies
-// on the stripe + a small bucket chip in the Status column.
-const BUCKET_STYLE = {
-  over_cap:     { accent: '#7F1D1D', tint: '#FEF2F2', label: 'OVER CAP'  },
-  discharge:    { accent: '#DC2626', tint: 'transparent', label: 'READY DC' },
-  dc_soon:      { accent: '#7C3AED', tint: 'transparent', label: 'DC SOON'   },
-  note_overdue: { accent: '#EA580C', tint: 'transparent', label: 'NOTE DUE'  },
-  note_soon:    { accent: '#CA8A04', tint: 'transparent', label: 'NOTE SOON' },
-  ok:           { accent: 'transparent', tint: 'transparent', label: ''     },
-};
-
-// --- column definitions (2026-06-30 condensed layout) ---------------------
-// Was 15 cols (Liam's Excel spec). Reduced to 7 by stacking related fields
-// inside one cell. The XLSX export still emits all 15 fields for parity with
-// Liam's spreadsheet workflow — only the on-screen table is condensed.
-const COLS = [
-  { key: 'patient_name',           label: 'Patient',    w: 240, sortBy: 'patient_name' },
-  { key: 'patient_status',         label: 'Status',     w: 130, sortBy: 'patient_status' },
-  { key: 'evaluation_date',        label: 'Eval',       w: 90,  sortBy: 'evaluation_date' },
-  { key: 'therapists',             label: 'Therapists', w: 200, sortBy: 'evaluating_pt' },
-  { key: 'progress',               label: 'Progress',   w: 180, sortBy: 'total_completed_visits' },
-  { key: 'roster_notes',           label: 'Notes',      w: 240, sortBy: null },
-  { key: 'action',                 label: '',           w: 130, sortBy: null },
-  { key: 'audit',                  label: 'Audit',      w: 70,  sortBy: null },
-];
-
-const AUDIT_COLS = [
-  { key: 'patient_name',           label: 'Patient',      w: 220, sortBy: 'patient_name' },
-  { key: 'audit_reason',           label: 'Audit Reason', w: 240, sortBy: 'needs_audit_flagged_at' },
-  { key: 'patient_status',         label: 'Status',       w: 150, sortBy: 'patient_status' },
-  { key: 'evaluation_date',        label: 'Eval Date',    w: 130, sortBy: 'evaluation_date' },
-  { key: 'therapists',             label: 'Therapists',   w: 240, sortBy: 'evaluating_pt' },
-  { key: 'progress',               label: 'Progress',     w: 170, sortBy: 'total_completed_visits' },
-  { key: 'audit_actions',          label: '',             w: 200, sortBy: null },
-];
 
 // =============================================================================
 // MAIN PAGE
@@ -208,7 +66,12 @@ export default function MedicareTrackerPage() {
   const [flags, setFlags] = useState([]);
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
-  const [view, setView] = useState('active'); // 'active' | 'audit'
+  const [view, setView] = useState('active'); // 'active' | 'audit' | 'archived'
+  // Archive modal — { flag } or null. Reason is optional but captured.
+  const [confirmArchive, setConfirmArchive] = useState(null);
+  const [archiveReason, setArchiveReason] = useState('');
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [censusByPatient, setCensusByPatient] = useState({});
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [filterDiscipline, setFilterDiscipline] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -412,6 +275,112 @@ export default function MedicareTrackerPage() {
     }
   }
 
+  // ─── Archive a never-activated patient ───────────────────────────────
+  // Liam, 2026-07-21: "these patients were never actually seen or activated
+  // with our services." Non-Admit rows with zero completed visits are pure
+  // noise on the roster, but they are NOT deletable — the row is the evidence
+  // that we assessed and declined them.
+  //
+  // THE CENSUS WRITE IS NOT OPTIONAL. When staff audit, the tracker is the
+  // authority: they review, find the census status wrong, and correct it here.
+  // But `recalculate()` reads census and writes `patient_status: pt.status`
+  // straight back over the tracker. So a correction that only lands on
+  // medicare_visit_flags survives exactly until the next recalc, then silently
+  // reverts. That is why 4 of the 19 Non-Admit rows currently disagree with
+  // census (3 SOC Pending, 1 Waitlist). Pushing the status to census_data
+  // first is what makes the correction durable.
+  async function archivePatient(flag, reason) {
+    setArchiveBusy(true);
+    setDischargeMsg('');
+    try {
+      const actor = profile?.full_name || profile?.email || 'Unknown';
+      const nowIso = new Date().toISOString();
+      const trackerStatus = flag.patient_status || 'Non-Admit';
+
+      // 1) Push the audited status to census so recalc cannot revert it.
+      //    Matched on patient_name, the same key every other write on this
+      //    page uses.
+      const { error: censusErr } = await supabase
+        .from('census_data')
+        .update({ status: trackerStatus, updated_by: actor, status_changed_at: nowIso })
+        .eq('patient_name', flag.patient_name);
+      if (censusErr) throw new Error(`census_data update failed: ${censusErr.message}`);
+
+      // 2) Archive the tracker row. is_active is deliberately left alone —
+      //    loadFlags() filters on is_active=true, so flipping it would make
+      //    the row invisible to the Archived tab and un-restorable from the UI.
+      const { error: flagErr } = await supabase
+        .from('medicare_visit_flags')
+        .update({
+          archived_at: nowIso,
+          archived_by: actor,
+          archive_reason: reason || null,
+          updated_at: nowIso,
+        })
+        .eq('id', flag.id);
+      if (flagErr) throw new Error(`medicare_visit_flags update failed: ${flagErr.message}`);
+
+      logActivity({
+        coordinatorId: profile?.id,
+        coordinatorName: profile?.full_name,
+        coordinatorRole: profile?.role,
+        actionType: 'medicare_patient_archived',
+        actionDetail:
+          `Archived ${flag.patient_name}${flag.region ? ` (Region ${flag.region})` : ''} ` +
+          `as ${trackerStatus}${reason ? ` — ${reason}` : ''}`,
+        patientName: flag.patient_name,
+        tableName: 'medicare_visit_flags',
+        recordId: flag.id,
+        metadata: {
+          source: 'medicare_tracker',
+          actor,
+          region: flag.region,
+          tracker_status: trackerStatus,
+          visits_completed: flag.total_completed_visits ?? 0,
+          census_synced_to: trackerStatus,
+          reason: reason || null,
+        },
+      });
+
+      setDischargeMsg(`${flag.patient_name} archived. Census set to ${trackerStatus}.`);
+      setConfirmArchive(null);
+      setArchiveReason('');
+      setTimeout(() => setDischargeMsg(''), 4000);
+      loadFlags();
+    } catch (e) {
+      console.error('Archive failed', e);
+      setDischargeMsg(`Archive failed: ${e?.message || e}`);
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
+  // Restore an archived row to the working roster. Intentionally trivial —
+  // an archive you cannot undo is a delete with extra steps.
+  async function unarchivePatient(flag) {
+    const actor = profile?.full_name || profile?.email || 'Unknown';
+    const { error } = await supabase
+      .from('medicare_visit_flags')
+      .update({ archived_at: null, archived_by: null, archive_reason: null,
+                updated_at: new Date().toISOString() })
+      .eq('id', flag.id);
+    if (error) { setDischargeMsg(`Restore failed: ${error.message}`); return; }
+    logActivity({
+      coordinatorId: profile?.id,
+      coordinatorName: profile?.full_name,
+      coordinatorRole: profile?.role,
+      actionType: 'medicare_patient_unarchived',
+      actionDetail: `Restored ${flag.patient_name} to the Medicare roster`,
+      patientName: flag.patient_name,
+      tableName: 'medicare_visit_flags',
+      recordId: flag.id,
+      metadata: { source: 'medicare_tracker', actor, region: flag.region },
+    });
+    setDischargeMsg(`${flag.patient_name} restored to the roster.`);
+    setTimeout(() => setDischargeMsg(''), 3000);
+    loadFlags();
+  }
+
   // ─── Save inline edits from the Needs Audit table ────────────────────
   // Used by AuditRosterRow's Save button. patch is a partial object of the
   // editable fields (patient_status, evaluation_date, evaluating_pt,
@@ -425,6 +394,36 @@ export default function MedicareTrackerPage() {
     if (error) {
       setDischargeMsg(`Save failed: ${error.message}`);
       return false;
+    }
+
+    // 2026-07-21: mirror an audited status change back to census_data.
+    // Without this the edit is temporary — recalculate() writes
+    // `patient_status: pt.status` FROM census, so the next recalc silently
+    // reverts whatever the auditor corrected here. Liam: "if the active
+    // roster is SOC Pending, but really the patient is active, the tracker
+    // has been updated to active so the status needs to be updated in the
+    // census also." The tracker is the authority during an audit.
+    // Non-fatal: the tracker edit above already succeeded, so a census
+    // failure is surfaced as a warning rather than losing the user's work.
+    if (patch.patient_status && patch.patient_status !== flag.patient_status) {
+      const { error: censusErr } = await supabase
+        .from('census_data')
+        .update({
+          status: patch.patient_status,
+          updated_by: actor,
+          status_changed_at: new Date().toISOString(),
+        })
+        .eq('patient_name', flag.patient_name);
+      if (censusErr) {
+        console.warn('Census status sync failed:', censusErr.message);
+        setDischargeMsg(
+          `${flag.patient_name} updated on the tracker, but the census sync failed ` +
+          `(${censusErr.message}). The next recalculation will revert this status.`
+        );
+        setTimeout(() => setDischargeMsg(''), 8000);
+        loadFlags();
+        return true;
+      }
     }
     logActivity({
       coordinatorId: profile?.id,
@@ -578,10 +577,20 @@ export default function MedicareTrackerPage() {
         .select('patient_name, needs_audit').eq('needs_audit', true);
       const auditedPatientNames = new Set((auditFlagRows || []).map(r => r.patient_name));
 
+      // 2026-07-21: archived patients are still on the Medicare census, so
+      // without this they would be re-upserted and re-alerted on every
+      // recalc — the archive would appear to "not stick".
+      const { data: archivedRows } = await supabase.from('medicare_visit_flags')
+        .select('patient_name').not('archived_at', 'is', null);
+      const archivedPatientNames = new Set((archivedRows || []).map(r => r.patient_name));
+
       for (const pt of mcPts) {
         // Skip rows currently flagged for audit — Ariel's manual edits would
         // be overwritten otherwise. Recalc resumes once needs_audit clears.
         if (auditedPatientNames.has(pt.patient_name)) continue;
+        // Skip archived rows entirely. Restoring one from the Archived tab
+        // puts it straight back into the next recalc.
+        if (archivedPatientNames.has(pt.patient_name)) continue;
 
         // Completed visits only (via canonical isCompleted), deduped to one
         // encounter per (patient, date) so PT+PTA co-treat slots don't double.
@@ -807,6 +816,17 @@ export default function MedicareTrackerPage() {
         .eq('is_active', true)
     );
     setFlags(data || []);
+    // Census snapshot, keyed by lowercased name. Powers the archive dialog's
+    // "this will also change census" line and the never-seen contradiction
+    // warning. Cheap (~1K rows) and read-only.
+    const censusRows = await fetchAllPages(
+      supabase.from('census_data').select('patient_name, status, last_visit_date')
+    );
+    const map = {};
+    (censusRows || []).forEach(r => {
+      if (r && r.patient_name) map[r.patient_name.toLowerCase().trim()] = r;
+    });
+    setCensusByPatient(map);
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionScope.loading, regionScope.isAllAccess, JSON.stringify(regionScope.regions)]);
@@ -889,9 +909,14 @@ export default function MedicareTrackerPage() {
   // Split flags by audit lane first — Active view hides audited rows, Audit
   // view shows only audited rows. Dropdown/search filters apply to whichever
   // lane the user is currently on.
-  const activeFlags = useMemo(() => flags.filter(f => !f.needs_audit), [flags]);
-  const auditFlags  = useMemo(() => flags.filter(f =>  f.needs_audit), [flags]);
-  const sourceFlags = view === 'audit' ? auditFlags : activeFlags;
+  // 2026-07-21: archived rows drop out of BOTH working lanes. Archiving is a
+  // soft hide — the row, its counters and its history all stay put, and
+  // unarchiving is a single UPDATE that nulls archived_at.
+  const liveFlags     = useMemo(() => flags.filter(f => !f.archived_at), [flags]);
+  const activeFlags   = useMemo(() => liveFlags.filter(f => !f.needs_audit), [liveFlags]);
+  const auditFlags    = useMemo(() => liveFlags.filter(f =>  f.needs_audit), [liveFlags]);
+  const archivedFlags = useMemo(() => flags.filter(f => !!f.archived_at), [flags]);
+  const sourceFlags = view === 'audit' ? auditFlags : view === 'archived' ? archivedFlags : activeFlags;
 
   const filtered = useMemo(() => {
     return sourceFlags.filter(f => {
@@ -1020,6 +1045,15 @@ export default function MedicareTrackerPage() {
           accent="#B45309"
           active={view === 'audit'}
           onClick={() => setView('audit')} />
+        {/* Archived — never-activated patients hidden from the working
+            roster. Tab is always present so archived rows stay one click
+            away and restorable, never a black hole. */}
+        <TabButton
+          label="Archived"
+          count={archivedFlags.length}
+          accent="#64748B"
+          active={view === 'archived'}
+          onClick={() => setView('archived')} />
       </div>
 
       {/* KPI tiles — Active view only. Audit view doesn't get the buckets;
@@ -1125,6 +1159,10 @@ export default function MedicareTrackerPage() {
                     ? (auditFlags.length === 0
                         ? 'No charts flagged for audit.'
                         : 'No rows match current filters.')
+                    : view === 'archived'
+                    ? (archivedFlags.length === 0
+                        ? 'Nothing archived. Non-Admit patients with zero completed visits can be archived from the Active Roster.'
+                        : 'No rows match current filters.')
                     : (flags.length === 0
                         ? 'No Medicare patients yet. Click Recalculate to scan.'
                         : 'No rows match current filters.')}
@@ -1150,6 +1188,8 @@ export default function MedicareTrackerPage() {
                       bucketLabel={style.label}
                       onSelect={() => setSelectedPatient(f)}
                       onDischarge={() => setConfirmDischarge(f)}
+                      onArchive={() => { setConfirmArchive(f); setArchiveReason(''); }}
+                      onUnarchive={f.archived_at ? () => unarchivePatient(f) : undefined}
                       onAudit={() => { setAuditPrompt(f); setAuditReason(''); }} />
                   );
                 })
@@ -1169,6 +1209,93 @@ export default function MedicareTrackerPage() {
           onSaved={() => { loadFlags(); }}
         />
       )}
+
+      {/* Archive confirmation modal. Deliberately spells out BOTH writes —
+          the census status change is the non-obvious one, and it is the part
+          that makes the audit correction survive the next recalculation. */}
+      {confirmArchive && (() => {
+        const warnings = archiveWarnings(
+          confirmArchive,
+          censusByPatient[(confirmArchive.patient_name || '').toLowerCase().trim()]
+        );
+        const trackerStatus = confirmArchive.patient_status || 'Non-Admit';
+        return (
+          <div
+            onClick={() => !archiveBusy && setConfirmArchive(null)}
+            style={{ position:'fixed', inset:0, background:'rgba(15, 23, 42, 0.6)', zIndex:3000,
+                     display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background:'var(--card-bg)', borderRadius:14, width:'100%', maxWidth:560,
+                       boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
+              <div style={{ padding:'16px 22px', background:'#334155', borderRadius:'14px 14px 0 0' }}>
+                <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>Archive Patient</div>
+                <div style={{ fontSize:11, color:'rgba(255,255,255,0.85)', marginTop:2 }}>
+                  Hides the row from the roster. Nothing is deleted, and you can restore it from the Archived tab.
+                </div>
+              </div>
+              <div style={{ padding:'18px 22px' }}>
+                <div style={{ background:'var(--bg)', border:'1px solid var(--border)', borderRadius:8,
+                              padding:'10px 14px', marginBottom:14 }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:'var(--gray)', textTransform:'uppercase', letterSpacing:0.4 }}>Patient</div>
+                  <div style={{ fontSize:15, fontWeight:700, marginTop:2 }}>{confirmArchive.patient_name}</div>
+                  <div style={{ fontSize:12, color:'var(--gray)', marginTop:4 }}>
+                    Region {confirmArchive.region || '—'} {'·'} {confirmArchive.discipline || '—'} {'·'}
+                    {' '}status {trackerStatus} {'·'} {confirmArchive.total_completed_visits ?? 0} completed visits
+                  </div>
+                </div>
+
+                <div style={{ fontSize:13, marginBottom:12, lineHeight:1.5 }}>
+                  This will set the census status to <strong>{trackerStatus}</strong> and archive the tracker row.
+                  The census write is what stops the next recalculation from reverting the audited status.
+                </div>
+
+                {warnings.length > 0 && (
+                  <div style={{ background:'#FFFBEB', border:'1px solid #D97706', borderRadius:8,
+                                padding:'10px 14px', marginBottom:14 }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:'#92400E', textTransform:'uppercase', letterSpacing:0.4, marginBottom:5 }}>
+                      Check before archiving
+                    </div>
+                    {warnings.map((w, i) => (
+                      <div key={i} style={{ fontSize:12, color:'#78350F', lineHeight:1.5, marginTop: i ? 5 : 0 }}>{w}</div>
+                    ))}
+                  </div>
+                )}
+
+                <div>
+                  <div style={{ fontSize:11, fontWeight:600, color:'var(--gray)', marginBottom:4 }}>
+                    Reason (optional — shown on the Archived tab)
+                  </div>
+                  <textarea
+                    value={archiveReason}
+                    onChange={e => setArchiveReason(e.target.value)}
+                    placeholder="e.g. declined services at intake, never scheduled"
+                    rows={2}
+                    style={{ width:'100%', padding:'8px 11px', border:'1px solid var(--border)',
+                             borderRadius:7, fontSize:13, outline:'none', background:'var(--card-bg)',
+                             resize:'vertical', minHeight:48, boxSizing:'border-box' }} />
+                </div>
+              </div>
+              <div style={{ padding:'12px 22px', borderTop:'1px solid var(--border)',
+                            display:'flex', justifyContent:'flex-end', gap:8, background:'var(--bg)' }}>
+                <button
+                  onClick={() => { setConfirmArchive(null); setArchiveReason(''); }}
+                  disabled={archiveBusy}
+                  style={{ padding:'8px 16px', border:'1px solid var(--border)', borderRadius:7,
+                           fontSize:13, background:'var(--card-bg)', cursor:archiveBusy?'wait':'pointer' }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={() => archivePatient(confirmArchive, archiveReason)}
+                  disabled={archiveBusy}
+                  style={{ padding:'8px 20px', background:'#334155', color:'#fff', border:'none',
+                           borderRadius:7, fontSize:13, fontWeight:700, cursor:archiveBusy?'wait':'pointer' }}>
+                  {archiveBusy ? 'Archiving...' : 'Archive Patient'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Discharge confirmation modal */}
       {confirmDischarge && (
@@ -1415,7 +1542,7 @@ function KpiTile({ label, value, accent, active, onClick }) {
 //     on a second line. Single source of progress instead of four columns.
 //   * Therapists column stacks PT/OT primary and PTA/COTA secondary.
 // =============================================================================
-function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge, onAudit }) {
+function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge, onAudit, onArchive, onUnarchive }) {
   const f = flag;
   const visits = visitsForCap(f);
   const pct = Math.min(100, Math.round((visits / 20) * 100));
@@ -1561,7 +1688,8 @@ function RosterRow({ flag, bucketStyle, bucketLabel, onSelect, onDischarge, onAu
 
       {/* Action */}
       <td style={tdStyle}>
-        <FlagCell flag={f} bucketStyle={bucketStyle} onDischarge={onDischarge} />
+        <FlagCell flag={f} bucketStyle={bucketStyle} onDischarge={onDischarge}
+                  onArchive={onArchive} onUnarchive={onUnarchive} />
       </td>
 
       {/* Needs Audit checkbox — Liam's far-right control. Click opens the
@@ -1937,9 +2065,53 @@ function AuditRosterRow({ flag, assignments, onSave, onRestart, onResolve, onOpe
 //   * Button style is a ghost outline at rest, fills maroon on hover. Quiet
 //     enough to disappear into a clean row, obvious once you reach for it.
 // =============================================================================
-function FlagCell({ flag, bucketStyle, onDischarge }) {
+function FlagCell({ flag, bucketStyle, onDischarge, onArchive, onUnarchive }) {
   const status = (flag.patient_status || '').toLowerCase();
   const showDischarge = !!flag.ready_for_discharge || status === 'discharge';
+  const showArchive = typeof onArchive === 'function' && canArchiveFlag(flag);
+
+  // Archived rows get exactly one action: put it back.
+  if (flag.archived_at) {
+    return (
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:4 }}>
+        <div style={{ fontSize:9, color:'var(--gray)' }}>
+          archived {String(flag.archived_at).slice(0, 10)}
+          {flag.archived_by ? ` by ${flag.archived_by}` : ''}
+        </div>
+        {flag.archive_reason && (
+          <div style={{ fontSize:9, color:'var(--gray)', fontStyle:'italic' }}>{flag.archive_reason}</div>
+        )}
+        {typeof onUnarchive === 'function' && (
+          <button
+            onClick={e => { e.stopPropagation(); onUnarchive(); }}
+            title="Restore this patient to the working roster"
+            style={{ background:'transparent', color:'#0F172A', border:'1px solid #94A3B8',
+                     borderRadius:6, padding:'3px 10px', fontSize:10, fontWeight:600,
+                     cursor:'pointer', whiteSpace:'nowrap' }}>
+            Restore
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (showArchive) {
+    return (
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:4 }}>
+        <button
+          onClick={e => { e.stopPropagation(); onArchive(); }}
+          title="Never seen or activated — hide from the roster. Reversible from the Archived tab."
+          style={{ background:'transparent', color:'#475569', border:'1px solid #94A3B8',
+                   borderRadius:6, padding:'3px 10px', fontSize:10, fontWeight:600,
+                   cursor:'pointer', whiteSpace:'nowrap', transition:'background 120ms, color 120ms' }}
+          onMouseEnter={e => { e.currentTarget.style.background = '#475569'; e.currentTarget.style.color = '#fff'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#475569'; }}
+        >
+          Archive
+        </button>
+      </div>
+    );
+  }
   // Match the button accent to the bucket so the button harmonizes with the
   // row's left accent stripe instead of fighting it.
   const accent = bucketStyle?.accent && bucketStyle.accent !== 'transparent'
