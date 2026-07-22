@@ -56,6 +56,7 @@ import SwiftTeamDashboard from './dashboard/SwiftTeamDashboard';
 import DischargeTrackerPage from './dashboard/DischargeTrackerPage';
 import ClinicalProgressionPage from './dashboard/ClinicalProgressionPage';
 import StaleFrequencyPage from './dashboard/StaleFrequencyPage';
+import CoverageBoardPage from './dashboard/CoverageBoardPage';
 import FrequencyReviewPage from './dashboard/FrequencyReviewPage';
 // 2026-06-16: Unified Frequency Management page — combines Drift + Stale
 // into a single tabbed view. Legacy routes stale-frequency and
@@ -147,6 +148,7 @@ const PAGE_COMPONENTS = {
   // 2026-06-16: Both legacy routes now resolve to the unified Frequency
   // Management wrapper. Old links still work; the wrapper opens the right
   // tab via `intent`. Originals preserved as deep-link fallback.
+  'coverage-board':         CoverageBoardPage,
   'stale-frequency':        (props) => <FrequencyManagementPage {...props} intent="stale" />,
   'frequency-review':       FrequencyManagementPage,
   'stale-frequency-legacy': StaleFrequencyPage,
