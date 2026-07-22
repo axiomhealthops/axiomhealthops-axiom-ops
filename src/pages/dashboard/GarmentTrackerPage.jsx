@@ -30,6 +30,7 @@ import { useState, useEffect, useMemo } from 'react';
 import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages, logActivity } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import GarmentSheetUploadCard from '../../components/GarmentSheetUploadCard';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import { EC, TERRITORIES, TERRITORY_LETTERS } from '../../lib/constants';
 
@@ -190,6 +191,11 @@ export default function GarmentTrackerPage() {
         }
       />
       <div style={{ flex: 1, overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* Sheet import. Gated to the final-approver roles: it rewrites
+            every sheet-owned field on every order, which is not a
+            clinician-level action. Reloads the board on success so the
+            imported queue is visible immediately. */}
+        {canFinalApprove(profile) && <GarmentSheetUploadCard onImported={loadData} />}
 
         {/* Stat cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 10 }}>

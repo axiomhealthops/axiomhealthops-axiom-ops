@@ -587,5 +587,80 @@ eq('unparseable values are surfaced for cleanup',
 eq('blank frequency is labelled, not dropped',
   Array.from(summarizeCoverage([{frequency:'',delivered:0}]).unparseableValues.keys()), ['(blank)']);
 
+// =====================================================================
+// garmentSheet.js — the MASTER Garment Order Form workbook
+//
+// Header strings below are the real ones from the 2026 workbook.
+// =====================================================================
+const {parseGarmentSheet,parseGarmentWorkbook,toDate,toMoney,toApproval,keyDate}=await import(R+'garmentSheet.js');
+
+// --- The trap that makes index-based mapping unsafe: the LE ADDRESS
+// header contains the word "delivery", so a loose match claims it.
+const LEHDR=['key','Timestamp','Email Address','Clinician Name ','Insurance','Region',
+  'Patient Name (Last, First)','Current Level of Care','Current Frequency','Phase of care',
+  "Patient's Complete Mailing Address:  \n(If patients address is not deemed safe for delivery of garment, please place alternate address...)",
+  'Order Type?','Approver Email (Supervising Clinician) ','Approval Status','Approval Comments',
+  'Status Change Date','Auth#','Auth Date','Order#','Date order was placed','Garment Code',
+  'Garment Cost','Delivery Date/copy and paste POD link here','Comments','Auth Needed',
+  "Field Clinician's Request Date"];
+const LEROW=['','46112.5','c@x.com','Sammy Rider','Humana','A','Solomon, Joan','LOC 3','2x/wk',
+  'Active Decongestion','123 Main St Orlando FL','Initial Garment','liz@x.com','Approved','',
+  '46118.4','260331776131',46111,'1479738',46121,'A6583 x 2',208.88,'POD Joan Solomon.pdf','',
+  'Yes',46111];
+const LE=parseGarmentSheet('LE garments',[LEHDR,LEROW]);
+eq('address is not stolen by the delivery needle',
+  LE.rows[0].patient_address, '123 Main St Orlando FL');
+eq('delivery column is resolved separately from the address',
+  LE.rows[0].delivery_proof_url, 'POD Joan Solomon.pdf');
+eq('a POD filename is NOT parsed as a delivery date', LE.rows[0].delivery_date, null);
+eq('cost parses', LE.rows[0].garment_cost, 208.88);
+eq('auth number survives as text, not a number', LE.rows[0].auth_number, '260331776131');
+eq('order number survives leading-zero-safe as text', LE.rows[0].order_number, '1479738');
+eq('excel serial becomes an ISO date', LE.rows[0].auth_date, '2026-03-30');
+eq('limb type comes from the sheet', LE.rows[0].limb_type, 'LE');
+eq('source key matches the June import format',
+  LE.rows[0].source_row_key, 'Solomon, Joan | 03-30-2026');
+
+// --- UE is a DIFFERENT shape; the same code must still work.
+const UEHDR=['key','Timestamp','Email Address','Clinician Name ','Insurance','Region',
+  'Patient Name (Last, First)','Order Type?','Approval Status','Auth#','Delivery Date','Comments'];
+const UE=parseGarmentSheet('UE garments',[UEHDR,['','46112.5','c@x.com','A Clin','Aetna','V',
+  'Gonzalez, Miriam','Re-order','Pending','','','note']]);
+eq('UE rows are tagged UE', UE.rows[0].limb_type, 'UE');
+eq('UE parses despite a different column set', UE.rows[0].patient_name, 'Gonzalez, Miriam');
+
+// --- Approval status is free text. Unknown must land on 'pending' so an
+// order reaches a human rather than disappearing.
+eq('approved variants map', [toApproval('Approved'),toApproval('approved - ok')], ['approved','approved']);
+eq('denied variants map', [toApproval('Denied'),toApproval('REJECTED')], ['denied','denied']);
+eq('cancelled beats approved when both appear', toApproval('cancelled - was approved'), 'cancelled');
+eq('blank becomes pending', toApproval(''), 'pending');
+eq('unrecognised text becomes pending, never dropped', toApproval('waiting on Earl'), 'pending');
+
+// --- Money and dates never yield NaN or a fabricated value.
+eq('money strips currency formatting', toMoney('$1,234.56'), 1234.56);
+eq('unparseable money is null, not NaN', toMoney('see invoice'), null);
+eq('blank money is null', toMoney(''), null);
+eq('an impossible month is rejected', toDate('13/45/2026'), null);
+eq('a filename is not a date', toDate('POD Joan Solomon.pdf'), null);
+eq('two-digit years are expanded', toDate('4/9/26'), '2026-04-09');
+eq('key date is MM-DD-YYYY', keyDate('2026-03-30'), '03-30-2026');
+
+// --- A row with no patient name is skipped and REPORTED, never silently
+// written under a blank key.
+const NONAME=parseGarmentSheet('LE garments',[LEHDR,['','46112.5','c@x.com','','','','','','','','','','','Approved']]);
+eq('a nameless row is skipped', NONAME.rows.length, 0);
+eq('a nameless row is reported', NONAME.problems.length >= 1, true);
+
+// --- Resubmissions: same patient + same request date = one order,
+// latest wins. The workbook genuinely contains these.
+const DUP=parseGarmentWorkbook({
+  'LE garments':[LEHDR,LEROW,[...LEROW.slice(0,13),'Denied',...LEROW.slice(14)]],
+  'UE garments':[UEHDR],
+});
+eq('resubmission collapses to one order', DUP.stats.unique, 1);
+eq('the later submission wins', DUP.rows[0].clinical_approval_status, 'denied');
+eq('duplicates are counted, not hidden', DUP.stats.duplicates, 1);
+
 console.log(fail?`\n${fail} FAILED`:'\nAll assertions passed');
 process.exit(fail?1:0);
