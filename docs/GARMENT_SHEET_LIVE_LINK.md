@@ -49,9 +49,28 @@ supabase secrets set GARMENT_INGEST_SECRET=paste-the-value-here --project-ref kn
 
 ### 3. Add the script to the sheet
 
-Open the workbook → **Extensions → Apps Script** → paste the code from
-`garment-apps-script.gs` (next to this file) **below** the existing
-`onFormSubmit` function. Do not delete what is already there.
+Open the workbook → **Extensions → Apps Script**.
+
+In the Apps Script editor, next to **Files**, click **+ → Script** and
+name it `EdemaCare Ingest`. Delete the `function myFunction() {}` stub it
+creates and paste in the whole of `garment-apps-script.gs` (next to this
+file).
+
+A separate file is deliberate: Apps Script treats every `.gs` file in a
+project as one shared namespace, so the new functions are callable from
+`Code.gs` without touching anything already there. Nothing existing is
+edited except the single line in step 4.
+
+**Then run `whereAmI` before anything else.** Select it from the function
+dropdown and click **Run**, then read the Execution log. It reports which
+spreadsheet the project is actually bound to, which tabs it can see, and
+whether the properties from step 4 are set.
+
+This matters because an Apps Script project is bound to ONE spreadsheet.
+A project titled "LE Garment" may be attached to the LE response sheet
+rather than the master workbook holding both tabs — in which case the
+backfill would quietly push half the orders. `whereAmI` catches that in
+five seconds instead of after a 300-row run.
 
 Then **Project Settings → Script Properties** → add:
 

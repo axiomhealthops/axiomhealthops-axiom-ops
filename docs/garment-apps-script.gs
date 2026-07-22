@@ -207,6 +207,59 @@ function backfillAllGarmentOrders() {
   console.log('backfill complete - sent ' + sent + ', skipped ' + skipped + ', failed ' + failed);
 }
 
+/**
+ * RUN THIS FIRST.
+ *
+ * An Apps Script project is bound to ONE spreadsheet, and a project
+ * titled "LE Garment" may well be attached to the LE response sheet
+ * rather than the master workbook that holds both tabs. If so,
+ * backfillAllGarmentOrders would silently push half the orders and
+ * report "sheet not found" for the other half.
+ *
+ * This logs which spreadsheet the project is actually attached to, which
+ * tabs it can see, and whether the two script properties are set — so
+ * every assumption is checked before anything is written.
+ */
+function whereAmI() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    console.log('NOT BOUND to a spreadsheet. This is a standalone script project.');
+    console.log('Fix: open the master workbook -> Extensions -> Apps Script, and paste this there instead.');
+    return;
+  }
+  console.log('Spreadsheet : ' + ss.getName());
+  console.log('URL         : ' + ss.getUrl());
+
+  var names = ss.getSheets().map(function (s) { return s.getName(); });
+  console.log('Tabs (' + names.length + '): ' + names.join(' | '));
+
+  var missing = [];
+  for (var i = 0; i < GARMENT_SHEETS.length; i++) {
+    var want = GARMENT_SHEETS[i];
+    var found = ss.getSheetByName(want);
+    if (found) {
+      console.log('OK   "' + want + '" found, ' + (found.getLastRow() - 1) + ' data rows');
+    } else {
+      missing.push(want);
+      console.log('MISS "' + want + '" NOT in this spreadsheet');
+    }
+  }
+
+  var props = PropertiesService.getScriptProperties();
+  console.log('EDEMACARE_INGEST_URL    : ' + (props.getProperty('EDEMACARE_INGEST_URL') ? 'set' : 'NOT SET'));
+  console.log('EDEMACARE_INGEST_SECRET : ' + (props.getProperty('EDEMACARE_INGEST_SECRET') ? 'set' : 'NOT SET'));
+
+  if (missing.length === GARMENT_SHEETS.length) {
+    console.log('');
+    console.log('This project cannot see either garment tab. Paste the script into the');
+    console.log('Apps Script project of the MASTER workbook instead.');
+  } else if (missing.length) {
+    console.log('');
+    console.log('Only some tabs are visible. The backfill will cover what it can find and');
+    console.log('report the rest as skipped - it will not fail, but it will be incomplete.');
+  }
+}
+
 /** Push just the first data row of the LE sheet, and log the response. */
 function testPushOneRow() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('LE garments');
