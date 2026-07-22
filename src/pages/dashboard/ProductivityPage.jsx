@@ -3,8 +3,20 @@ import TopBar from '../../components/TopBar';
 import { supabase } from '../../lib/supabase';
 import { REGIONS } from '../../lib/constants';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+import { exportXLSX, exportCSV, fileStamp } from '../../lib/exportSheet';
  
-var TARGETS = { ft: 25, pt: 15, prn: 10 };
+// 2026-07-22: the local `TARGETS = {ft:25, pt:15, prn:10}` map that used
+// to live here is DELETED. Targets now come from
+// clinicians.weekly_visit_target, which is maintained by the
+// set_visit_target trigger and is the only source of truth.
+//
+// The local map was the same defect CLAUDE.md records for Director
+// Command's `const WEEKLY_TARGET = 750`: a second definition that drifts
+// silently. By 2026-07-22 it disagreed with the database for eleven
+// people — Ariel Maboudi's negotiated cover minimum of 8, the 12-visit
+// transition targets for Samantha and Uma, and the four reserve staff on
+// 0 all rendered here as a flat 25, so this page showed managers as
+// catastrophically under-productive against caseloads they no longer owe.
 var TYPE_LABELS = { ft: 'Full Time', pt: 'Part Time', prn: 'PRN / 1099' };
 var VALID_REGIONS = ['A','B','C','G','H','J','M','N','T','V','All'];
  
@@ -28,6 +40,16 @@ function buildNameMap(clinicians) {
       map[c.pariox_name.trim().toLowerCase()] = c.id;
       map[parioxToFirstLast(c.pariox_name).toLowerCase()] = c.id;
     }
+    // 2026-07-22: the maintained aliases array was not consulted here, so
+    // clinicians whose Pariox name differs from full_name and who have no
+    // pariox_name set were matching nothing and reporting 0 visits while
+    // working a full week. Six people carry aliases, including different
+    // surnames (Marlene Ortega / "Marlene Olea") that no heuristic finds.
+    (c.aliases || []).forEach(function(a) {
+      if (!a) return;
+      map[String(a).toLowerCase().trim()] = c.id;
+      map[parioxToFirstLast(String(a)).toLowerCase().trim()] = c.id;
+    });
   });
   return map;
 }
@@ -47,6 +69,8 @@ function weekBounds() {
 }
  
 function getBarColor(pct) {
+  // Reserve staff have no percentage. Grey, not red — they are not failing.
+  if (pct == null) return 'var(--border)';
   if (pct >= 90) return '#10B981';
   if (pct >= 70) return '#F59E0B';
   return '#DC2626';
@@ -117,7 +141,13 @@ export default function ProductivityPage() {
 
   function load() {
     var clinPromise = supabase.from('clinicians')
-      .select('id, full_name, discipline, employment_type, region, notes, pariox_name, is_active')
+      // weekly_visit_target is the trigger-maintained source of truth.
+      // is_treating / is_agency / weekly_visit_cap distinguish the three
+      // assignment tiers; aliases resolve Pariox name drift the
+      // pariox_name column alone does not cover (Abi/Abiola,
+      // Marlene Olea/Ortega). Dropping any of these silently changes what
+      // this report says about someone's productivity.
+      .select('id, full_name, discipline, employment_type, region, notes, pariox_name, aliases, is_active, weekly_visit_target, weekly_visit_cap, is_treating, is_agency, job_description, hire_date')
       .eq('is_active', true)
       .order('region')
       .order('full_name');
@@ -256,16 +286,31 @@ export default function ProductivityPage() {
   var enriched = useMemo(function() {
     return clinicians.map(function(c) {
       var s = statsByClinicianId[c.id] || { completed: 0, scheduled: 0, missed: 0, cancelled: 0, evals: 0, reassessments: 0, missedActive: 0 };
-      var target = TARGETS[c.employment_type] || 25;
+      // From the DB, never a local map. May legitimately be 0 (reserve),
+      // 8 (a negotiated cover minimum) or 12 (a transition caseload).
+      var target = c.weekly_visit_target == null ? 0 : c.weekly_visit_target;
+      var isReserve = c.is_treating === false;
       var done = s.completed + s.missedActive;
       var totalAssigned = done + s.scheduled + s.missed + s.cancelled;
-      var pct = target > 0 ? Math.round((done / target) * 100) : 0;
+      // A reserve clinician has no caseload to be a percentage OF.
+      // Reporting 0% against a target of 0 would read as total failure
+      // when it is the intended state, so percentages are null and the
+      // UI shows the tier instead.
+      var pct = isReserve ? null : (target > 0 ? Math.round((done / target) * 100) : null);
       var projectedDone = done + s.scheduled;
-      var projectedPct = target > 0 ? Math.min(Math.round((projectedDone / target) * 100), 100) : 0;
+      var projectedPct = isReserve ? null
+        : (target > 0 ? Math.min(Math.round((projectedDone / target) * 100), 100) : null);
+      var tier = isReserve ? 'reserve'
+        : c.is_agency ? 'agency'
+        : c.employment_type === 'prn' ? 'per-diem'
+        : 'contracted';
       return Object.assign({}, c, {
         stats: s, target: target, done: done,
         totalAssigned: totalAssigned, pct: pct,
         projectedPct: projectedPct,
+        isReserve: isReserve, tier: tier,
+        // Over an explicit ceiling, or over the per-diem alert threshold.
+        overCap: c.weekly_visit_cap != null && done > c.weekly_visit_cap,
       });
     });
   }, [clinicians, statsByClinicianId]);
@@ -278,17 +323,24 @@ export default function ProductivityPage() {
       if (scope === 'completed'    && !(c.done > 0)) return false;
       if (scope === 'scheduled'    && !(c.stats.scheduled > 0)) return false;
       if (scope === 'notes'        && !(c.stats.missedActive > 0)) return false;
-      if (scope === 'under'        && !(c.employment_type !== 'prn' && c.totalAssigned > 0 && c.totalAssigned < (c.target - 2))) return false;
-      if (scope === 'ft_atrisk'    && !(c.employment_type === 'ft' && c.pct < 70 && c.done > 0)) return false;
-      if (scope === 'pt_atrisk'    && !(c.employment_type === 'pt' && c.pct < 70 && c.done > 0)) return false;
+      // Reserve staff owe no caseload, so they can never be "under
+      // scheduled" or "at risk" — they would otherwise dominate both
+      // lists with a target of 0.
+      if (scope === 'under'        && !(!c.isReserve && c.employment_type !== 'prn' && c.totalAssigned > 0 && c.totalAssigned < (c.target - 2))) return false;
+      if (scope === 'ft_atrisk'    && !(!c.isReserve && c.employment_type === 'ft' && c.pct != null && c.pct < 70 && c.done > 0)) return false;
+      if (scope === 'pt_atrisk'    && !(!c.isReserve && c.employment_type === 'pt' && c.pct != null && c.pct < 70 && c.done > 0)) return false;
+      if (scope === 'over_cap'     && !c.overCap) return false;
       if (search) {
         var q = search.toLowerCase();
         if (!c.full_name.toLowerCase().includes(q) && !(c.discipline || '').toLowerCase().includes(q)) return false;
       }
       return true;
     }).sort(function(a, b) {
-      if (sortBy === 'pct') return a.pct - b.pct;
-      if (sortBy === 'pct_desc') return b.pct - a.pct;
+      // Reserve staff have no percentage. Sort them to the end either
+      // way rather than letting null coerce to 0 and top the "worst
+      // first" list every time.
+      if (sortBy === 'pct') return (a.pct == null) - (b.pct == null) || a.pct - b.pct;
+      if (sortBy === 'pct_desc') return (a.pct == null) - (b.pct == null) || b.pct - a.pct;
       if (sortBy === 'assigned') return a.totalAssigned - b.totalAssigned;
       if (sortBy === 'name') return a.full_name.localeCompare(b.full_name);
       if (sortBy === 'region') return (a.region || '').localeCompare(b.region || '');
@@ -296,21 +348,89 @@ export default function ProductivityPage() {
     });
   }, [enriched, regionFilter, typeFilter, search, sortBy, scope]);
  
+
+  // Export the CURRENTLY FILTERED rows, so the file matches what is on
+  // screen. An export that quietly ignores the filters is how someone
+  // ends up analysing a cohort they did not mean to pull.
+  //
+  // Column order follows the table, plus the contract fields that are
+  // not on screen but are needed for offline analysis (hire date, cap,
+  // tier). Values are flattened to primitives — json_to_sheet writes
+  // "[object Object]" for anything nested.
+  function buildExportRows() {
+    return filtered.map(function(c) {
+      return {
+        'Clinician': c.full_name,
+        'Region': c.region === 'All' ? 'Virtual' : (c.region || ''),
+        'Discipline': c.discipline || '',
+        'Role': c.job_description || '',
+        'Employment Type': TYPE_LABELS[c.employment_type] || c.employment_type || '',
+        'Tier': c.tier,
+        'Hire Date': c.hire_date || '',
+        'Weekly Target': c.target,
+        'Visit Cap': c.weekly_visit_cap == null ? '' : c.weekly_visit_cap,
+        'Completed': c.stats.completed,
+        'Notes Due (missed active)': c.stats.missedActive,
+        'Counted Done': c.done,
+        'Scheduled': c.stats.scheduled,
+        'Missed': c.stats.missed,
+        'Cancelled': c.stats.cancelled,
+        'Evals': c.stats.evals,
+        'Reassessments': c.stats.reassessments,
+        'Total Assigned': c.totalAssigned,
+        'Percent of Target': c.pct == null ? 'n/a' : c.pct,
+        'Projected Percent': c.projectedPct == null ? 'n/a' : c.projectedPct,
+        'Gap to Target': c.isReserve || c.employment_type === 'prn'
+          ? '' : Math.max(0, c.target - c.done),
+        'Over Cap': c.overCap ? 'YES' : '',
+        'Week Start': weekStart,
+        'Week End': weekEnd,
+      };
+    });
+  }
+
+  function runExport(format) {
+    var rows = buildExportRows();
+    if (rows.length === 0) { window.alert('Nothing to export - no clinicians match the current filters.'); return; }
+    var name = 'Productivity_' + weekStart + '_to_' + weekEnd + '_' + fileStamp();
+    if (format === 'csv') exportCSV(rows, name);
+    else exportXLSX(rows, 'Productivity', name);
+  }
+
   var summary = useMemo(function() {
-    var ft = enriched.filter(function(c) { return c.employment_type === 'ft'; });
-    var pt = enriched.filter(function(c) { return c.employment_type === 'pt'; });
-    var prn = enriched.filter(function(c) { return c.employment_type === 'prn'; });
-    var avg = function(arr) { return arr.length > 0 ? Math.round(arr.reduce(function(a, c) { return a + c.pct; }, 0) / arr.length) : 0; };
+    // Reserve staff are excluded from every productivity aggregate. They
+    // hold no caseload, so averaging their 0% into the full-time figure
+    // would drag it down by roughly 8 points and describe nothing real.
+    var treating = enriched.filter(function(c) { return !c.isReserve; });
+    var ft = treating.filter(function(c) { return c.employment_type === 'ft'; });
+    var pt = treating.filter(function(c) { return c.employment_type === 'pt'; });
+    var prn = treating.filter(function(c) { return c.employment_type === 'prn'; });
+    var reserve = enriched.filter(function(c) { return c.isReserve; });
+    var avg = function(arr) {
+      var withPct = arr.filter(function(c) { return c.pct != null; });
+      return withPct.length > 0
+        ? Math.round(withPct.reduce(function(a, c) { return a + c.pct; }, 0) / withPct.length) : 0;
+    };
     var totalCompleted = enriched.reduce(function(a, c) { return a + c.done; }, 0);
     var totalScheduled = enriched.reduce(function(a, c) { return a + c.stats.scheduled; }, 0);
     var totalMissedActive = enriched.reduce(function(a, c) { return a + c.stats.missedActive; }, 0);
-    var underScheduled = enriched.filter(function(c) {
+    var underScheduled = treating.filter(function(c) {
       return c.employment_type !== 'prn' && c.totalAssigned > 0 && c.totalAssigned < (c.target - 2);
     }).length;
+    // Assignment gap in this page's own terms: visits to book to bring
+    // every contracted clinician to target. Matches Director Command.
+    var assignmentGap = treating.reduce(function(a, c) {
+      if (c.employment_type === 'prn') return a;
+      return a + Math.max(0, c.target - c.done);
+    }, 0);
+    var overCap = enriched.filter(function(c) { return c.overCap; }).length;
     return {
-      ft: { count: ft.length, avg: avg(ft), atRisk: ft.filter(function(c) { return c.pct < 70 && c.done > 0; }).length },
-      pt: { count: pt.length, avg: avg(pt), atRisk: pt.filter(function(c) { return c.pct < 70 && c.done > 0; }).length },
-      prn: { count: prn.length, alerted: prn.filter(function(c) { return c.pct >= 100; }).length },
+      ft: { count: ft.length, avg: avg(ft), atRisk: ft.filter(function(c) { return c.pct != null && c.pct < 70 && c.done > 0; }).length },
+      pt: { count: pt.length, avg: avg(pt), atRisk: pt.filter(function(c) { return c.pct != null && c.pct < 70 && c.done > 0; }).length },
+      prn: { count: prn.length, alerted: prn.filter(function(c) { return c.pct != null && c.pct >= 100; }).length },
+      reserveCount: reserve.length,
+      assignmentGap: assignmentGap,
+      overCap: overCap,
       totalCompleted: totalCompleted,
       totalScheduled: totalScheduled,
       totalMissedActive: totalMissedActive,
@@ -331,7 +451,22 @@ export default function ProductivityPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Productivity Tracker"
-        subtitle={filtered.length + ' clinicians \u00b7 ' + rangeLabel + (isCurrentWeek ? ' (this week, Sun-Sat)' : ' (custom range)')} />
+        subtitle={filtered.length + ' clinicians \u00b7 ' + rangeLabel + (isCurrentWeek ? ' (this week, Sun-Sat)' : ' (custom range)')}
+        actions={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 10, color: 'var(--gray)' }}>Export {filtered.length} rows</span>
+            <button onClick={function() { runExport('xlsx'); }}
+              title="Download as Excel"
+              style={{ padding: '6px 13px', background: 'var(--black)', color: '#fff', border: 'none', borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+              Excel
+            </button>
+            <button onClick={function() { runExport('csv'); }}
+              title="Download as CSV - import straight into Google Sheets"
+              style={{ padding: '6px 13px', background: 'var(--card-bg)', color: 'var(--black)', border: '1px solid var(--border)', borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+              CSV / Sheets
+            </button>
+          </div>
+        } />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         {/* ─── DATE RANGE PICKER (2026-05-18) ────────────────────────────
@@ -476,12 +611,14 @@ export default function ProductivityPage() {
               var barColor = getBarColor(c.pct);
               var assignedColor = hasData ? getAssignedColor(c.totalAssigned, c.target, c.employment_type) : 'var(--gray)';
               var assignedBg = hasData ? getAssignedBg(c.totalAssigned, c.target, c.employment_type) : 'transparent';
-              var isUnderScheduled = c.employment_type !== 'prn' && hasData && c.totalAssigned < (c.target - 2);
+              var isUnderScheduled = !c.isReserve && c.employment_type !== 'prn' && hasData && c.totalAssigned < (c.target - 2);
               var hasMissedActive = c.stats.missedActive > 0;
-              var isAlert = c.employment_type === 'prn' && c.pct >= 100;
+              var isAlert = !c.isReserve && c.employment_type === 'prn' && c.pct != null && c.pct >= 100;
  
               var statusLabel, statusColor, statusBg;
-              if (isAlert) { statusLabel = '\uD83D\uDD34 Alert'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
+              if (c.isReserve) { statusLabel = 'Reserve'; statusColor = '#475569'; statusBg = '#F1F5F9'; }
+              else if (c.overCap) { statusLabel = '\u26A0 Over Cap'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
+              else if (isAlert) { statusLabel = '\uD83D\uDD34 Alert'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
               else if (hasMissedActive) { statusLabel = '\uD83D\uDCCB Note Due'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
               else if (isUnderScheduled) { statusLabel = '\u26A0 Under-Sched'; statusColor = '#92400E'; statusBg = '#FEF3C7'; }
               else if (!hasData) { statusLabel = '\u2014'; statusColor = 'var(--gray)'; statusBg = 'transparent'; }
@@ -489,7 +626,7 @@ export default function ProductivityPage() {
               else if (c.pct >= 70) { statusLabel = 'At Risk'; statusColor = '#92400E'; statusBg = '#FEF3C7'; }
               else { statusLabel = 'Low'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
  
-              var rowBg = (isAlert || hasMissedActive || isUnderScheduled)
+              var rowBg = (isAlert || hasMissedActive || isUnderScheduled || c.overCap)
                 ? '#FFF8F5'
                 : i % 2 === 0 ? 'var(--card-bg)' : 'var(--bg)';
  
@@ -517,13 +654,13 @@ export default function ProductivityPage() {
                             {c.stats.scheduled > 0 && <span style={{ color: '#1565C0' }}> + {c.stats.scheduled} sched</span>}
                             {c.stats.missed > 0 && <span style={{ color: 'var(--danger)' }}> &middot; {c.stats.missed} missed</span>}
                           </span>
-                          <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: c.pct >= 90 ? '#065F46' : c.pct >= 70 ? '#92400E' : '#991B1B' }}>{c.pct}%</span>
+                          <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: c.pct == null ? 'var(--gray)' : c.pct >= 90 ? '#065F46' : c.pct >= 70 ? '#92400E' : '#991B1B' }}>{c.pct == null ? 'n/a' : c.pct + '%'}</span>
                         </div>
                         <div style={{ height: 8, background: 'var(--border)', borderRadius: 999, overflow: 'hidden', display: 'flex' }}>
                           {pctBar > 0 && <div style={{ height: '100%', width: pctBar + '%', background: barColor, flexShrink: 0, borderRadius: schedBar > 0 ? '999px 0 0 999px' : 999 }} />}
                           {schedBar > 0 && <div style={{ height: '100%', width: schedBar + '%', background: '#93C5FD', flexShrink: 0 }} />}
                         </div>
-                        {c.projectedPct > c.pct && (
+                        {c.projectedPct != null && c.pct != null && c.projectedPct > c.pct && (
                           <div style={{ fontSize: 9, color: '#1565C0', marginTop: 2 }}>
                             Projected {c.projectedPct}% if all scheduled complete
                           </div>
