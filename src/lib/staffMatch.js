@@ -374,6 +374,10 @@ export function reconcileRoster(clinicians, deliveredBy) {
         underTarget.push({
           name: c.full_name, region: c.region, discipline: c.discipline,
           employmentType: c.employment_type, target: t, delivered: got, short,
+          // A negotiated minimum rather than the employment_type default.
+          // Surfaced so nobody reads "Ariel 3/8" as a broken 25 and
+          // "corrects" it back — the 8 is deliberate.
+          isNegotiatedMinimum: c.weekly_visit_target_override != null,
         });
       }
     }

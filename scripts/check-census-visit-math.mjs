@@ -311,6 +311,26 @@ eq('a reserve clinician who delivered nothing is NOT idle capacity',
 eq('reserve is listed separately', RESREC.reserve.map(r=>r.name).sort(),
   ['Ariel Maboudi','Lia Davis']);
 eq('visits delivered by reserve are still credited', RESREC.reserveDelivered, 15);
+
+// --- Negotiated minimum: a cover role carrying a floor, not a full
+// caseload and not zero. Ariel Maboudi covers region N; her target of 8
+// is the median of her cover history, set via
+// weekly_visit_target_override. The DB trigger applies it; this asserts
+// the reader treats it as a real contracted obligation and labels it so
+// nobody "corrects" the 8 back to a full-time 25.
+const MINREC=reconcileRoster(
+  [{full_name:'Ariel Maboudi', employment_type:'ft', weekly_visit_target:8,
+    is_treating:true, weekly_visit_target_override:8},
+   {full_name:'Plain FT', employment_type:'ft', weekly_visit_target:25, is_treating:true}],
+  new Map([['ariel maboudi',3],['plain ft',25]]));
+eq('a negotiated minimum counts as contracted capacity', MINREC.committedCapacity, 33);
+eq('the gap measures against the minimum, not the ft default', MINREC.assignmentGap, 5);
+eq('a negotiated minimum is labelled',
+  MINREC.underTarget.map(u=>[u.name,u.target,u.isNegotiatedMinimum]),
+  [['Ariel Maboudi',8,true]]);
+eq('an ordinary target is not labelled as negotiated',
+  reconcileRoster([{full_name:'Plain FT',employment_type:'ft',weekly_visit_target:25,is_treating:true}],
+    new Map([['plain ft',10]])).underTarget[0].isNegotiatedMinimum, false);
 eq('isContracted excludes both reserve and per diem',
   [isContracted({employment_type:'ft',is_treating:true}),
    isContracted({employment_type:'ft',is_treating:false}),

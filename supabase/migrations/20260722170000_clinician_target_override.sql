@@ -1,0 +1,24 @@
+-- Per-clinician target override, per Liam 2026-07-22.
+-- Applied to production via MCP (clinician_target_override_2026_07_22);
+-- checked in for git history.
+--
+-- Ariel Maboudi is an ADOC who covers for clinicians in region N when
+-- needed, and should carry a MINIMUM caseload rather than a full 25 or a
+-- reserve zero. Until now that was not representable: set_visit_target()
+-- derived the target purely from employment_type, so every full-time
+-- clinician was 25 and nothing else could be expressed. That limitation
+-- is why "reserve" had to be an all-or-nothing flag.
+--
+-- Precedence in set_visit_target(), highest first:
+--   1. is_treating = false          -> 0. Non-treating means zero, always.
+--   2. weekly_visit_target_override -> negotiated minimum (cover roles).
+--   3. employment_type              -> ft 25 / pt 15 / prn 10.
+--
+-- This trigger remains the ONLY place weekly_visit_target is written.
+-- An UPDATE supplying a target directly is silently discarded — that has
+-- already bitten once today (the per-diem 12).
+--
+-- Ariel's 8 is the MEDIAN of her nine-week cover history
+-- (8/10/13/8/11/6/1/2/3). Median rather than mean because the last four
+-- weeks are a wind-down, not a normal run rate; a mean would describe
+-- the transition instead of the cover load.

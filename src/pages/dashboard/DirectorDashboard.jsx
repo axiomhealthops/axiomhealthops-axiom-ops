@@ -578,7 +578,7 @@ function RosterReconciliation({ roster, weekLabel }) {
           <Row
             label="Contracted but under target -- visits to assign"
             items={roster.underTarget} color={BAD}
-            render={u => `${u.name} ${u.delivered}/${u.target} (-${u.short})`}
+            render={u => `${u.name} ${u.delivered}/${u.target}${u.isNegotiatedMinimum ? ' min' : ''} (-${u.short})`}
           />
           {/* Reserve is not a problem to fix — it is shown so the gap
               above is readable. Without it, someone reading "1,060
