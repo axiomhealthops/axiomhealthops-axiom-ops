@@ -1,0 +1,16 @@
+-- Isaac Aguilar departed, confirmed by Liam 2026-07-22.
+-- Applied to production via MCP (isaac_aguilar_departed_2026_07_22);
+-- checked in for git history.
+--
+-- Closes the last of four people who were absent from the HR roster but
+-- still showing schedule activity this morning. All four were held
+-- ACTIVE pending confirmation rather than deactivated on the roster's
+-- silence alone — deactivating a working clinician orphans scheduled
+-- visits and silently drops delivered work out of every utilization
+-- figure. Resolutions: Ivon Delgado and Mical Orrell are third-party
+-- agency staff, Randi Bonner is Director of Clinical Operations, Isaac
+-- has left.
+--
+-- Soft-deactivated, never deleted: his 66 completed visits stay
+-- attributable so historical productivity and revenue do not change. No
+-- future slots needed reassignment; last on the schedule 2026-06-29.
