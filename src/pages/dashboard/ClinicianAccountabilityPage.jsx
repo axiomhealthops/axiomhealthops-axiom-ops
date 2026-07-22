@@ -7,6 +7,11 @@ import RiskBadge from '../../components/RiskBadge';
 // 2026-05-31: Replaced local $185 hardcode with canonical $230 from visitMath.
 // Drift had been silently undercounting revenue ~24% on clinician scorecards.
 import { BLENDED_RATE } from '../../lib/visitMath';
+// 2026-07-22: this import was missing while load() called the function, so the
+// page threw ReferenceError on mount. Same failure mode as the MedicareTracker
+// hotfix (f5f2576): vite treats an undeclared identifier as a global, so the
+// build passes clean and it only breaks at runtime.
+import { dedupVisitsByLatestUpload } from '../../lib/visitDedup';
 const REGIONS = ['A','B','C','G','H','J','M','N','T','V'];
 
 function fmtDate(d) {

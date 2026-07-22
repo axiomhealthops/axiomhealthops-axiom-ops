@@ -18,6 +18,8 @@ import {
 // because Pariox sends full-week snapshots and the per-(patient,date) key can
 // never notice a dropped slot. See src/lib/visitDedup.js.
 import { dedupVisitsByAuthoritativeBatch } from '../../lib/visitDedup';
+import { staffKey, visitStaffName, reconcileRoster } from '../../lib/staffMatch';
+import { isCompleted } from '../../lib/visitMath';
 import { getWeekRange, toDateStr, formatShortDate } from '../../lib/dateUtils';
 import { bucketCensus } from '../../lib/censusStatus';
 
@@ -107,7 +109,7 @@ const TEAL = '#06B6D4';
 // survives as `keptPct` — restricted to elapsed days and labelled "kept
 // rate" — because it is a real quality signal, just not the headline.
 // Pace and a landing projection give the mid-week read its meaning.
-function DeliveryBand({ slots, elapsed, todaySlots, elapsedThrough, target, weekLabel, isPastWeek, wow, capacity }) {
+function DeliveryBand({ slots, elapsed, todaySlots, elapsedThrough, target, weekLabel, isPastWeek, wow, capacity, roster }) {
   // Headline is in SCHEDULING units to match Pariox and the target; revenue
   // below converts to billable encounters. See classifyWeekSlots.
   const booked = slots.bookedVisits;
@@ -171,8 +173,19 @@ function DeliveryBand({ slots, elapsed, todaySlots, elapsedThrough, target, week
         <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
           Visit Delivery {'·'} {weekLabel}
         </div>
-        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>
-          Clinician capacity {fmtN(capacity)} visits/wk
+        {/* Capacity is the roster figure MINUS clinicians who delivered
+            nothing last week. The raw sum overstated it by 325 visits/wk
+            on 2026-07-12, which is the difference between the 1,000
+            target reading as 82% of capacity and as 112% of it. */}
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }} title={roster ? `${fmtN(roster.claimedCapacity)} claimed on the roster; ${fmtN(roster.phantomCapacity)} belongs to clinicians who delivered nothing last week` : undefined}>
+          {roster && roster.phantomCapacity > 0 ? (
+            <>
+              Working capacity <strong style={{ color: 'rgba(255,255,255,0.75)' }}>{fmtN(roster.workingCapacity)}</strong> visits/wk
+              {' '}{'·'} <span style={{ color: '#FBBF24' }}>{fmtN(roster.phantomCapacity)} unworked</span>
+            </>
+          ) : (
+            <>Clinician capacity {fmtN(capacity)} visits/wk</>
+          )}
         </div>
       </div>
 
@@ -388,6 +401,92 @@ function Widget({ label, value, sub, risk, owner, accent, tone, onClick, size = 
         <div style={{ fontSize: 10, color: MUTED, marginTop: 'auto', paddingTop: 8, fontWeight: 600 }}>
           {owner}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Roster reconciliation ─────────────────────────────────────────────
+// Lives in Detail, not the daily read: this is a roster-hygiene question
+// for the weekly review, not something to act on at 7am. It is on the
+// page at all because every capacity, productivity and hiring decision
+// divides by a number that was never checked against who actually works.
+function RosterReconciliation({ roster, weekLabel }) {
+  if (!roster || roster.activeCount === 0) return null;
+  const clean = roster.phantomCapacity === 0
+    && roster.scheduleOnly.length === 0
+    && roster.aliasMatches.length === 0;
+
+  const Row = ({ label, items, color, render }) => items.length === 0 ? null : (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color, marginBottom: 4 }}>
+        {label} <span style={{ color: MUTED, fontWeight: 600 }}>({items.length})</span>
+      </div>
+      <div style={{ fontSize: 11.5, color: MUTED, lineHeight: 1.6 }}>
+        {items.slice(0, 12).map((it, i) => (
+          <span key={i}>
+            {i > 0 && <span style={{ color: 'var(--border)' }}> {'·'} </span>}
+            {render(it)}
+          </span>
+        ))}
+        {items.length > 12 && <span> {'·'} +{fmtN(items.length - 12)} more</span>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', background: 'var(--card-bg)' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: INK, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Roster vs schedule
+        </div>
+        <div style={{ fontSize: 11, color: MUTED }}>measured on {weekLabel} {'·'} the last full week</div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 12 }}>
+        {[
+          { k: 'Claimed capacity', v: fmtN(roster.claimedCapacity), s: `${roster.activeCount} active clinicians`, c: MUTED },
+          { k: 'Working capacity', v: fmtN(roster.workingCapacity), s: `${roster.matchedCount} delivered a visit`, c: GOOD },
+          { k: 'Unworked', v: fmtN(roster.phantomCapacity), s: `${roster.rosterOnly.length} delivered nothing`, c: roster.phantomCapacity > 0 ? BAD : GOOD },
+          { k: 'Utilization', v: roster.utilizationPct === null ? '--' : roster.utilizationPct + '%', s: 'of working capacity', c: INK },
+        ].map(t => (
+          <div key={t.k}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.k}</div>
+            <div style={{ fontSize: 24, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: t.c, lineHeight: 1.2 }}>{t.v}</div>
+            <div style={{ fontSize: 10.5, color: MUTED }}>{t.s}</div>
+          </div>
+        ))}
+      </div>
+
+      {clean ? (
+        <div style={{ marginTop: 12, fontSize: 12, color: GOOD, fontWeight: 600 }}>
+          Roster and schedule agree. Capacity can be taken at face value.
+        </div>
+      ) : (
+        <>
+          {/* Ordered by how cheap the fix is. A nickname is a one-field
+              edit that immediately corrects two numbers at once. */}
+          <Row
+            label="Matched only by nickname -- fix the roster spelling"
+            items={roster.aliasMatches} color={WARN}
+            render={a => `${a.rosterName} = "${a.scheduleName}" (${a.visits})`}
+          />
+          <Row
+            label="Delivered visits but not on the active roster"
+            items={roster.scheduleOnly} color={BAD}
+            render={s => `${s.name} (${s.visits})`}
+          />
+          <Row
+            label="On the roster, delivered nothing"
+            items={roster.rosterOnly} color={BAD}
+            render={r => `${r.name}${r.target ? ` (${r.target})` : ''}`}
+          />
+          <div style={{ marginTop: 12, padding: '9px 12px', background: '#FFFBEB', border: `1px solid ${WARN}`, borderRadius: 7, fontSize: 11.5, color: '#78350F', lineHeight: 1.6 }}>
+            Until these reconcile, utilization and productivity percentages on every
+            page divide by a capacity figure that includes {fmtN(roster.phantomCapacity)} visits/wk
+            nobody delivered{roster.unrosteredVisits > 0 && <>, and exclude {fmtN(roster.unrosteredVisits)} visits that were delivered by people with no roster row</>}.
+          </div>
+        </>
       )}
     </div>
   );
@@ -694,6 +793,35 @@ export default function DirectorDashboard({ onNavigate }) {
     };
   }, [prevVisits, weekOffset]);
 
+  // ── Roster reconciliation ───────────────────────────────────────────
+  // Measured on the PRIOR FULL WEEK, never the current one: a Wednesday
+  // has only a third of its visits posted, so reconciling against it
+  // would report most of the roster as idle every Monday morning.
+  //
+  // Reconciled rather than summed because the raw sum is not a capacity
+  // figure. On 2026-07-12, 21 of 67 active clinicians carried 325
+  // visits/wk of target and never appeared on the schedule — two of them
+  // ADs who manage rather than treat, six last seen between March and
+  // June, and two (Abiola/Abi Balogun, Nicholas/Nick DeCandia) who WERE
+  // working under a nickname the roster does not carry. See staffMatch.js.
+  const roster = useMemo(() => {
+    const deliveredBy = new Map();
+    const seen = new Set();
+    for (const v of prevVisits || []) {
+      if (!isCompleted(v)) continue;
+      const name = staffKey(visitStaffName(v));
+      if (!name) continue;
+      // One visit per (staff, patient, date) — a co-treat is two visits,
+      // one for each clinician, which is exactly what a capacity target
+      // is denominated in.
+      const slot = name + '||' + (v.patient_name || '') + '||' + (v.visit_date + '').slice(0, 10);
+      if (seen.has(slot)) continue;
+      seen.add(slot);
+      deliveredBy.set(name, (deliveredBy.get(name) || 0) + 1);
+    }
+    return reconcileRoster(clinicians, deliveredBy);
+  }, [clinicians, prevVisits]);
+
   const metrics = useMemo(() => {
     const capacity = clinicians.reduce((s, c) => s + (c.weekly_visit_target || 0), 0);
     const urgentAuths = authRenewals.filter(a => a.priority === 'urgent');
@@ -890,6 +1018,7 @@ export default function DirectorDashboard({ onNavigate }) {
           isPastWeek={isPastWeek}
           wow={wow}
           capacity={m.capacity}
+          roster={roster}
         />
 
         {/* 1b. DATA INTEGRITY — silent unless a finished week is unresolved */}
@@ -989,12 +1118,13 @@ export default function DirectorDashboard({ onNavigate }) {
         <details style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
           <summary style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: INK, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span>
-              Detail -- Manager Scorecards {'·'} Exception Feed
+              Detail -- Roster vs Schedule {'·'} Manager Scorecards {'·'} Exception Feed
               <span style={{ fontSize: 10, fontWeight: 400, color: MUTED, marginLeft: 8 }}>for the weekly review, not the daily read</span>
             </span>
             <span style={{ fontSize: 10, color: MUTED }}>expand</span>
           </summary>
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, borderTop: '1px solid var(--border)' }}>
+            <RosterReconciliation roster={roster} weekLabel={wow ? wow.label : 'the prior week'} />
             <ManagerScorecards
               census={census}
               statusLog={statusLog}

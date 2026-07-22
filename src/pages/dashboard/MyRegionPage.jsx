@@ -3,6 +3,8 @@ import TopBar from '../../components/TopBar';
 import { supabase, fetchAllPages } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
+// 2026-07-22: was called in load() but never imported — ReferenceError on mount.
+import { dedupVisitsByLatestUpload } from '../../lib/visitDedup';
 
 const RATE = 230;
 

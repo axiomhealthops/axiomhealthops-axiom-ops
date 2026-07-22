@@ -173,5 +173,64 @@ eq('clean row warns not at all',
 eq('missing census row warns',
   archiveWarnings(F(),undefined).length, 1);
 
+// =====================================================================
+// staffMatch.js — roster/schedule reconciliation
+//
+// Every assertion below pins a defect measured in production on
+// 2026-07-22 against the week of 2026-07-12. See the module header.
+// =====================================================================
+const {staffKey,flipName,visitStaffName,buildStaffIndex,matchStaff,reconcileRoster}=await import(R+'staffMatch.js');
+
+// --- Name format: the join that silently matched zero rows
+eq('flipName converts Pariox "Last, First"', flipName('Taylor, Natalie'), 'Natalie Taylor');
+eq('flipName leaves "First Last" alone', flipName('Andrea Schwab'), 'Andrea Schwab');
+eq('flipName survives a missing first name', flipName('Taylor,'), 'Taylor');
+eq('flipName is null-safe', flipName(null), '');
+eq('staffKey ignores case, spacing and punctuation',
+  staffKey('  Mary  Devota   Dubach '), staffKey('mary devota dubach'));
+eq('visitStaffName prefers the normalized column',
+  visitStaffName({staff_name:'Balogun, Abi', staff_name_normalized:'Abi Balogun'}), 'Abi Balogun');
+eq('visitStaffName falls back to flipping the raw column',
+  visitStaffName({staff_name:'Taylor, Natalie'}), 'Natalie Taylor');
+
+// --- Nickname drift: Abiola/Abi and Nicholas/Nick were counted as idle
+// clinicians AND as unrostered staff simultaneously.
+const ROSTER=[
+  {full_name:'Abiola Balogun', weekly_visit_target:25},
+  {full_name:'Andrea Schwab',  weekly_visit_target:20},
+  {full_name:'Lia Davis',      weekly_visit_target:25},
+];
+const IDX=buildStaffIndex(ROSTER);
+eq('exact match wins', matchStaff(IDX,'Andrea Schwab').via, 'exact');
+eq('nickname resolves to the roster name',
+  matchStaff(IDX,'Abi Balogun').clinician.full_name, 'Abiola Balogun');
+eq('nickname match is flagged as an alias', matchStaff(IDX,'Abi Balogun').via, 'alias');
+eq('unknown name stays unmatched', matchStaff(IDX,'Nobody Here').clinician, null);
+
+// An alias shared by two roster rows must NEVER silently merge them —
+// combining two clinicians' visit counts is worse than reporting neither.
+const AMBIG=buildStaffIndex([
+  {full_name:'John Smith', weekly_visit_target:10},
+  {full_name:'Jane Smith', weekly_visit_target:10},
+]);
+eq('ambiguous alias refuses to guess', matchStaff(AMBIG,'J Smith').clinician, null);
+
+// --- Phantom capacity: the header prints claimed, not deliverable
+const D=new Map([['abi balogun',18],['andrea schwab',20],['ghost person',9]]);
+const REC=reconcileRoster(ROSTER,D);
+eq('claimed capacity is the raw roster sum', REC.claimedCapacity, 70);
+eq('working capacity excludes clinicians who delivered nothing', REC.workingCapacity, 45);
+eq('phantom capacity is the difference', REC.phantomCapacity, 25);
+eq('nickname visits are credited to the roster, not lost', REC.deliveredTotal, 38);
+eq('alias matches are surfaced so the roster can be fixed', REC.aliasMatches.length, 1);
+eq('unrostered deliverers are surfaced, not silently dropped',
+  REC.scheduleOnly, [{name:'ghost person', visits:9}]);
+eq('idle roster rows are surfaced with their target',
+  REC.rosterOnly, [{name:'Lia Davis', target:25, discipline:undefined, region:undefined}]);
+// 38/45, NOT 38/70 — utilization measured against capacity that exists.
+eq('utilization uses working capacity as the denominator', REC.utilizationPct, 84);
+eq('empty roster does not divide by zero', reconcileRoster([],new Map()).utilizationPct, null);
+eq('null inputs are safe', reconcileRoster(null,null).claimedCapacity, 0);
+
 console.log(fail?`\n${fail} FAILED`:'\nAll assertions passed');
 process.exit(fail?1:0);
