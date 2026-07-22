@@ -18,7 +18,7 @@ import {
 // because Pariox sends full-week snapshots and the per-(patient,date) key can
 // never notice a dropped slot. See src/lib/visitDedup.js.
 import { dedupVisitsByAuthoritativeBatch } from '../../lib/visitDedup';
-import { getWeekRange } from '../../lib/dateUtils';
+import { getWeekRange, toDateStr, formatShortDate } from '../../lib/dateUtils';
 import { bucketCensus } from '../../lib/censusStatus';
 
 // =====================================================================
@@ -82,23 +82,87 @@ const TEAL = '#06B6D4';
 // and is it being delivered? Booking health and delivery health are shown
 // as two separate bars because they fail independently and get escalated
 // to two different people.
-function DeliveryBand({ slots, target, weekLabel, isPastWeek, wow, capacity }) {
+//
+// 2026-07-22 — THE DELIVERY HEADLINE WAS MEASURING THE WRONG THING.
+// It read `completed / (completed + missed + cancelled)` and labelled the
+// result "delivered". On Wed Jul 22 that printed **81% delivered** next to
+// "729 booked of 1,000" while only 248 visits had actually run. Three
+// separate defects, all fixed here:
+//
+//  1. WRONG QUESTION. That ratio is a SHOW RATE over slots that already
+//     resolved — it says nothing about how much of the week is done. The
+//     honest completion figure was 248/729 = 34%. Reading "81% delivered"
+//     mid-week tells the director the week is nearly banked when two
+//     thirds of it has not happened yet.
+//  2. DENOMINATORS DID NOT RECONCILE. `booked` EXCLUDES cancelled slots
+//     (see classifyWeekSlots: booked = completed + missed + scheduled) but
+//     `resolved` INCLUDED them. So 305 was not a subset of 729 — the left
+//     and right halves of this band were measuring different universes and
+//     no arithmetic on screen tied out.
+//  3. NO TIME CONTEXT. Any percentage read on a Wednesday is unreadable
+//     without knowing what share of the week's slots were even due yet.
+//
+// The fix: the headline is now completion against the SAME booked figure
+// the left half shows, so 248 of 729 reconciles on sight. The old ratio
+// survives as `keptPct` — restricted to elapsed days and labelled "kept
+// rate" — because it is a real quality signal, just not the headline.
+// Pace and a landing projection give the mid-week read its meaning.
+function DeliveryBand({ slots, elapsed, todaySlots, elapsedThrough, target, weekLabel, isPastWeek, wow, capacity }) {
   // Headline is in SCHEDULING units to match Pariox and the target; revenue
   // below converts to billable encounters. See classifyWeekSlots.
   const booked = slots.bookedVisits;
   const bookedPct = target > 0 ? Math.round((booked / target) * 100) : 0;
-  const resolved = slots.completedVisits + slots.missedVisits + slots.cancelledVisits;
-  const deliveredPct = resolved > 0 ? Math.round((slots.completedVisits / resolved) * 100) : null;
+
+  // ── Delivery: completion against BOOKED, not against resolved ────────
+  const completed = slots.completedVisits;
+  const remaining = slots.scheduledVisits;
+  const missed = slots.missedVisits;
+  const cancelled = slots.cancelledVisits;
+  const lost = missed + cancelled;
+  // completed + missed + remaining === booked, exactly. Cancelled sits
+  // outside that identity because classifyWeekSlots removes it from booked.
+  const weekPct = booked > 0 ? Math.round((completed / booked) * 100) : null;
+
+  // ── Pace: what share of the booked week fell on COMPLETED days? ──────
+  // `elapsed` is the same classification restricted to days strictly before
+  // today, so on a past week it equals the full week and pace collapses to
+  // zero — correct, a finished week has no pace left to run.
+  const dueBooked = elapsed ? elapsed.bookedVisits : 0;
+  const duePct = booked > 0 ? Math.round((dueBooked / booked) * 100) : 0;
+  const paceGap = weekPct === null ? null : weekPct - duePct;
+  // Today is in progress, not late. Counted, never graded.
+  const onToday = todaySlots ? todaySlots.scheduledVisits : 0;
+  const doneToday = todaySlots ? todaySlots.completedVisits : 0;
+
+  // ── Kept rate: the old metric, honestly scoped and honestly named ────
+  // Denominator is completed-day slots that actually resolved. Slots from a
+  // finished day still sitting on Scheduled are documentation lag, not
+  // delivery failure, so they are called out separately rather than being
+  // smeared into this number.
+  const dueResolved = elapsed ? (elapsed.completedVisits + elapsed.missedVisits + elapsed.cancelledVisits) : 0;
+  const keptPct = dueResolved > 0 ? Math.round((elapsed.completedVisits / dueResolved) * 100) : null;
+  const stillOpen = elapsed ? elapsed.scheduledVisits : 0;
+
+  // ── Projection: where the week lands if the kept rate holds ──────────
+  const projected = (keptPct === null || isPastWeek)
+    ? null
+    : Math.round(completed + remaining * (keptPct / 100));
+  const projectedPct = projected === null || target === 0 ? null : Math.round((projected / target) * 100);
+  // Revenue projection runs on ENCOUNTERS, never visits. See CLAUDE.md.
+  const projectedRev = projected === null
+    ? null
+    : (slots.completed + slots.scheduled * (keptPct / 100)) * BLENDED_RATE;
 
   const bookColor = bookedPct >= 95 ? '#34D399' : bookedPct >= 80 ? '#FBBF24' : '#F87171';
-  const delColor = deliveredPct === null ? 'rgba(255,255,255,0.35)'
-    : deliveredPct >= 92 ? '#34D399' : deliveredPct >= 85 ? '#FBBF24' : '#F87171';
+  // Colour the delivery headline by PACE, not by the raw percentage — a
+  // 34% on Wednesday morning is healthy and must not render red.
+  const delColor = paceGap === null ? 'rgba(255,255,255,0.35)'
+    : paceGap >= -3 ? '#34D399' : paceGap >= -10 ? '#FBBF24' : '#F87171';
 
   // Revenue uses ENCOUNTERS, not visits — a co-treat bills once. Multiplying
   // `booked` (a visit count) by BLENDED_RATE would overstate by ~12%.
   const bookedRevenue = slots.booked * BLENDED_RATE;
   const bookedRevPct = Math.round((bookedRevenue / REVENUE_TARGET) * 100);
-  const lost = slots.missedVisits + slots.cancelledVisits;
   const lostRevenue = (slots.missed + slots.cancelled) * BLENDED_RATE;
 
   return (
@@ -139,51 +203,108 @@ function DeliveryBand({ slots, target, weekLabel, isPastWeek, wow, capacity }) {
         <div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 52, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: delColor, lineHeight: 1 }}>
-              {deliveredPct === null ? '--' : deliveredPct + '%'}
+              {weekPct === null ? '--' : weekPct + '%'}
             </div>
             <div style={{ fontSize: 16, color: 'rgba(255,255,255,0.45)', fontWeight: 600 }}>
-              delivered
+              of booked delivered
             </div>
-            {wow && wow.deliveredPct !== null && deliveredPct !== null && (() => {
-              const d = deliveredPct - wow.deliveredPct;
-              const up = d >= 0;
-              const c = up ? '#34D399' : '#F87171';
-              return (
-                <div title={'vs ' + wow.label} style={{ padding: '3px 9px', background: c + '22', color: c, borderRadius: 6, fontSize: 12, fontWeight: 800, fontFamily: 'DM Mono, monospace' }}>
-                  {up ? '+' : ''}{d} pts vs prior
-                </div>
-              );
-            })()}
+            {/* Pace, not week-over-week. Comparing a Wednesday against a
+                finished week is the exact trap the old chip fell into. */}
+            {!isPastWeek && paceGap !== null && (
+              <div
+                title={`${duePct}% of the booked week fell on days that have finished`}
+                style={{ padding: '3px 9px', background: delColor + '22', color: delColor, borderRadius: 6, fontSize: 12, fontWeight: 800, fontFamily: 'DM Mono, monospace' }}
+              >
+                {paceGap >= -3 ? 'on pace' : `${Math.abs(paceGap)} pts behind pace`}
+              </div>
+            )}
           </div>
-          <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 999, height: 8, marginTop: 12, overflow: 'hidden' }}>
-            <div style={{ width: (deliveredPct === null ? 0 : deliveredPct) + '%', height: '100%', background: delColor, borderRadius: 999, transition: 'width 0.8s ease' }} />
+
+          {/* Stacked bar over the booked week. The three segments sum to
+              booked exactly, so the bar and the numbers under it agree. */}
+          <div style={{ display: 'flex', background: 'rgba(255,255,255,0.08)', borderRadius: 999, height: 8, marginTop: 12, overflow: 'hidden' }}>
+            <div title={`${fmtN(completed)} completed`} style={{ width: (booked > 0 ? (completed / booked) * 100 : 0) + '%', height: '100%', background: '#34D399', transition: 'width 0.8s ease' }} />
+            <div title={`${fmtN(missed)} missed`} style={{ width: (booked > 0 ? (missed / booked) * 100 : 0) + '%', height: '100%', background: '#F87171', transition: 'width 0.8s ease' }} />
+            <div title={`${fmtN(remaining)} still to run`} style={{ width: (booked > 0 ? (remaining / booked) * 100 : 0) + '%', height: '100%', background: 'rgba(255,255,255,0.22)', transition: 'width 0.8s ease' }} />
           </div>
-          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 8 }}>
-            {fmtN(slots.completedVisits)} completed of {fmtN(resolved)} resolved so far
+
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 8, lineHeight: 1.5 }}>
+            <strong style={{ color: '#fff' }}>{fmtN(completed)}</strong> completed
+            {' '}{'·'} {fmtN(remaining)} still to run {'·'} {fmtN(booked)} booked
             {lost > 0 && (
-              <> {'·'} <strong style={{ color: '#F87171' }}>{fmtN(lost)} lost</strong> ({fmt$(lostRevenue)})</>
+              <> {'·'} <strong style={{ color: '#F87171' }}>{fmtN(lost)} lost</strong> ({fmtN(missed)} missed, {fmtN(cancelled)} cancelled {'·'} {fmt$(lostRevenue)})</>
+            )}
+            {keptPct !== null && (
+              <div style={{ marginTop: 3 }}>
+                {isPastWeek ? 'Across the week' : `Through ${elapsedThrough}`}:{' '}
+                <strong style={{ color: '#fff' }}>{keptPct}% kept</strong> of the
+                {' '}{fmtN(dueResolved)} slots that resolved
+                {stillOpen > 0 && (
+                  <> {'·'} <strong style={{ color: '#FBBF24' }}>{fmtN(stillOpen)} from a finished day never closed out</strong></>
+                )}
+                {wow && wow.keptPct !== null && (() => {
+                  const d = keptPct - wow.keptPct;
+                  const c = d >= 0 ? '#34D399' : '#F87171';
+                  return <> {'·'} <span style={{ color: c, fontWeight: 700 }}>{d >= 0 ? '+' : ''}{d} pts vs {wow.label}</span></>;
+                })()}
+              </div>
+            )}
+            {!isPastWeek && (onToday > 0 || doneToday > 0) && (
+              <div style={{ marginTop: 3 }}>
+                Today: <strong style={{ color: '#fff' }}>{fmtN(doneToday)}</strong> done
+                {' '}{'·'} {fmtN(onToday)} still on the schedule (in progress, not late)
+              </div>
             )}
           </div>
         </div>
       </div>
 
+      {/* Landing projection. Current week only — a finished week has
+          nothing left to project and the row would just restate itself. */}
+      {projected !== null && remaining > 0 && (
+        <div style={{ marginTop: 14, display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Tracking to
+          </span>
+          <strong style={{ color: '#fff', fontFamily: 'DM Mono, monospace', fontSize: 15 }}>
+            {fmtN(projected)} visits
+          </strong>
+          <span>
+            ({projectedPct}% of the {fmtN(target)} target {'·'} {fmt$(projectedRev)})
+            {' '}if the {keptPct}% kept rate holds across the {fmtN(remaining)} remaining
+          </span>
+        </div>
+      )}
+
       {/* One-sentence read. Booking and delivery are diagnosed separately
           so the sentence names the actual failing system, not just a colour. */}
       <div style={{ marginTop: 16, padding: '11px 15px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, fontSize: 13, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
+        {/* Booking, delivery and documentation fail independently and get
+            escalated to three different people, so the sentence names the
+            failing system rather than just restating a colour. Ordered by
+            who gets called first. */}
         {bookedPct < 90 ? (
           <>
             <strong style={{ color: '#F87171' }}>Booking gap.</strong> {fmtN(Math.max(0, target - booked))} visits short of a full week
             {' '}(about {fmt$(Math.max(0, target - booked) * BLENDED_RATE)}). Scheduling and assignment own this, not the clinicians.
           </>
-        ) : deliveredPct !== null && deliveredPct < 88 ? (
+        ) : keptPct !== null && keptPct < 88 ? (
           <>
-            <strong style={{ color: '#FBBF24' }}>Delivery gap.</strong> The week is booked at {bookedPct}%, but {100 - deliveredPct}% of
-            {' '}resolved slots fell out ({fmtN(lost)} visits, {fmt$(lostRevenue)}). This is a clinician and same-day-recovery problem.
+            <strong style={{ color: '#FBBF24' }}>Delivery gap.</strong> The week is booked at {bookedPct}%, but {100 - keptPct}% of
+            {' '}the slots resolved so far fell out ({fmtN(lost)} visits, {fmt$(lostRevenue)}). This is a clinician and same-day-recovery problem.
+          </>
+        ) : stillOpen >= 25 ? (
+          <>
+            <strong style={{ color: '#FBBF24' }}>Documentation lag.</strong> Booking and delivery are both healthy, but {fmtN(stillOpen)} slots
+            {' '}dated before today still have no outcome posted. Until they close, this week is under-reported, not under-delivered.
           </>
         ) : (
           <>
-            <strong style={{ color: '#34D399' }}>On track.</strong> {bookedPct}% booked, {deliveredPct === null ? 'no' : deliveredPct + '%'} delivered
-            {isPastWeek ? ' for the week.' : '. Remaining risk is the ' + fmtN(slots.scheduledVisits) + ' visits still to run.'}
+            <strong style={{ color: '#34D399' }}>On track.</strong> {bookedPct}% booked
+            {keptPct !== null && <>, {keptPct}% of resolved slots kept</>}
+            {isPastWeek
+              ? `. ${weekPct === null ? 'No' : weekPct + '%'} of the booked week was delivered.`
+              : `. ${fmtN(remaining)} visits still to run carry the rest of the week.`}
           </>
         )}
       </div>
@@ -268,6 +389,118 @@ function Widget({ label, value, sub, risk, owner, accent, tone, onClick, size = 
           {owner}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Visit funnel ──────────────────────────────────────────────────────
+// Replaces the four free-standing "Visits this week" widgets (2026-07-22).
+//
+// Those widgets restated booked / completed / remaining / lost — the same
+// four numbers the delivery band above already prints — with no arithmetic
+// tying them together. Two consequences: a full screen of vertical space
+// spent on a repeat, and no way to see WHERE the week is being lost. A
+// director reading "729 booked" and "248 completed" as unrelated tiles has
+// to do the subtraction in their head to find the 271-visit booking gap,
+// which is the single biggest number on the page.
+//
+// The funnel makes the subtraction explicit and hangs an owner off each
+// stage, so the read is "who do I call about this drop" rather than "what
+// is this number". Stage order follows the money: capacity we never booked,
+// then booked work that did or did not happen.
+function VisitFunnel({ slots, target, onGo }) {
+  const booked = slots.bookedVisits;
+  const completed = slots.completedVisits;
+  const remaining = slots.scheduledVisits;
+  const missed = slots.missedVisits;
+  const cancelled = slots.cancelledVisits;
+  const bookingGap = Math.max(0, target - booked);
+
+  // Revenue always in ENCOUNTER units. The four booked stages already have
+  // an encounter-unit twin on `slots`, but the booking gap does not — the
+  // target (1,000) is a VISIT figure, and multiplying a visit count by
+  // BLENDED_RATE overstates by ~12% because a co-treat bills once. Scale it
+  // by this week's own visit-to-encounter ratio instead. See CLAUDE.md.
+  const encPerVisit = booked > 0 ? slots.booked / booked : 1;
+  const stages = [
+    {
+      key: 'gap', label: 'Never booked', value: bookingGap, accent: bookingGap > 0 ? BAD : GOOD,
+      money: bookingGap * encPerVisit * BLENDED_RATE, owner: 'Scheduling / Assignment',
+      note: `${Math.round((booked / target) * 100)}% of target on the calendar`,
+      target: 'visits',
+    },
+    {
+      key: 'completed', label: 'Delivered', value: completed, accent: GOOD,
+      money: slots.completed * BLENDED_RATE, owner: 'Clinical',
+      note: booked > 0 ? `${Math.round((completed / booked) * 100)}% of booked` : null,
+      target: 'visits',
+    },
+    {
+      key: 'remaining', label: 'Still to run', value: remaining, accent: '#0EA5E9',
+      money: slots.scheduled * BLENDED_RATE, owner: 'Clinical / ADs',
+      note: 'the rest of the week', target: 'visits',
+    },
+    {
+      key: 'missed', label: 'Missed', value: missed, accent: missed > 0 ? BAD : GOOD,
+      money: slots.missed * BLENDED_RATE, owner: 'Care Coord / Clinical',
+      note: 'no-show, same-day recovery', target: 'missed-cancelled',
+    },
+    {
+      key: 'cancelled', label: 'Cancelled', value: cancelled, accent: cancelled > 0 ? WARN : GOOD,
+      money: slots.cancelled * BLENDED_RATE, owner: 'Care Coord',
+      note: 'removed from the week', target: 'missed-cancelled',
+    },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(150px, 1fr))`, gap: 10 }}>
+        {stages.map(s => (
+          <div
+            key={s.key}
+            onClick={() => onGo(s.target)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onGo(s.target); } }}
+            onMouseEnter={(e) => { e.currentTarget.style.boxShadow = '0 4px 14px rgba(15,23,42,0.10)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
+            style={{
+              background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 10,
+              padding: '12px 14px', cursor: 'pointer', position: 'relative', overflow: 'hidden',
+              transition: 'box-shadow 0.15s ease', display: 'flex', flexDirection: 'column',
+            }}
+          >
+            <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 3, background: s.accent }} />
+            <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              {s.label}
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: INK, lineHeight: 1.1, marginTop: 4 }}>
+              {fmtN(s.value)}
+            </div>
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
+              {fmt$(s.money)}{s.note ? ` ${'·'} ${s.note}` : ''}
+            </div>
+            <div style={{ fontSize: 10, color: MUTED, marginTop: 'auto', paddingTop: 7, fontWeight: 600 }}>
+              {s.owner}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* The reconciling line. Every number above appears here in one
+          equation, so the page can be checked for internal consistency at
+          a glance instead of on a calculator. */}
+      <div style={{ marginTop: 10, padding: '9px 13px', background: '#F8FAFC', border: '1px solid var(--border)', borderRadius: 8, fontSize: 11.5, color: MUTED, lineHeight: 1.6 }}>
+        <strong style={{ color: INK }}>{fmtN(target)}</strong> target
+        {' '}{'-'} <strong style={{ color: INK }}>{fmtN(bookingGap)}</strong> never booked
+        {' '}{'='} <strong style={{ color: INK }}>{fmtN(booked)}</strong> booked
+        {' '}{'='} <strong style={{ color: GOOD }}>{fmtN(completed)}</strong> delivered
+        {' '}{'+'} <strong style={{ color: INK }}>{fmtN(remaining)}</strong> still to run
+        {' '}{'+'} <strong style={{ color: BAD }}>{fmtN(missed)}</strong> missed.
+        {cancelled > 0 && (
+          <> {' '}A further <strong style={{ color: WARN }}>{fmtN(cancelled)}</strong> were cancelled and are no longer counted as booked.</>
+        )}
+      </div>
     </div>
   );
 }
@@ -409,18 +642,54 @@ export default function DirectorDashboard({ onNavigate }) {
   // ── This week's slots ───────────────────────────────────────────────
   const slots = useMemo(() => classifyWeekSlots(visits), [visits]);
 
+  // Same classification, restricted to COMPLETED DAYS — strictly before
+  // today. This is what makes a mid-week percentage readable: without it
+  // there is no way to tell "34% done on Wednesday" (healthy) from "34%
+  // done on Saturday" (a disaster).
+  //
+  // STRICTLY BEFORE, not "on or before". Measured on Wed 2026-07-22 at
+  // 7:21am: Mon and Tue were fully resolved (0 slots left on Scheduled),
+  // while today carried 148 scheduled and 0 completed simply because the
+  // day had not started. Including today made the page read "25 pts behind
+  // pace" and "148 past-dated with no outcome posted" — both pure artifacts
+  // of the clock. A day in progress cannot be graded; it gets its own
+  // counter instead. Cost of this rule is that a finished day is not
+  // credited until the next calendar day, which under-reports rather than
+  // over-reports. That is the right direction to be wrong in.
+  //
+  // toDateStr is local-time — do NOT swap in toISOString(), which rolls
+  // over after 8pm Eastern and would pull tomorrow's slots into today.
+  const elapsed = useMemo(() => {
+    const todayStr = toDateStr(new Date());
+    return classifyWeekSlots(
+      visits.filter(v => v && (v.visit_date + '').slice(0, 10) < todayStr)
+    );
+  }, [visits]);
+
+  // Today's slots, graded separately — in progress, not late.
+  const todaySlots = useMemo(() => {
+    const todayStr = toDateStr(new Date());
+    return classifyWeekSlots(
+      visits.filter(v => v && (v.visit_date + '').slice(0, 10) === todayStr)
+    );
+  }, [visits]);
+
   const wow = useMemo(() => {
     if (!prevVisits || prevVisits.length === 0) return null;
     const p = classifyWeekSlots(prevVisits);
-    const resolved = p.completed + p.missed + p.cancelled;
+    const resolved = p.completedVisits + p.missedVisits + p.cancelledVisits;
     return {
       ...p,
-      // Delivery rate is measured over RESOLVED slots only. Using `booked` as
-      // the denominator would silently fold the ~30% unresolved backlog into
-      // the failure rate and make delivery look far worse than it is. See
+      // Kept rate is measured over RESOLVED slots only. Using `booked` as the
+      // denominator would silently fold any unresolved backlog into the
+      // failure rate and make delivery look far worse than it is. See
       // UnresolvedWarning above — that backlog gets its own callout instead
       // of being smeared across this metric.
-      deliveredPct: resolved > 0 ? Math.round((p.completed / resolved) * 100) : null,
+      //
+      // Renamed from `deliveredPct` 2026-07-22: it never measured how much
+      // was delivered, and the old name is what let it get printed as the
+      // headline for two weeks. Visit units, to match the band it feeds.
+      keptPct: resolved > 0 ? Math.round((p.completedVisits / resolved) * 100) : null,
       label: getWeekRange(new Date(), weekOffset + 1).label,
     };
   }, [prevVisits, weekOffset]);
@@ -476,6 +745,13 @@ export default function DirectorDashboard({ onNavigate }) {
   const wk = getWeekRange(new Date(), weekOffset);
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
   const isPastWeek = weekOffset > 0;
+  // Last day the pace read covers. On a Sunday this points at last week, and
+  // `elapsed` is correctly empty — keptPct goes null and the line hides.
+  const elapsedThrough = (function () {
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    return formatShortDate(y);
+  })();
 
   const activeBucket = cb.byKey.active || { count: 0, riskCount: 0 };
   const activeAuthBucket = cb.byKey.active_auth || { count: 0 };
@@ -606,6 +882,9 @@ export default function DirectorDashboard({ onNavigate }) {
         {/* 1. DELIVERY BAND */}
         <DeliveryBand
           slots={slots}
+          elapsed={elapsed}
+          todaySlots={todaySlots}
+          elapsedThrough={elapsedThrough}
           target={WEEKLY_VISIT_TARGET}
           weekLabel={wk.label}
           isPastWeek={isPastWeek}
@@ -616,62 +895,30 @@ export default function DirectorDashboard({ onNavigate }) {
         {/* 1b. DATA INTEGRITY — silent unless a finished week is unresolved */}
         <UnresolvedWarning prev={wow} weekLabel={wow ? wow.label : ''} />
 
-        {/* 2. VISITS THIS WEEK — four separate widgets */}
+        {/* 2. NEEDS YOU TODAY — lifted above the census reference data
+             (2026-07-22). It was buried under two grids of status widgets,
+             so the only actionable block on the page sat below a full
+             screen of numbers nobody clicks. Pulse, then action, then
+             reference. */}
+        <NeedsYouToday
+          items={needsYouToday}
+          onAction={(it) => { if (it && it.target) go(it.target, it.intent); }}
+        />
+
+        {/* 3. WHERE THE WEEK GOES — funnel, replaces the four widgets */}
         <div>
           <SectionHead
-            title="Visits this week"
-            note={`${wk.label} (Sun-Sat) ${'·'} booked = completed + remaining + lost`}
+            title="Where the week goes"
+            note={`${wk.label} (Sun-Sat) ${'·'} visit units ${'·'} ${fmtN(slots.booked)} billable encounters booked`}
           />
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
-            {/* Visit counts below are in SCHEDULING units (patient+date+staff),
-                which is what Pariox and the ops team count and what Liam reads
-                off the schedule. Revenue is computed from ENCOUNTERS
-                (patient+date) because a co-treat bills once. See
-                classifyWeekSlots in visitMath.js. */}
-            <Widget
-              label="Scheduled (booked)"
-              value={fmtN(slots.bookedVisits)}
-              sub={`of ${fmtN(WEEKLY_VISIT_TARGET)} target ${'·'} ${Math.round((slots.bookedVisits / WEEKLY_VISIT_TARGET) * 100)}% ${'·'} ${fmtN(slots.booked)} billable encounters`}
-              owner="Scheduling / Assignment"
-              accent={TEAL}
-              tone={slots.bookedVisits >= WEEKLY_VISIT_TARGET * 0.95 ? 'good' : slots.bookedVisits >= WEEKLY_VISIT_TARGET * 0.8 ? 'warn' : 'bad'}
-              onClick={() => go('visits')}
-            />
-            <Widget
-              label="Completed so far"
-              value={fmtN(slots.completedVisits)}
-              // NOT "vs same point last week" -- prevVisits is the prior week
-              // in FULL, so comparing a Tuesday's 104 against a finished
-              // week's 601 would read as a 83% collapse. Labelled as a final
-              // figure so the comparison is honest.
-              sub={`${fmt$(slots.completed * BLENDED_RATE)} banked${wow ? ` ${'·'} prior wk finished at ${fmtN(wow.completed)}` : ''}`}
-              owner="Clinical"
-              accent={GOOD}
-              tone="good"
-              onClick={() => go('visits')}
-            />
-            <Widget
-              label="Remaining to run"
-              value={fmtN(slots.scheduledVisits)}
-              sub={`${fmt$(slots.scheduled * BLENDED_RATE)} still deliverable${wow && wow.booked > 0 ? ` ${'·'} ~${Math.round((wow.completed / wow.booked) * 100)}% of booked converted last wk` : ''}`}
-              owner="Clinical / ADs"
-              accent="#0EA5E9"
-              onClick={() => go('visits')}
-            />
-            <Widget
-              label="Lost"
-              value={fmtN(slots.missedVisits + slots.cancelledVisits)}
-              sub={`${slots.missedVisits} missed ${'·'} ${slots.cancelledVisits} cancelled`}
-              risk={(slots.missedVisits + slots.cancelledVisits) > 0 ? `${fmt$((slots.missed + slots.cancelled) * BLENDED_RATE)} fell out of the week` : null}
-              owner="Care Coord / Clinical"
-              accent={BAD}
-              tone={(slots.missedVisits + slots.cancelledVisits) >= 25 ? 'bad' : undefined}
-              onClick={() => go('missed-cancelled')}
-            />
-          </div>
+          {/* Visit counts are in SCHEDULING units (patient+date+staff), which
+              is what Pariox and the ops team count and what Liam reads off
+              the schedule. Revenue is computed from ENCOUNTERS (patient+date)
+              because a co-treat bills once. See classifyWeekSlots. */}
+          <VisitFunnel slots={slots} target={WEEKLY_VISIT_TARGET} onGo={go} />
         </div>
 
-        {/* 3. CENSUS HEADLINE — active + total */}
+        {/* 4. CENSUS HEADLINE — active + total */}
         <div>
           <SectionHead
             title="Census"
@@ -701,7 +948,7 @@ export default function DirectorDashboard({ onNavigate }) {
           </div>
         </div>
 
-        {/* 4. STATUS GRID — one widget per bucket, with its owning department */}
+        {/* 5. STATUS GRID — one widget per bucket, with its owning department */}
         <div>
           <SectionHead
             title="By status -- who owns it"
@@ -737,12 +984,6 @@ export default function DirectorDashboard({ onNavigate }) {
             </div>
           )}
         </div>
-
-        {/* 5. NEEDS YOU TODAY */}
-        <NeedsYouToday
-          items={needsYouToday}
-          onAction={(it) => { if (it && it.target) go(it.target, it.intent); }}
-        />
 
         {/* 6. DETAIL — weekly-review depth, folded away from the daily read */}
         <details style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
