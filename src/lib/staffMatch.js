@@ -272,6 +272,10 @@ export function capFor(clinician, perDiemDefault) {
 export function flagOverCap(clinicians, countsByStaffWeek, weekStarts, opts) {
   const minConsecutive = (opts && opts.minConsecutive) || 2;
   const perDiemDefault = opts && opts.perDiemDefault;
+  // Injected so this stays pure and testable — Date.now() in here would
+  // make every acknowledgement assertion depend on the wall clock.
+  const nowMs = (opts && opts.nowMs) || Date.now();
+  const ackStaleDays = (opts && opts.ackStaleDays) || 30;
   const weeks = weekStarts || [];
   const counts = countsByStaffWeek || new Map();
   const flags = [];
@@ -301,6 +305,15 @@ export function flagOverCap(clinicians, countsByStaffWeek, weekStarts, opts) {
     const reason = c.weekly_visit_cap != null ? 'capped-role'
       : c.is_agency ? 'agency'
       : 'per-diem';
+
+    // An acknowledged flag is being worked, so it is demoted rather than
+    // repeated as news every morning. It is never hidden: a conversion
+    // that stalls has to stay visible. And the acknowledgement EXPIRES —
+    // otherwise "I am on it" quietly becomes a permanent mute, which is
+    // the failure mode of every snooze button ever built.
+    const ackAt = c.employment_review_ack_at ? Date.parse(c.employment_review_ack_at) : null;
+    const ackAgeDays = (ackAt && nowMs) ? Math.floor((nowMs - ackAt) / 86400000) : null;
+    const acknowledged = ackAgeDays != null && ackAgeDays >= 0 && ackAgeDays < ackStaleDays;
     flags.push({
       name: c.full_name,
       region: c.region,
@@ -318,11 +331,20 @@ export function flagOverCap(clinicians, countsByStaffWeek, weekStarts, opts) {
       suggestedType: reason === 'per-diem'
         ? (average > 15 ? 'full-time' : 'part-time')
         : null,
+      acknowledged,
+      ackAgeDays,
+      // Acknowledged, then left. Worth surfacing louder than a fresh
+      // flag, because someone said they had it.
+      ackWentStale: ackAgeDays != null && ackAgeDays >= ackStaleDays,
     });
   }
 
+  // Unacknowledged first, then by severity. An acknowledged flag drops
+  // below live ones without leaving the list.
   return flags.sort((a, b) =>
-    b.consecutiveWeeks - a.consecutiveWeeks || b.average - a.average);
+    (a.acknowledged ? 1 : 0) - (b.acknowledged ? 1 : 0) ||
+    b.consecutiveWeeks - a.consecutiveWeeks ||
+    b.average - a.average);
 }
 
 /**

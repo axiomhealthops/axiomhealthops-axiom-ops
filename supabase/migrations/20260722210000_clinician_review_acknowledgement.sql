@@ -1,0 +1,20 @@
+-- Staffing-flag acknowledgement, per Liam 2026-07-22.
+-- Applied to production via MCP
+-- (clinician_review_acknowledgement_2026_07_22); checked in for git history.
+--
+-- The over-cap alert pushes to "Needs you today" every morning until the
+-- underlying contract changes. Correct for a flag nobody has seen; noise
+-- for one already in motion — and noise is how a focus list stops being
+-- read. Suppressing it outright is worse: a conversion that stalls for
+-- three months would simply vanish.
+--
+-- So an acknowledged flag is DEMOTED, never hidden, and RE-ESCALATES
+-- once the acknowledgement goes stale (30 days, configurable). An
+-- acknowledgement means "I am on it", never a permanent mute — that is
+-- the failure mode of every snooze button ever built. A stale one comes
+-- back LOUDER than a fresh flag, because a stalled commitment is worse
+-- than an unseen one.
+--
+-- First use: Tiffany Harrison's per-diem overuse. Transfer to full time
+-- under discussion. Clear employment_review_ack_at when the contract
+-- changes.

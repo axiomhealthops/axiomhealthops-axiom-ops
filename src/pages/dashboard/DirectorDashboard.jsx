@@ -826,7 +826,12 @@ export default function DirectorDashboard({ onNavigate }) {
       // tier that catches drift a surname heuristic cannot ("Marlene
       // Ortega" <- "Marlene Olea"). Omitting it silently downgrades every
       // maintained pairing back to a guess. See staffMatch.js.
-      fetchAllPages(applyRegion(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,aliases').eq('is_active', true))),
+      // employment_type / is_treating / weekly_visit_cap / is_agency drive
+      // the three assignment tiers and the over-cap alert;
+      // weekly_visit_target_override marks a negotiated minimum;
+      // employment_review_ack_at demotes a flag already being worked.
+      // Omitting any of them silently changes what the page reports.
+      fetchAllPages(applyRegion(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,weekly_visit_target_override,weekly_visit_cap,employment_type,is_treating,is_agency,job_description,employment_review_ack_at,is_active,aliases').eq('is_active', true))),
       fetchAllPages(applyCoords(supabase.from('coordinators').select('id,full_name,role,job_title,team,regions,is_active').eq('is_active', true))),
       fetchAllPages(applyRegion(supabase.from('census_status_log').select('patient_name,region,old_status,new_status,changed_at').gte('changed_at', thirtyDaysAgoIso))),
       fetchAllPages(supabase.from('coordinator_activity_log').select('coordinator_name,coordinator_role,action_type,created_at').gte('created_at', sevenDaysAgoIso)),
@@ -1187,10 +1192,27 @@ export default function DirectorDashboard({ onNavigate }) {
             title: `${f.name} is per diem but averaging ${f.average} visits/wk for ${wk}`,
             detail: `Peak ${f.peak} ${'·'} Rgn ${f.region || '--'} ${'·'} a standing caseload on a per-diem contract ${'·'} move to ${f.suggestedType}`,
           };
+      // Acknowledged means someone is on it: demoted, never hidden. Once
+      // the acknowledgement goes stale it comes back LOUDER than a fresh
+      // flag, because a stalled commitment is worse than an unseen one.
+      if (f.ackWentStale) {
+        items.push({
+          severity: 'high',
+          score: 95,
+          title: `${f.name}: staffing review acknowledged ${f.ackAgeDays} days ago and still open`,
+          detail: `${copy.detail} ${'·'} still ${f.average}/wk ${'·'} nothing has changed since it was picked up`,
+          actionLabel: 'Staff directory',
+          target: 'staff',
+        });
+        return;
+      }
       items.push({
-        severity: f.consecutiveWeeks >= 4 ? 'high' : 'medium',
-        score: 70 + Math.min(20, f.consecutiveWeeks * 3),
-        ...copy,
+        severity: f.acknowledged ? 'medium' : (f.consecutiveWeeks >= 4 ? 'high' : 'medium'),
+        score: f.acknowledged ? 30 : 70 + Math.min(20, f.consecutiveWeeks * 3),
+        title: f.acknowledged ? `${copy.title} -- in progress` : copy.title,
+        detail: f.acknowledged
+          ? `${copy.detail} ${'·'} acknowledged ${f.ackAgeDays === 0 ? 'today' : `${f.ackAgeDays}d ago`}`
+          : copy.detail,
         actionLabel: 'Staff directory',
         target: 'staff',
       });

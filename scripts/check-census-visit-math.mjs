@@ -391,6 +391,46 @@ eq('a contracted clinician over target is never flagged',
   CAPFLAGS.some(f=>f.name==='Hollie Fincher'), false);
 eq('the cap that was breached is reported',
   CAPFLAGS.find(f=>f.name==='Randi Bonner').cap, 4);
+
+// --- Acknowledgement: "I am on it" demotes a flag, never mutes it.
+// Tiffany Harrison's per-diem conversion is under discussion (Liam
+// 2026-07-22), so her flag must stop reading as news without vanishing.
+const NOW=Date.parse('2026-07-22T12:00:00Z');
+const ACKC=(ack)=>[{full_name:'Tiffany Harrison', employment_type:'prn',
+  is_treating:true, employment_review_ack_at:ack}];
+const ACKCOUNTS=new Map([['tiffany harrison',
+  new Map([['2026-06-14',17],['2026-06-21',17]])]]);
+const ackRun=(ack)=>flagOverCap(ACKC(ack),ACKCOUNTS,CAPW,{nowMs:NOW})[0];
+
+eq('an unacknowledged flag is not marked acknowledged',
+  ackRun(null).acknowledged, false);
+eq('a fresh acknowledgement demotes the flag',
+  ackRun('2026-07-22T09:00:00Z').acknowledged, true);
+eq('an acknowledged flag still appears -- it is demoted, not hidden',
+  flagOverCap(ACKC('2026-07-22T09:00:00Z'),ACKCOUNTS,CAPW,{nowMs:NOW}).length, 1);
+eq('acknowledgement age is reported', ackRun('2026-07-12T12:00:00Z').ackAgeDays, 10);
+// The important one: an acknowledgement must EXPIRE, or "I am on it"
+// becomes a permanent mute and a stalled transfer disappears.
+eq('a stale acknowledgement stops counting as acknowledged',
+  ackRun('2026-05-01T12:00:00Z').acknowledged, false);
+eq('a stale acknowledgement is called out as stale',
+  ackRun('2026-05-01T12:00:00Z').ackWentStale, true);
+eq('a fresh acknowledgement is not stale',
+  ackRun('2026-07-22T09:00:00Z').ackWentStale, false);
+eq('the staleness window is configurable',
+  flagOverCap(ACKC('2026-07-15T12:00:00Z'),ACKCOUNTS,CAPW,
+    {nowMs:NOW, ackStaleDays:5})[0].ackWentStale, true);
+// Unacknowledged work outranks acknowledged work in the sort.
+const MIXED=flagOverCap([
+  {full_name:'Tiffany Harrison', employment_type:'prn', is_treating:true,
+   employment_review_ack_at:'2026-07-22T09:00:00Z'},
+  {full_name:'Fresh Problem', employment_type:'prn', is_treating:true},
+], new Map([
+  ['tiffany harrison', new Map([['2026-06-14',19],['2026-06-21',19]])],
+  ['fresh problem',    new Map([['2026-06-14',12],['2026-06-21',12]])],
+]), CAPW, {nowMs:NOW});
+eq('unacknowledged flags sort above acknowledged ones, even when milder',
+  MIXED.map(f=>f.name), ['Fresh Problem','Tiffany Harrison']);
 eq('empty roster does not divide by zero', reconcileRoster([],new Map()).utilizationPct, null);
 eq('null inputs are safe', reconcileRoster(null,null).claimedCapacity, 0);
 
