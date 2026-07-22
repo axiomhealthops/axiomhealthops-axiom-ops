@@ -21,7 +21,8 @@ import { dedupVisitsByAuthoritativeBatch } from '../../lib/visitDedup';
 import { staffKey, visitStaffName, reconcileRoster } from '../../lib/staffMatch';
 import { isCompleted } from '../../lib/visitMath';
 import { getWeekRange, toDateStr, formatShortDate } from '../../lib/dateUtils';
-import { bucketCensus } from '../../lib/censusStatus';
+import { bucketCensus, normalizeStatus } from '../../lib/censusStatus';
+import { summarizeCoverage } from '../../lib/frequencyMath';
 
 // =====================================================================
 // DIRECTOR COMMAND v4 — "Company Pulse" (2026-07-21)
@@ -402,6 +403,102 @@ function Widget({ label, value, sub, risk, owner, accent, tone, onClick, size = 
           {owner}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Coverage band ─────────────────────────────────────────────────────
+// Answers the question the booking gap raises but cannot itself answer:
+// WHERE would the missing visits come from?
+//
+// The funnel above says the week is 271 visits short of the 1,000 target
+// and hands that to Scheduling. What it cannot say is whether those 271
+// visits exist to be booked. They do. Measured 2026-07-12: 258 active
+// patients carry a prescribed cadence of once a week or more, they were
+// owed 482 visits, and 257 were delivered — a 256-visit shortfall against
+// care that is already authorised, already staffed and already on the
+// roster. That is 94% of the gap to target, sitting in patients we have.
+//
+// The framing matters for who gets called. A booking gap of unknown
+// origin is a marketing and intake problem. A booking gap that is almost
+// entirely unscheduled prescribed care is a scheduling problem, and the
+// patients are enumerable by name today.
+function CoverageBand({ coverage, bookingGap, onGo }) {
+  if (!coverage || coverage.withExpectation === 0) return null;
+  const short = coverage.shortfallVisits;
+  if (short === 0) return null;
+  // Encounter units for money — a co-treat bills once. See CLAUDE.md.
+  const dollars = (short / 1.12) * BLENDED_RATE;
+  const coversPct = bookingGap > 0 ? Math.round((short / bookingGap) * 100) : null;
+
+  return (
+    <div>
+      <SectionHead
+        title="Prescribed care not delivered"
+        note={`active patients on a weekly-or-greater cadence ${'·'} measured on the last full week`}
+      />
+      <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 40, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: BAD, lineHeight: 1 }}>
+            {fmtN(short)}
+          </div>
+          <div style={{ fontSize: 15, color: MUTED, fontWeight: 600 }}>
+            visits/wk prescribed but not delivered
+          </div>
+          <div style={{ padding: '3px 9px', background: '#FEF2F2', color: BAD, borderRadius: 6, fontSize: 13, fontWeight: 800, fontFamily: 'DM Mono, monospace' }}>
+            {fmt$(dollars)}/wk
+          </div>
+        </div>
+
+        {coversPct !== null && (
+          <div style={{ marginTop: 12, padding: '11px 14px', background: '#F8FAFC', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: INK, lineHeight: 1.55 }}>
+            That is <strong>{coversPct}% of the {fmtN(bookingGap)}-visit gap</strong> to the weekly target,
+            {' '}already authorised and already on the active roster. Closing it is a scheduling
+            {' '}problem, not a referral problem.
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))', gap: 10, marginTop: 14 }}>
+          {[
+            { k: 'Patients short', v: fmtN(coverage.short), s: `of ${fmtN(coverage.withExpectation)} with a weekly cadence`, c: BAD },
+            { k: 'Expected', v: fmtN(coverage.expectedVisits), s: 'visits/wk prescribed', c: INK },
+            { k: 'Delivered', v: fmtN(coverage.deliveredVisits), s: `${Math.round((coverage.deliveredVisits / coverage.expectedVisits) * 100)}% of prescribed`, c: GOOD },
+            { k: 'Fully covered', v: fmtN(coverage.fullyCovered), s: 'got every prescribed visit', c: GOOD },
+          ].map(t => (
+            <div key={t.k}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.k}</div>
+              <div style={{ fontSize: 24, fontWeight: 900, fontFamily: 'DM Mono, monospace', color: t.c, lineHeight: 1.2 }}>{t.v}</div>
+              <div style={{ fontSize: 10.5, color: MUTED }}>{t.s}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 12, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 11, color: MUTED }}>
+          <button
+            type="button"
+            onClick={() => onGo('census', { status: 'active', lastSeen: 'overdue' })}
+            style={{ padding: '6px 13px', background: INK, color: '#fff', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+          >
+            Open the patients
+          </button>
+          {/* Excluded groups are stated, never silently folded in. An
+              inflated gap built on assumed cadences would be worse than
+              a smaller true one. */}
+          <span>
+            Excludes {fmtN(coverage.sparserThanWeekly)} on a monthly-or-sparser cadence
+            {' '}and {fmtN(coverage.asNeeded)} prn {'·'} neither is owed a visit this week.
+          </span>
+        </div>
+
+        {coverage.unparseable > 0 && (
+          <div style={{ marginTop: 10, padding: '9px 12px', background: '#FFFBEB', border: `1px solid ${WARN}`, borderRadius: 7, fontSize: 11.5, color: '#78350F', lineHeight: 1.55 }}>
+            <strong>{fmtN(coverage.unparseable)} active patients have a frequency nothing can read</strong>
+            {' '}({Array.from(coverage.unparseableValues.entries()).slice(0, 6).map(([v, n]) => `${v} (${n})`).join(', ')}).
+            {' '}They are excluded from the shortfall above rather than assumed, so the real number is
+            {' '}this or higher. Fixing those records is the cheapest way to sharpen it.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -826,6 +923,33 @@ export default function DirectorDashboard({ onNavigate }) {
     return reconcileRoster(clinicians, deliveredBy);
   }, [clinicians, prevVisits]);
 
+  // ── Coverage: prescribed cadence vs delivered ───────────────────────
+  // Measured on the prior FULL week for the same reason the roster is:
+  // a Wednesday would report almost every patient as short.
+  const coverage = useMemo(() => {
+    const deliveredByPatient = new Map();
+    const seen = new Set();
+    for (const v of prevVisits || []) {
+      if (!isCompleted(v)) continue;
+      const p = (v.patient_name || '').toLowerCase().trim();
+      if (!p) continue;
+      // Distinct DAYS, not rows — a co-treat is one delivered visit
+      // against a prescribed cadence, not two.
+      const day = p + '||' + (v.visit_date + '').slice(0, 10);
+      if (seen.has(day)) continue;
+      seen.add(day);
+      deliveredByPatient.set(p, (deliveredByPatient.get(p) || 0) + 1);
+    }
+    const actives = (census || []).filter(c => {
+      const s = normalizeStatus(c.status);
+      return /^active/i.test(s || '');
+    });
+    return summarizeCoverage(actives.map(c => ({
+      frequency: c.inferred_frequency,
+      delivered: deliveredByPatient.get((c.patient_name || '').toLowerCase().trim()) || 0,
+    })));
+  }, [census, prevVisits]);
+
   const metrics = useMemo(() => {
     const capacity = clinicians.reduce((s, c) => s + (c.weekly_visit_target || 0), 0);
     const urgentAuths = authRenewals.filter(a => a.priority === 'urgent');
@@ -1050,6 +1174,15 @@ export default function DirectorDashboard({ onNavigate }) {
               because a co-treat bills once. See classifyWeekSlots. */}
           <VisitFunnel slots={slots} target={WEEKLY_VISIT_TARGET} onGo={go} />
         </div>
+
+        {/* 3b. WHERE THE MISSING VISITS ARE. Sits directly under the
+             funnel because it answers the question the funnel's booking
+             gap raises: those visits already exist, in patients we have. */}
+        <CoverageBand
+          coverage={coverage}
+          bookingGap={Math.max(0, WEEKLY_VISIT_TARGET - slots.bookedVisits)}
+          onGo={go}
+        />
 
         {/* 4. CENSUS HEADLINE — active + total */}
         <div>

@@ -265,5 +265,85 @@ eq('utilization uses working capacity as the denominator', REC.utilizationPct, 8
 eq('empty roster does not divide by zero', reconcileRoster([],new Map()).utilizationPct, null);
 eq('null inputs are safe', reconcileRoster(null,null).claimedCapacity, 0);
 
+// =====================================================================
+// frequencyMath.js — inferred_frequency parsing
+//
+// Every string below is a real value from census_data on 2026-07-22.
+// The LOC-prefixed ones are the 38 active patients that carry a
+// parseable frequency but no overdue_threshold_days, and are therefore
+// currently skipped by every overdue check in the system.
+// =====================================================================
+const {parseFrequency,expectedVisitsThisWeek,coverageGap,summarizeCoverage}=await import(R+'frequencyMath.js');
+
+// --- The six canonical values must match the thresholds census_data
+// already stores, or we have created a second disagreeing source.
+eq('4w4 threshold matches the column', parseFrequency('4w4').thresholdDays, 3);
+eq('2w4 threshold matches the column', parseFrequency('2w4').thresholdDays, 4);
+eq('1w4 threshold matches the column', parseFrequency('1w4').thresholdDays, 10);
+eq('1em1 is monthly, not weekly', Math.round(parseFrequency('1em1').perWeek*100), 23);
+eq('2w4 is two visits a week', parseFrequency('2w4').perWeek, 2);
+
+// --- The 38-patient blind spot: parseable frequency buried in LOC text
+eq('LOC prefix does not hide the frequency', parseFrequency('LOC 3 DM 1w4').canonical, '1w4');
+eq('Maintenance qualifier does not hide it', parseFrequency('LOC 4 Maintenance 2w8').canonical, '2w8');
+eq('leading dash does not hide it', parseFrequency('Maintenance -1em2').canonical, '1em2');
+eq('AD qualifier does not hide it', parseFrequency('LOC 4 AD 4w5').canonical, '4w5');
+eq('colon does not hide it', parseFrequency('LOC 4 DM: 1ew2').canonical, '1ew2');
+eq('a buried 1w4 gets the same threshold as a bare one',
+  parseFrequency('LOC 3 Maintenance 1w4').thresholdDays, parseFrequency('1w4').thresholdDays);
+
+// --- Multi-phase orders: first token is the current phase
+eq('taper takes the first phase', parseFrequency('LOC 3 - 4w4, 2w2').canonical, '4w4');
+eq('taper reports how many phases it saw', parseFrequency('LOC 3 - 4w4, 2w2').phases, 2);
+eq('comma-packed taper still parses', parseFrequency('LOC 2 AD - 4w2,2w4').canonical, '4w2');
+
+// --- prn is RECOGNIZED and never overdue. Conflating it with
+// unparseable would put 24 patients into the wrong bucket.
+eq('prn is recognized', parseFrequency('prn').recognized, true);
+eq('prn is never overdue', parseFrequency('prn').thresholdDays, 9999);
+eq('prn expects no visits', expectedVisitsThisWeek(parseFrequency('prn')), 0);
+
+// --- Unknown values NEVER get a silent default
+eq('N/A is not recognized', parseFrequency('N/A').recognized, false);
+eq('NA is not recognized', parseFrequency('NA').recognized, false);
+eq('null is not recognized', parseFrequency(null).recognized, false);
+eq('empty is not recognized', parseFrequency('').recognized, false);
+eq('unparseable text invents no expectation', expectedVisitsThisWeek(parseFrequency('twice weekly')), 0);
+
+// --- Weekly expectation
+eq('4w4 expects 4 visits', expectedVisitsThisWeek(parseFrequency('4w4')), 4);
+eq('1w4 expects 1 visit', expectedVisitsThisWeek(parseFrequency('1w4')), 1);
+// A monthly patient is not owed a visit in any given week. Counting them
+// short every week would bury the patients genuinely behind.
+eq('1em1 expects nothing in a given week', expectedVisitsThisWeek(parseFrequency('1em1')), 0);
+
+// --- coverageGap distinguishes "no shortfall" from "no basis to judge"
+eq('2w4 seen twice is covered', coverageGap('2w4',2).shortfall, 0);
+eq('2w4 seen once is one short', coverageGap('2w4',1).shortfall, 1);
+eq('2w4 unseen is two short', coverageGap('2w4',0).shortfall, 2);
+eq('over-delivery is not a negative shortfall', coverageGap('1w4',3).shortfall, 0);
+eq('unparseable yields null, not zero', coverageGap('N/A',0).shortfall, null);
+eq('monthly patient unseen this week is NOT short', coverageGap('1em1',0).shortfall, 0);
+
+// --- Roll-up excludes guesses from the headline number
+const COV=summarizeCoverage([
+  {frequency:'2w4', delivered:0},          // 2 short
+  {frequency:'1w4', delivered:0},          // 1 short
+  {frequency:'LOC 3 DM 1w4', delivered:0}, // 1 short — the blind spot
+  {frequency:'1w4', delivered:1},          // covered
+  {frequency:'1em1', delivered:0},         // monthly, not short
+  {frequency:'prn', delivered:0},          // as needed
+  {frequency:'N/A', delivered:0},          // no basis to judge
+]);
+eq('shortfall counts only patients with a real expectation', COV.shortfallVisits, 4);
+eq('the blind-spot patient is now counted', COV.short, 3);
+eq('unparseable is excluded from the gap, not assumed', COV.unparseable, 1);
+eq('prn is bucketed separately', COV.asNeeded, 1);
+eq('monthly is bucketed separately', COV.sparserThanWeekly, 1);
+eq('unparseable values are surfaced for cleanup',
+  Array.from(COV.unparseableValues.entries()), [['N/A',1]]);
+eq('blank frequency is labelled, not dropped',
+  Array.from(summarizeCoverage([{frequency:'',delivered:0}]).unparseableValues.keys()), ['(blank)']);
+
 console.log(fail?`\n${fail} FAILED`:'\nAll assertions passed');
 process.exit(fail?1:0);
