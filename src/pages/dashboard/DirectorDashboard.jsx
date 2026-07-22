@@ -18,7 +18,7 @@ import {
 // because Pariox sends full-week snapshots and the per-(patient,date) key can
 // never notice a dropped slot. See src/lib/visitDedup.js.
 import { dedupVisitsByAuthoritativeBatch } from '../../lib/visitDedup';
-import { staffKey, visitStaffName, reconcileRoster } from '../../lib/staffMatch';
+import { staffKey, visitStaffName, reconcileRoster, flagPerDiemOveruse } from '../../lib/staffMatch';
 import { isCompleted } from '../../lib/visitMath';
 import { getWeekRange, toDateStr, formatShortDate } from '../../lib/dateUtils';
 import { bucketCensus, normalizeStatus } from '../../lib/censusStatus';
@@ -542,10 +542,10 @@ function RosterReconciliation({ roster, weekLabel }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 12 }}>
         {[
-          { k: 'Claimed capacity', v: fmtN(roster.claimedCapacity), s: `${roster.activeCount} active clinicians`, c: MUTED },
-          { k: 'Working capacity', v: fmtN(roster.workingCapacity), s: `${roster.matchedCount} delivered a visit`, c: GOOD },
+          { k: 'Contracted capacity', v: fmtN(roster.committedCapacity), s: 'full-time + part-time targets', c: MUTED },
+          { k: 'Delivered', v: fmtN(roster.committedDelivered), s: `${roster.committedUtilizationPct === null ? '--' : roster.committedUtilizationPct + '%'} of contracted`, c: GOOD },
+          { k: 'Assignment gap', v: fmtN(roster.assignmentGap), s: `visits/wk to book ${'·'} ${fmt$((roster.assignmentGap / 1.12) * BLENDED_RATE)}`, c: roster.assignmentGap > 0 ? BAD : GOOD },
           { k: 'Unworked', v: fmtN(roster.phantomCapacity), s: `${roster.rosterOnly.length} delivered nothing`, c: roster.phantomCapacity > 0 ? BAD : GOOD },
-          { k: 'Utilization', v: roster.utilizationPct === null ? '--' : roster.utilizationPct + '%', s: 'of working capacity', c: INK },
         ].map(t => (
           <div key={t.k}>
             <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.k}</div>
@@ -572,6 +572,11 @@ function RosterReconciliation({ roster, weekLabel }) {
             label="Delivered visits but not on the active roster"
             items={roster.scheduleOnly} color={BAD}
             render={s => `${s.name} (${s.visits})`}
+          />
+          <Row
+            label="Contracted but under target -- visits to assign"
+            items={roster.underTarget} color={BAD}
+            render={u => `${u.name} ${u.delivered}/${u.target} (-${u.short})`}
           />
           <Row
             label="On the roster, delivered nothing"
@@ -923,6 +928,55 @@ export default function DirectorDashboard({ onNavigate }) {
     return reconcileRoster(clinicians, deliveredBy);
   }, [clinicians, prevVisits]);
 
+  // ── Per-diem overuse ────────────────────────────────────────────────
+  // Per diem is for irregular, low-volume cover, not for running a
+  // standing caseload without a contract. Liam 2026-07-22: flag anyone
+  // over 10 visits in 2+ CONSECUTIVE weeks so he can move them onto a
+  // part-time contract. Needs a multi-week window, so it loads its own
+  // slice rather than reusing this week's or last week's visits.
+  const [perDiemWeeks, setPerDiemWeeks] = useState({ counts: new Map(), weeks: [] });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const LOOKBACK = 6;
+      const weeks = [];
+      for (let i = LOOKBACK; i >= 1; i--) weeks.push(getWeekRange(new Date(), i));
+      const from = weeks[0].startStr;
+      const to = weeks[weeks.length - 1].endStr;
+      const rows = await fetchAllPages(
+        supabase.from('visit_schedule_data')
+          .select('patient_name,staff_name,staff_name_normalized,visit_date,status,event_type,uploaded_at')
+          .gte('visit_date', from).lte('visit_date', to)
+      );
+      if (cancelled) return;
+      const live = dedupVisitsByAuthoritativeBatch(rows);
+      // staffKey -> (weekStartStr -> distinct patient-days)
+      const counts = new Map();
+      const seen = new Set();
+      for (const v of live) {
+        if (!isCompleted(v)) continue;
+        const d = (v.visit_date + '').slice(0, 10);
+        const wkObj = weeks.find(w => d >= w.startStr && d <= w.endStr);
+        if (!wkObj) continue;
+        const s = staffKey(visitStaffName(v));
+        if (!s) continue;
+        const slot = s + '||' + (v.patient_name || '') + '||' + d;
+        if (seen.has(slot)) continue;
+        seen.add(slot);
+        let m = counts.get(s);
+        if (!m) { m = new Map(); counts.set(s, m); }
+        m.set(wkObj.startStr, (m.get(wkObj.startStr) || 0) + 1);
+      }
+      setPerDiemWeeks({ counts, weeks: weeks.map(w => w.startStr) });
+    })();
+    return () => { cancelled = true; };
+  }, [weekOffset, stateFilter]);
+
+  const perDiemFlags = useMemo(
+    () => flagPerDiemOveruse(clinicians, perDiemWeeks.counts, perDiemWeeks.weeks),
+    [clinicians, perDiemWeeks]
+  );
+
   // ── Coverage: prescribed cadence vs delivered ───────────────────────
   // Measured on the prior FULL week for the same reason the roster is:
   // a Wednesday would report almost every patient as short.
@@ -1101,6 +1155,19 @@ export default function DirectorDashboard({ onNavigate }) {
         target: 'on-hold',
       });
     }
+
+    // Per-diem overuse. A contract decision only Liam can make, so it is
+    // pushed here rather than left in a panel for someone to find.
+    perDiemFlags.forEach(f => {
+      items.push({
+        severity: f.consecutiveWeeks >= 4 ? 'high' : 'medium',
+        score: 70 + Math.min(20, f.consecutiveWeeks * 3),
+        title: `${f.name} is per diem but averaging ${f.average} visits/wk for ${f.consecutiveWeeks} straight weeks`,
+        detail: `Peak ${f.peak} ${'·'} Rgn ${f.region || '--'} ${'·'} a standing caseload on a per-diem contract ${'·'} move to ${f.suggestedType}`,
+        actionLabel: 'Staff directory',
+        target: 'staff',
+      });
+    });
 
     if (m.teamQuiet >= 3) {
       items.push({

@@ -173,6 +173,89 @@ export function matchStaff(index, scheduleName) {
   return { clinician: null, via: null };
 }
 
+// ── Per-diem overuse ──────────────────────────────────────────────────
+// Per diem is meant to absorb irregular, low-volume work — a cover
+// shift, a one-off, a gap. It is not a way to run a standing caseload
+// without a contract. A per-diem clinician carrying a regular weekly
+// load should be moved to a part-time contract, which is Liam's call to
+// make and therefore something the system has to put in front of him
+// rather than leave for someone to notice.
+//
+// RULE (Liam, 2026-07-22): more than `threshold` visits in each of
+// `minConsecutive` or more CONSECUTIVE weeks. Consecutive matters — one
+// busy week is cover, several in a row is a caseload. Measured on the
+// week of 2026-07-12 this fires on exactly one person, Tiffany Harrison,
+// who ran 12/17/17/17/14/19 across six straight weeks on a per-diem
+// contract. Amilkar Gonzalez touched 11 once in June and correctly does
+// not fire, which is the calibration the "consecutive" clause buys.
+//
+// A week with no visits is a ZERO, not a gap. Weeks are read from the
+// caller's explicit window rather than from whatever keys happen to be
+// in the map, so a clinician who takes a week off breaks their own
+// streak instead of silently having it bridged.
+
+/** Employment-type values that count as per diem. Matches the DB. */
+const PER_DIEM_TYPES = new Set(['prn', 'per diem', 'per_diem', '1099', '1099 per diem']);
+
+export function isPerDiem(employmentType) {
+  return PER_DIEM_TYPES.has(String(employmentType || '').toLowerCase().trim());
+}
+
+/**
+ * Flag per-diem clinicians running a part-time-shaped caseload.
+ *
+ * @param {Array<Object>} clinicians roster rows (full_name, employment_type, ...)
+ * @param {Map<string, Map<string, number>>} countsByStaffWeek
+ *        staffKey -> (weekStart -> visits delivered)
+ * @param {Array<string>} weekStarts ordered week-start keys defining the
+ *        window. Any week absent from a clinician's map counts as 0.
+ * @param {{threshold?: number, minConsecutive?: number}} opts
+ * @returns {Array<Object>} worst first
+ */
+export function flagPerDiemOveruse(clinicians, countsByStaffWeek, weekStarts, opts) {
+  const threshold = (opts && opts.threshold) || 10;
+  const minConsecutive = (opts && opts.minConsecutive) || 2;
+  const weeks = weekStarts || [];
+  const counts = countsByStaffWeek || new Map();
+  const flags = [];
+
+  for (const c of clinicians || []) {
+    if (!c || !c.full_name || !isPerDiem(c.employment_type)) continue;
+    const byWeek = counts.get(staffKey(c.full_name)) || new Map();
+
+    // Longest run of consecutive over-threshold weeks, and the run itself.
+    let best = [];
+    let run = [];
+    for (const w of weeks) {
+      const n = byWeek.get(w) || 0;
+      if (n > threshold) {
+        run.push({ weekStart: w, count: n });
+        if (run.length > best.length) best = run.slice();
+      } else {
+        run = [];
+      }
+    }
+    if (best.length < minConsecutive) continue;
+
+    const total = best.reduce((s, x) => s + x.count, 0);
+    flags.push({
+      name: c.full_name,
+      region: c.region,
+      discipline: c.discipline,
+      consecutiveWeeks: best.length,
+      streak: best,
+      peak: best.reduce((m, x) => Math.max(m, x.count), 0),
+      average: Math.round((total / best.length) * 10) / 10,
+      // 15 is the part-time target; anyone sustaining above it is really
+      // running full-time hours on a per-diem contract.
+      suggestedType: total / best.length > 15 ? 'full-time' : 'part-time',
+    });
+  }
+
+  return flags.sort((a, b) =>
+    b.consecutiveWeeks - a.consecutiveWeeks || b.average - a.average);
+}
+
 /**
  * Reconcile the active roster against who actually appears on the
  * schedule, and derive a capacity figure that can be defended.
@@ -214,9 +297,19 @@ export function reconcileRoster(clinicians, deliveredBy) {
 
   const active = (clinicians || []).filter(c => c && c.full_name);
   const rosterOnly = [];
+  const underTarget = [];
   let claimedCapacity = 0;
   let workingCapacity = 0;
   let deliveredTotal = 0;
+  // Assignment gap: how many more visits would have to be BOOKED to bring
+  // every contracted clinician up to their weekly target. Only full-time
+  // and part-time count — per diem carries a target of 10 that is an
+  // ALERT THRESHOLD, not a commitment (see the set_visit_target trigger),
+  // so treating it as capacity-to-fill would invent an obligation neither
+  // side agreed to and inflate the gap by ~250 visits/wk.
+  let committedCapacity = 0;
+  let committedDelivered = 0;
+  let assignmentGap = 0;
 
   for (const c of active) {
     const rk = staffKey(c.full_name);
@@ -229,7 +322,20 @@ export function reconcileRoster(clinicians, deliveredBy) {
     } else {
       rosterOnly.push({ name: c.full_name, target: t, discipline: c.discipline, region: c.region });
     }
+    if (!isPerDiem(c.employment_type)) {
+      committedCapacity += t;
+      committedDelivered += got;
+      const short = Math.max(0, t - got);
+      if (short > 0) {
+        assignmentGap += short;
+        underTarget.push({
+          name: c.full_name, region: c.region, discipline: c.discipline,
+          employmentType: c.employment_type, target: t, delivered: got, short,
+        });
+      }
+    }
   }
+  underTarget.sort((a, b) => b.short - a.short);
 
   const unrosteredVisits = scheduleOnly.reduce((s, r) => s + r.visits, 0);
   const phantomCapacity = claimedCapacity - workingCapacity;
@@ -243,6 +349,15 @@ export function reconcileRoster(clinicians, deliveredBy) {
     utilizationPct: workingCapacity > 0
       ? Math.round((deliveredTotal / workingCapacity) * 100)
       : null,
+    // Contracted (ft + pt) capacity and the gap to it. This is the
+    // number to schedule against — per diem is surge on top.
+    committedCapacity,
+    committedDelivered,
+    assignmentGap,
+    committedUtilizationPct: committedCapacity > 0
+      ? Math.round((committedDelivered / committedCapacity) * 100)
+      : null,
+    underTarget,            // contracted clinicians below target, worst first
     rosterOnly,             // on the roster, delivered nothing
     scheduleOnly,           // delivered work, not on the roster
     heuristicMatches,       // matched by guess — promote into `aliases`

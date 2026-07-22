@@ -179,7 +179,8 @@ eq('missing census row warns',
 // Every assertion below pins a defect measured in production on
 // 2026-07-22 against the week of 2026-07-12. See the module header.
 // =====================================================================
-const {staffKey,flipName,visitStaffName,buildStaffIndex,matchStaff,reconcileRoster}=await import(R+'staffMatch.js');
+const {staffKey,flipName,visitStaffName,buildStaffIndex,matchStaff,reconcileRoster,
+       isPerDiem,flagPerDiemOveruse}=await import(R+'staffMatch.js');
 
 // --- Name format: the join that silently matched zero rows
 eq('flipName converts Pariox "Last, First"', flipName('Taylor, Natalie'), 'Natalie Taylor');
@@ -262,8 +263,89 @@ eq('idle roster rows are surfaced with their target',
   REC.rosterOnly, [{name:'Lia Davis', target:25, discipline:undefined, region:undefined}]);
 // 38/45, NOT 38/70 — utilization measured against capacity that exists.
 eq('utilization uses working capacity as the denominator', REC.utilizationPct, 84);
+
+// --- Assignment gap: visits to BOOK to bring contracted staff to target.
+// Per diem is excluded. Its target of 10 is an alert threshold, not a
+// commitment (see the set_visit_target trigger), so counting it as
+// capacity-to-fill would invent an obligation and inflate the gap.
+const GAPROSTER=[
+  {full_name:'Full Timer',  employment_type:'ft',  weekly_visit_target:25},
+  {full_name:'Part Timer',  employment_type:'pt',  weekly_visit_target:15},
+  {full_name:'Per Diemer',  employment_type:'prn', weekly_visit_target:10},
+];
+const GAP=reconcileRoster(GAPROSTER,new Map([
+  ['full timer',18],   // 7 short
+  ['part timer',9],    // 6 short
+  ['per diemer',2],    // 8 "short" — must NOT count
+]));
+eq('committed capacity excludes per diem', GAP.committedCapacity, 40);
+eq('assignment gap excludes per diem', GAP.assignmentGap, 13);
+eq('committed utilization is measured on contracted staff only',
+  GAP.committedUtilizationPct, 68);
+eq('under-target list excludes per diem and sorts worst first',
+  GAP.underTarget.map(u=>[u.name,u.short]), [['Full Timer',7],['Part Timer',6]]);
+// A clinician at or over target contributes nothing to the gap.
+eq('meeting target contributes no gap',
+  reconcileRoster([{full_name:'At Target',employment_type:'ft',weekly_visit_target:25}],
+    new Map([['at target',25]])).assignmentGap, 0);
+eq('exceeding target never produces a negative gap',
+  reconcileRoster([{full_name:'Over',employment_type:'ft',weekly_visit_target:25}],
+    new Map([['over',30]])).assignmentGap, 0);
 eq('empty roster does not divide by zero', reconcileRoster([],new Map()).utilizationPct, null);
 eq('null inputs are safe', reconcileRoster(null,null).claimedCapacity, 0);
+
+// --- Per-diem overuse: a standing caseload without a contract
+// Rule per Liam 2026-07-22: more than 10 visits in each of 2+ CONSECUTIVE
+// weeks. The real production case is Tiffany Harrison, 12/17/17/17/14/19
+// across six straight weeks on a per-diem contract.
+const W=['2026-06-07','2026-06-14','2026-06-21','2026-06-28','2026-07-05','2026-07-12'];
+const PDROSTER=[
+  {full_name:'Tiffany Harrison',  employment_type:'prn', region:'G', discipline:'PTA'},
+  {full_name:'Amilkar Gonzalez',  employment_type:'prn', region:'A', discipline:'PTA'},
+  {full_name:'Brian Espinola',    employment_type:'ft',  region:'A', discipline:'PTA'},
+];
+const PDCOUNTS=new Map([
+  ['tiffany harrison', new Map([['2026-06-07',12],['2026-06-14',17],['2026-06-21',17],
+                                ['2026-06-28',17],['2026-07-05',14],['2026-07-12',19]])],
+  // 11 once, never twice running — cover, not a caseload.
+  ['amilkar gonzalez', new Map([['2026-06-07',11],['2026-06-14',10],['2026-06-21',9],
+                                ['2026-06-28',6],['2026-07-05',5],['2026-07-12',5]])],
+  // Full-time, way over the threshold, must never be flagged.
+  ['brian espinola',   new Map([['2026-06-07',24],['2026-06-14',25],['2026-06-21',23],
+                                ['2026-06-28',25],['2026-07-05',24],['2026-07-12',25]])],
+]);
+const PDFLAGS=flagPerDiemOveruse(PDROSTER,PDCOUNTS,W);
+eq('flags the sustained per-diem caseload', PDFLAGS.map(f=>f.name), ['Tiffany Harrison']);
+eq('counts the full consecutive run', PDFLAGS[0].consecutiveWeeks, 6);
+eq('reports the peak week', PDFLAGS[0].peak, 19);
+eq('reports the average across the streak', PDFLAGS[0].average, 16);
+eq('a sustained load above part-time suggests full-time', PDFLAGS[0].suggestedType, 'full-time');
+eq('one busy week is cover, not a caseload',
+  flagPerDiemOveruse([PDROSTER[1]],PDCOUNTS,W).length, 0);
+eq('full-time staff are never flagged however busy',
+  flagPerDiemOveruse([PDROSTER[2]],PDCOUNTS,W).length, 0);
+
+// A quiet week is a ZERO and must BREAK the streak, not be bridged.
+eq('a gap week breaks the streak',
+  flagPerDiemOveruse(
+    [{full_name:'Gap Person', employment_type:'prn'}],
+    new Map([['gap person', new Map([['2026-06-07',15],['2026-06-21',15]])]]),
+    W).length, 0);
+eq('two consecutive over-threshold weeks is enough',
+  flagPerDiemOveruse(
+    [{full_name:'Two Weeks', employment_type:'prn'}],
+    new Map([['two weeks', new Map([['2026-06-14',12],['2026-06-21',13]])]]),
+    W)[0].consecutiveWeeks, 2);
+// Exactly at the threshold is NOT over it — 10 is the allowed level.
+eq('exactly 10 is not over the threshold',
+  flagPerDiemOveruse(
+    [{full_name:'Exactly Ten', employment_type:'prn'}],
+    new Map([['exactly ten', new Map([['2026-06-14',10],['2026-06-21',10]])]]),
+    W).length, 0);
+eq('per-diem employment types are recognized',
+  [isPerDiem('prn'), isPerDiem('Per Diem'), isPerDiem('1099 Per Diem'), isPerDiem('ft')],
+  [true,true,true,false]);
+eq('no roster does not throw', flagPerDiemOveruse(null,null,null), []);
 
 // =====================================================================
 // frequencyMath.js — inferred_frequency parsing

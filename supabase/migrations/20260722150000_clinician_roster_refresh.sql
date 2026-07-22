@@ -1,0 +1,28 @@
+-- Clinician roster refresh from Liam's HR list, 2026-07-22.
+-- Applied to production via MCP in three parts; checked in for git history.
+--
+-- Part 1: snapshot + new columns  (clinician_roster_refresh_2026_07_22)
+-- Part 2: upsert the 68 clinical staff (clinician_roster_upsert_2026_07_22)
+-- Part 3: inserts, departures, review flags (clinician_roster_inserts_and_review_2026_07_22)
+--
+-- Rollback: _clinicians_snapshot_2026_07_22 holds the full pre-change table.
+--
+-- DOB IS DELIBERATELY NOT STORED. RLS on `clinicians` is a single
+-- "any active coordinator has full access" policy, so a DOB column would
+-- expose every employee's birth date to ~40 staff, and nothing on the
+-- dashboard consumes it. Left in HR.
+--
+-- TARGETS ARE SET BY TRIGGER, NOT BY THIS MIGRATION. `set_visit_target`
+-- is a BEFORE trigger that forces ft=25 / pt=15 / prn=10 regardless of
+-- what an UPDATE supplies. An attempt to write per-diem 12 here was
+-- silently overridden and only caught by verifying afterwards. The
+-- trigger's own comment documents prn=10 as "alert threshold, not hard
+-- limit", which is exactly the semantics Liam described, so it stands.
+-- Any future change to targets must edit the trigger, not the rows.
+--
+-- HELD BACK ON PURPOSE: Ivon Delgado, Mical Orrell, Randi Bonner and
+-- Isaac Aguilar are absent from the HR roster but still delivering
+-- visits (Ivon has visits booked into August). They are left ACTIVE with
+-- an employment_review_note rather than deactivated, because
+-- deactivating them would orphan scheduled work and silently drop
+-- delivered visits out of every utilization figure.
