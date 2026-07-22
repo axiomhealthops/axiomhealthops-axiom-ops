@@ -18,7 +18,7 @@ import {
 // because Pariox sends full-week snapshots and the per-(patient,date) key can
 // never notice a dropped slot. See src/lib/visitDedup.js.
 import { dedupVisitsByAuthoritativeBatch } from '../../lib/visitDedup';
-import { staffKey, visitStaffName, reconcileRoster, flagPerDiemOveruse } from '../../lib/staffMatch';
+import { staffKey, visitStaffName, reconcileRoster, flagOverCap } from '../../lib/staffMatch';
 import { isCompleted } from '../../lib/visitMath';
 import { getWeekRange, toDateStr, formatShortDate } from '../../lib/dateUtils';
 import { bucketCensus, normalizeStatus } from '../../lib/censusStatus';
@@ -982,8 +982,8 @@ export default function DirectorDashboard({ onNavigate }) {
     return () => { cancelled = true; };
   }, [weekOffset, stateFilter]);
 
-  const perDiemFlags = useMemo(
-    () => flagPerDiemOveruse(clinicians, perDiemWeeks.counts, perDiemWeeks.weeks),
+  const overCapFlags = useMemo(
+    () => flagOverCap(clinicians, perDiemWeeks.counts, perDiemWeeks.weeks),
     [clinicians, perDiemWeeks]
   );
 
@@ -1166,14 +1166,31 @@ export default function DirectorDashboard({ onNavigate }) {
       });
     }
 
-    // Per-diem overuse. A contract decision only Liam can make, so it is
-    // pushed here rather than left in a panel for someone to find.
-    perDiemFlags.forEach(f => {
+    // Sustained volume above a ceiling. Three different problems wearing
+    // the same shape, so the wording and the recommended action follow
+    // the reason rather than assuming everyone is a per-diem contractor.
+    // All three are Liam's decision, which is why they are pushed here
+    // instead of left in a panel for someone to stumble on.
+    overCapFlags.forEach(f => {
+      const wk = `${f.consecutiveWeeks} straight weeks`;
+      const copy = f.reason === 'capped-role'
+        ? {
+            title: `${f.name} is over the ${f.cap}-visit cap on their role -- ${f.average}/wk for ${wk}`,
+            detail: `${f.jobDescription || 'Capped role'} ${'·'} peak ${f.peak} ${'·'} should only treat when necessary`,
+          }
+        : f.reason === 'agency'
+        ? {
+            title: `${f.name} is agency staff averaging ${f.average} visits/wk for ${wk}`,
+            detail: `Peak ${f.peak} ${'·'} Rgn ${f.region || '--'} ${'·'} a standing caseload billed through an agency ${'·'} renegotiate or hire direct`,
+          }
+        : {
+            title: `${f.name} is per diem but averaging ${f.average} visits/wk for ${wk}`,
+            detail: `Peak ${f.peak} ${'·'} Rgn ${f.region || '--'} ${'·'} a standing caseload on a per-diem contract ${'·'} move to ${f.suggestedType}`,
+          };
       items.push({
         severity: f.consecutiveWeeks >= 4 ? 'high' : 'medium',
         score: 70 + Math.min(20, f.consecutiveWeeks * 3),
-        title: `${f.name} is per diem but averaging ${f.average} visits/wk for ${f.consecutiveWeeks} straight weeks`,
-        detail: `Peak ${f.peak} ${'·'} Rgn ${f.region || '--'} ${'·'} a standing caseload on a per-diem contract ${'·'} move to ${f.suggestedType}`,
+        ...copy,
         actionLabel: 'Staff directory',
         target: 'staff',
       });

@@ -230,29 +230,56 @@ export function isContracted(clinician) {
 }
 
 /**
- * Flag per-diem clinicians running a part-time-shaped caseload.
+ * The ceiling above which a clinician's volume needs Liam's attention,
+ * or null when they have none.
  *
- * @param {Array<Object>} clinicians roster rows (full_name, employment_type, ...)
+ * An explicit `weekly_visit_cap` always wins — it is a deliberate
+ * management decision (the Director of Clinical Ops capped at 4).
+ * Otherwise per-diem staff carry the default 10 alert threshold. Anyone
+ * else has no ceiling: a contracted clinician exceeding target is doing
+ * exactly what we want.
+ */
+export function capFor(clinician, perDiemDefault) {
+  if (!clinician) return null;
+  if (clinician.weekly_visit_cap != null) return clinician.weekly_visit_cap;
+  if (isReserve(clinician)) return null;   // no obligation AND no stated ceiling
+  if (isPerDiem(clinician.employment_type)) {
+    return perDiemDefault == null ? 10 : perDiemDefault;
+  }
+  return null;
+}
+
+/**
+ * Flag clinicians running sustained volume above their ceiling.
+ *
+ * Two shapes of the same problem, distinguished by `reason` so the
+ * recommended action is right:
+ *   'per-diem'      a direct per-diem contractor carrying a standing
+ *                   caseload -> move to a part-time contract
+ *   'agency'        same volume, but the contract is the agency's, not
+ *                   ours -> renegotiate or hire directly
+ *   'capped-role'   a role that should rarely treat has exceeded its
+ *                   stated ceiling -> awareness, not a contract change
+ *
+ * @param {Array<Object>} clinicians roster rows
  * @param {Map<string, Map<string, number>>} countsByStaffWeek
  *        staffKey -> (weekStart -> visits delivered)
- * @param {Array<string>} weekStarts ordered week-start keys defining the
- *        window. Any week absent from a clinician's map counts as 0.
- * @param {{threshold?: number, minConsecutive?: number}} opts
+ * @param {Array<string>} weekStarts ordered window. A week absent from a
+ *        clinician's map counts as 0 and breaks their streak.
+ * @param {{perDiemDefault?: number, minConsecutive?: number}} opts
  * @returns {Array<Object>} worst first
  */
-export function flagPerDiemOveruse(clinicians, countsByStaffWeek, weekStarts, opts) {
-  const threshold = (opts && opts.threshold) || 10;
+export function flagOverCap(clinicians, countsByStaffWeek, weekStarts, opts) {
   const minConsecutive = (opts && opts.minConsecutive) || 2;
+  const perDiemDefault = opts && opts.perDiemDefault;
   const weeks = weekStarts || [];
   const counts = countsByStaffWeek || new Map();
   const flags = [];
 
   for (const c of clinicians || []) {
-    if (!c || !c.full_name || !isPerDiem(c.employment_type)) continue;
-    // A reserve clinician covering shifts is doing exactly what reserve
-    // is for. Flagging them as a per-diem contract problem would be
-    // noise — they are salaried and have no per-diem contract to fix.
-    if (isReserve(c)) continue;
+    if (!c || !c.full_name) continue;
+    const threshold = capFor(c, perDiemDefault);
+    if (threshold == null) continue;
     const byWeek = counts.get(staffKey(c.full_name)) || new Map();
 
     // Longest run of consecutive over-threshold weeks, and the run itself.
@@ -270,17 +297,27 @@ export function flagPerDiemOveruse(clinicians, countsByStaffWeek, weekStarts, op
     if (best.length < minConsecutive) continue;
 
     const total = best.reduce((s, x) => s + x.count, 0);
+    const average = Math.round((total / best.length) * 10) / 10;
+    const reason = c.weekly_visit_cap != null ? 'capped-role'
+      : c.is_agency ? 'agency'
+      : 'per-diem';
     flags.push({
       name: c.full_name,
       region: c.region,
       discipline: c.discipline,
+      jobDescription: c.job_description,
+      reason,
+      cap: threshold,
       consecutiveWeeks: best.length,
       streak: best,
       peak: best.reduce((m, x) => Math.max(m, x.count), 0),
-      average: Math.round((total / best.length) * 10) / 10,
-      // 15 is the part-time target; anyone sustaining above it is really
-      // running full-time hours on a per-diem contract.
-      suggestedType: total / best.length > 15 ? 'full-time' : 'part-time',
+      average,
+      // Only a direct per-diem contractor can be moved onto one of our
+      // contracts. An agency worker's contract is not ours to change, and
+      // a capped role is a management decision, not a contract shape.
+      suggestedType: reason === 'per-diem'
+        ? (average > 15 ? 'full-time' : 'part-time')
+        : null,
     });
   }
 

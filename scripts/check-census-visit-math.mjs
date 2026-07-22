@@ -180,7 +180,7 @@ eq('missing census row warns',
 // 2026-07-22 against the week of 2026-07-12. See the module header.
 // =====================================================================
 const {staffKey,flipName,visitStaffName,buildStaffIndex,matchStaff,reconcileRoster,isContracted,isReserve,
-       isPerDiem,flagPerDiemOveruse}=await import(R+'staffMatch.js');
+       isPerDiem,flagOverCap,capFor}=await import(R+'staffMatch.js');
 
 // --- Name format: the join that silently matched zero rows
 eq('flipName converts Pariox "Last, First"', flipName('Taylor, Natalie'), 'Natalie Taylor');
@@ -338,7 +338,7 @@ eq('isContracted excludes both reserve and per diem',
 // A salaried ADOC covering shifts is reserve working as intended, not a
 // per-diem contract problem — they have no per-diem contract to fix.
 eq('reserve is never flagged for per-diem overuse',
-  flagPerDiemOveruse(
+  flagOverCap(
     [{full_name:'Reserve Cover', employment_type:'prn', is_treating:false}],
     new Map([['reserve cover', new Map([['2026-06-14',18],['2026-06-21',18]])]]),
     ['2026-06-14','2026-06-21']).length, 0);
@@ -346,10 +346,51 @@ eq('reserve is never flagged for per-diem overuse',
 // so the assertion above is proving the reserve exemption and not just a
 // broken fixture.
 eq('the same pattern on a real per-diem contract does fire',
-  flagPerDiemOveruse(
+  flagOverCap(
     [{full_name:'Real Per Diem', employment_type:'prn'}],
     new Map([['real per diem', new Map([['2026-06-14',18],['2026-06-21',18]])]]),
     ['2026-06-14','2026-06-21']).length, 1);
+
+// --- Ceilings: three problems in the same shape, distinguished so the
+// recommended action is right (Liam 2026-07-22).
+const CAPW=['2026-06-14','2026-06-21'];
+const CAPCOUNTS=new Map([
+  ['randi bonner',  new Map([['2026-06-14',6],['2026-06-21',7]])],
+  ['ivon delgado',  new Map([['2026-06-14',14],['2026-06-21',15]])],
+  ['tiffany harrison', new Map([['2026-06-14',17],['2026-06-21',17]])],
+  ['hollie fincher', new Map([['2026-06-14',30],['2026-06-21',31]])],
+]);
+// An explicit cap beats every default, and applies even to a
+// non-treating role — that is the whole point of capping one.
+eq('an explicit cap wins over the reserve exemption',
+  capFor({weekly_visit_cap:4, is_treating:false}), 4);
+eq('reserve with no stated cap has no ceiling',
+  capFor({is_treating:false, employment_type:'ft'}), null);
+eq('per diem defaults to the 10 alert threshold',
+  capFor({employment_type:'prn'}), 10);
+eq('a contracted clinician has no ceiling',
+  capFor({employment_type:'ft', is_treating:true}), null);
+
+const CAPFLAGS=flagOverCap([
+  {full_name:'Randi Bonner', weekly_visit_cap:4, is_treating:false,
+   employment_type:'ft', job_description:'Director of Clinical Operations'},
+  {full_name:'Ivon Delgado', employment_type:'prn', is_agency:true, is_treating:true},
+  {full_name:'Tiffany Harrison', employment_type:'prn', is_treating:true},
+  // Contracted and far over target: doing exactly what we want.
+  {full_name:'Hollie Fincher', employment_type:'ft', is_treating:true},
+], CAPCOUNTS, CAPW);
+eq('a capped role over its ceiling is flagged',
+  CAPFLAGS.find(f=>f.name==='Randi Bonner').reason, 'capped-role');
+eq('agency staff are flagged but not as a per-diem contract',
+  CAPFLAGS.find(f=>f.name==='Ivon Delgado').reason, 'agency');
+eq('agency gets no contract-conversion suggestion',
+  CAPFLAGS.find(f=>f.name==='Ivon Delgado').suggestedType, null);
+eq('a direct per-diem contractor still gets one',
+  CAPFLAGS.find(f=>f.name==='Tiffany Harrison').suggestedType, 'full-time');
+eq('a contracted clinician over target is never flagged',
+  CAPFLAGS.some(f=>f.name==='Hollie Fincher'), false);
+eq('the cap that was breached is reported',
+  CAPFLAGS.find(f=>f.name==='Randi Bonner').cap, 4);
 eq('empty roster does not divide by zero', reconcileRoster([],new Map()).utilizationPct, null);
 eq('null inputs are safe', reconcileRoster(null,null).claimedCapacity, 0);
 
@@ -373,38 +414,38 @@ const PDCOUNTS=new Map([
   ['brian espinola',   new Map([['2026-06-07',24],['2026-06-14',25],['2026-06-21',23],
                                 ['2026-06-28',25],['2026-07-05',24],['2026-07-12',25]])],
 ]);
-const PDFLAGS=flagPerDiemOveruse(PDROSTER,PDCOUNTS,W);
+const PDFLAGS=flagOverCap(PDROSTER,PDCOUNTS,W);
 eq('flags the sustained per-diem caseload', PDFLAGS.map(f=>f.name), ['Tiffany Harrison']);
 eq('counts the full consecutive run', PDFLAGS[0].consecutiveWeeks, 6);
 eq('reports the peak week', PDFLAGS[0].peak, 19);
 eq('reports the average across the streak', PDFLAGS[0].average, 16);
 eq('a sustained load above part-time suggests full-time', PDFLAGS[0].suggestedType, 'full-time');
 eq('one busy week is cover, not a caseload',
-  flagPerDiemOveruse([PDROSTER[1]],PDCOUNTS,W).length, 0);
+  flagOverCap([PDROSTER[1]],PDCOUNTS,W).length, 0);
 eq('full-time staff are never flagged however busy',
-  flagPerDiemOveruse([PDROSTER[2]],PDCOUNTS,W).length, 0);
+  flagOverCap([PDROSTER[2]],PDCOUNTS,W).length, 0);
 
 // A quiet week is a ZERO and must BREAK the streak, not be bridged.
 eq('a gap week breaks the streak',
-  flagPerDiemOveruse(
+  flagOverCap(
     [{full_name:'Gap Person', employment_type:'prn'}],
     new Map([['gap person', new Map([['2026-06-07',15],['2026-06-21',15]])]]),
     W).length, 0);
 eq('two consecutive over-threshold weeks is enough',
-  flagPerDiemOveruse(
+  flagOverCap(
     [{full_name:'Two Weeks', employment_type:'prn'}],
     new Map([['two weeks', new Map([['2026-06-14',12],['2026-06-21',13]])]]),
     W)[0].consecutiveWeeks, 2);
 // Exactly at the threshold is NOT over it — 10 is the allowed level.
 eq('exactly 10 is not over the threshold',
-  flagPerDiemOveruse(
+  flagOverCap(
     [{full_name:'Exactly Ten', employment_type:'prn'}],
     new Map([['exactly ten', new Map([['2026-06-14',10],['2026-06-21',10]])]]),
     W).length, 0);
 eq('per-diem employment types are recognized',
   [isPerDiem('prn'), isPerDiem('Per Diem'), isPerDiem('1099 Per Diem'), isPerDiem('ft')],
   [true,true,true,false]);
-eq('no roster does not throw', flagPerDiemOveruse(null,null,null), []);
+eq('no roster does not throw', flagOverCap(null,null,null), []);
 
 // =====================================================================
 // frequencyMath.js — inferred_frequency parsing

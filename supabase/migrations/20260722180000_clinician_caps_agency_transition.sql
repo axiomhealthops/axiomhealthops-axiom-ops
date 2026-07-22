@@ -1,0 +1,23 @@
+-- Caps, agency staff and transition targets, per Liam 2026-07-22.
+-- Applied to production via MCP
+-- (clinician_caps_agency_and_transition_targets_2026_07_22); checked in
+-- for git history.
+--
+-- 1. A CAP IS NOT A TARGET. weekly_visit_cap is a CEILING that raises an
+--    alert when exceeded. weekly_visit_target is an OBLIGATION and drives
+--    the assignment gap. Randi Bonner (Director of Clinical Operations)
+--    needed "no caseload, but never more than 4/wk" — expressing that as
+--    a target of 4 would have told scheduling to push 4 visits at her,
+--    the exact opposite. She carries target 0 + cap 4.
+--
+-- 2. AGENCY IS NOT PER DIEM. Ivon Delgado and Mical Orrell are 1099
+--    through a third-party agency. Carried as prn for payroll, flagged
+--    is_agency so the over-cap alert stops recommending a part-time
+--    contract conversion — that contract is the agency's, not ours. This
+--    also explains why they were missing from the HR roster: they are
+--    not direct employees.
+--
+-- 3. TRANSITION TARGETS. Samantha Faliks, Uma Jacobs and Kaylee Ramsey
+--    move to non-treating roles in future; caseload 25 -> 12 in the
+--    interim via weekly_visit_target_override. Hollie Fincher stays at a
+--    full 25 and is deliberately untouched.
