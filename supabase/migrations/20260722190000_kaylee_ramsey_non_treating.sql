@@ -1,0 +1,19 @@
+-- Kaylee Ramsey to the non-treating reserve tier, per Liam 2026-07-22.
+-- Applied to production via MCP (kaylee_ramsey_non_treating_2026_07_22);
+-- checked in for git history.
+--
+-- Joins Lia Davis and Earl Dimaano: active, licensed, schedulable, but
+-- only once every contracted clinician is at target. Target 0.
+--
+-- The 12-visit transition override set earlier the same day is CLEARED
+-- rather than left dormant. is_treating = false wins over it regardless,
+-- so keeping it would change nothing today but would silently resurrect
+-- a 12 if anyone flipped her back to treating. The review note carries
+-- the history instead.
+--
+-- No weekly_visit_cap, matching Lia and Earl. Randi Bonner remains the
+-- only capped role because hers was an explicit ceiling instruction
+-- rather than a plain non-treating move.
+--
+-- Evidence: 3 completed visits between 2026-06-01 and 2026-07-18. This
+-- recognises a transition that had already effectively happened.
