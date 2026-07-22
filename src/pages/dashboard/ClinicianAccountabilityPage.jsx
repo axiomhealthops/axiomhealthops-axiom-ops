@@ -29,7 +29,12 @@ function pctBg(pct) {
   return '#FEF2F2';
 }
 
-function CliniciansTab({ clinicians, visits, census }) {
+// 2026-07-22: `risk` was referenced in the overdue-patient block below but
+// only ever declared in the page component (const risk = useRiskMap()), so
+// rendering a clinician with overdue patients threw ReferenceError. Passed
+// in as a prop rather than calling useRiskMap() again here — one fetch per
+// page, not one per tab render.
+function CliniciansTab({ clinicians, visits, census, risk }) {
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [filterDiscipline, setFilterDiscipline] = useState('ALL');
   const [sortField, setSortField] = useState('utilization');
@@ -308,7 +313,7 @@ function CliniciansTab({ clinicians, visits, census }) {
   );
 }
 
-function InactivePatientsTab({ census, clinicians }) {
+function InactivePatientsTab({ census, clinicians, risk }) {
   const [filterRegion, setFilterRegion] = useState('ALL');
   const [filterClinician, setFilterClinician] = useState('ALL');
   const [search, setSearch] = useState('');
@@ -502,8 +507,8 @@ export default function ClinicianAccountabilityPage() {
         ))}
       </div>
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {activeTab === 'clinicians' && <CliniciansTab clinicians={clinicians} visits={visits} census={census} />}
-        {activeTab === 'inactive' && <InactivePatientsTab census={census} clinicians={clinicians} />}
+        {activeTab === 'clinicians' && <CliniciansTab clinicians={clinicians} visits={visits} census={census} risk={risk} />}
+        {activeTab === 'inactive' && <InactivePatientsTab census={census} clinicians={clinicians} risk={risk} />}
       </div>
     </div>
   );

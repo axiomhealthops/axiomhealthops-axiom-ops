@@ -41,12 +41,25 @@
 //
 // MATCHING RULES
 // --------------
-// Exact match on the canonical key first. An alias (surname +
-// first-initial) match is accepted ONLY when it is unambiguous on BOTH
-// sides -- exactly one roster name and one schedule name share that key.
-// "Abi Balogun" -> "Abiola Balogun" is safe; two different J. Smiths are
-// left unmatched and surfaced, because silently merging two clinicians'
-// visit counts is a worse failure than reporting an unmatched name.
+// Three tiers, most authoritative first:
+//
+//   1. EXACT on `clinicians.full_name`.
+//   2. MAINTAINED ALIAS -- exact match against an entry in the
+//      `clinicians.aliases` array. This column already exists and is
+//      hand-maintained; ClinicianAccountabilityPage has used it since
+//      May. It is the only tier that can catch drift a heuristic never
+//      will: "Marlene Ortega" <- "Marlene Olea" and "Dawn Felix-Dawn" <-
+//      "Dawn Felix Wall" are different surnames, and "Edna Mccall" <-
+//      "Edna PTA McCall" has a discipline embedded in the name.
+//   3. HEURISTIC (surname + first initial), accepted ONLY when
+//      unambiguous on BOTH sides -- exactly one roster name and one
+//      schedule name share that key. Two different J. Smiths are left
+//      unmatched and surfaced, because silently merging two clinicians'
+//      visit counts is a worse failure than reporting an unmatched name.
+//
+// A tier-3 match is reported back as `heuristicMatches` so the pairing
+// can be promoted into `aliases` and stop being a guess. A tier-2 match
+// is clean and is not reported as an exception.
 // =====================================================================
 
 /**
@@ -108,35 +121,54 @@ function aliasKey(name) {
  */
 export function buildStaffIndex(clinicians) {
   const byKey = new Map();
+  const byMaintainedAlias = new Map();
   const aliasCounts = new Map();
   const byAlias = new Map();
   for (const c of clinicians || []) {
     if (!c || !c.full_name) continue;
     byKey.set(staffKey(c.full_name), c);
-    const a = aliasKey(c.full_name);
-    if (!a) continue;
-    aliasCounts.set(a, (aliasCounts.get(a) || 0) + 1);
-    byAlias.set(a, c);
+    // Tier 2: the hand-maintained aliases column. Indexed separately from
+    // full_name so a maintained pairing can never be shadowed by, or
+    // silently overwrite, a real clinician's own name.
+    for (const a of c.aliases || []) {
+      const ak = staffKey(a);
+      if (ak && !byKey.has(ak)) byMaintainedAlias.set(ak, c);
+    }
+    // Tier 3: heuristic key, built from full_name AND every alias, so a
+    // roster row is reachable by the surname of either spelling.
+    for (const n of [c.full_name].concat(c.aliases || [])) {
+      const a = aliasKey(n);
+      if (!a) continue;
+      if (byAlias.get(a) === c) continue;   // same clinician, not a collision
+      aliasCounts.set(a, (aliasCounts.get(a) || 0) + 1);
+      byAlias.set(a, c);
+    }
   }
   // An alias shared by two roster names can never be resolved safely.
   const ambiguousAliases = new Set();
   for (const [a, n] of aliasCounts) if (n > 1) ambiguousAliases.add(a);
-  return { byKey, byAlias, ambiguousAliases };
+  return { byKey, byMaintainedAlias, byAlias, ambiguousAliases };
 }
 
 /**
  * Resolve a schedule-side name to a roster clinician.
  *
- * @returns {{clinician: Object|null, via: 'exact'|'alias'|null}}
+ * @returns {{clinician: Object|null, via: 'exact'|'alias'|'heuristic'|null}}
  */
 export function matchStaff(index, scheduleName) {
   if (!index || !scheduleName) return { clinician: null, via: null };
-  const exact = index.byKey.get(staffKey(scheduleName));
+  const k = staffKey(scheduleName);
+
+  const exact = index.byKey.get(k);
   if (exact) return { clinician: exact, via: 'exact' };
+
+  const maintained = index.byMaintainedAlias.get(k);
+  if (maintained) return { clinician: maintained, via: 'alias' };
+
   const a = aliasKey(scheduleName);
   if (a && !index.ambiguousAliases.has(a)) {
     const c = index.byAlias.get(a);
-    if (c) return { clinician: c, via: 'alias' };
+    if (c) return { clinician: c, via: 'heuristic' };
   }
   return { clinician: null, via: null };
 }
@@ -162,7 +194,7 @@ export function reconcileRoster(clinicians, deliveredBy) {
   // Resolve every schedule-side name once, so each delivered count is
   // attributed to at most one roster row.
   const creditByRoster = new Map();   // staffKey(roster) -> count
-  const aliasMatches = [];            // surfaced so the roster can be corrected
+  const heuristicMatches = [];        // guessed — promote these into `aliases`
   const scheduleOnly = [];            // delivering work, not on the roster
 
   for (const [nameKey, count] of delivered) {
@@ -173,8 +205,10 @@ export function reconcileRoster(clinicians, deliveredBy) {
     }
     const rk = staffKey(clinician.full_name);
     creditByRoster.set(rk, (creditByRoster.get(rk) || 0) + count);
-    if (via === 'alias') {
-      aliasMatches.push({ scheduleName: nameKey, rosterName: clinician.full_name, visits: count });
+    // A maintained alias is a clean match and is deliberately NOT reported.
+    // Only guesses are surfaced, because only guesses need human action.
+    if (via === 'heuristic') {
+      heuristicMatches.push({ scheduleName: nameKey, rosterName: clinician.full_name, visits: count });
     }
   }
 
@@ -211,7 +245,7 @@ export function reconcileRoster(clinicians, deliveredBy) {
       : null,
     rosterOnly,             // on the roster, delivered nothing
     scheduleOnly,           // delivered work, not on the roster
-    aliasMatches,           // matched only by nickname — fix the roster
+    heuristicMatches,       // matched by guess — promote into `aliases`
     matchedCount: creditByRoster.size,
     activeCount: active.length,
   };

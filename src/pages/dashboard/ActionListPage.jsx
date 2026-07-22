@@ -156,6 +156,11 @@ function buildAutoActions(data) {
   }
 
   // ─── 7. Coordinator inactivity ───
+  // 2026-07-22: `now` was used here and at the 10am gate below but only ever
+  // declared in the page component's own scope further down the file. This
+  // line is unconditional at the top level of buildAutoActions, so the whole
+  // Action List page threw ReferenceError on every load.
+  const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
   const activeCoords = coordinators.filter(c => c.is_active && !['super_admin','admin','regional_manager','assoc_director'].includes(c.role));
   // Check activity log for today

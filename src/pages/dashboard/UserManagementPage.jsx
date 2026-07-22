@@ -22,7 +22,10 @@ function genPassword() {
   return Array.from({length:12}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
 }
  
-function UserCard({ user, profile, pages, overrides, authStatus, isSuperAdmin, isAdmin, onUpdate, onDeactivate, onToggleOverride, onSendReset, onSetPassword }) {
+// 2026-07-22: `onDelete` was passed by the parent and used by the Delete
+// button, but never destructured here — so the super-admin Delete button
+// rendered and then threw ReferenceError on click, doing nothing visible.
+function UserCard({ user, profile, pages, overrides, authStatus, isSuperAdmin, isAdmin, onUpdate, onDeactivate, onDelete, onToggleOverride, onSendReset, onSetPassword }) {
   // True when Supabase Auth still has banned_until set to a future date.
   // This can drift out of sync with coord.is_active when an old soft-delete
   // banned the auth account but the coord was re-activated later.

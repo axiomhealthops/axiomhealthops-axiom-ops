@@ -415,7 +415,7 @@ function RosterReconciliation({ roster, weekLabel }) {
   if (!roster || roster.activeCount === 0) return null;
   const clean = roster.phantomCapacity === 0
     && roster.scheduleOnly.length === 0
-    && roster.aliasMatches.length === 0;
+    && roster.heuristicMatches.length === 0;
 
   const Row = ({ label, items, color, render }) => items.length === 0 ? null : (
     <div style={{ marginTop: 10 }}>
@@ -467,8 +467,8 @@ function RosterReconciliation({ roster, weekLabel }) {
           {/* Ordered by how cheap the fix is. A nickname is a one-field
               edit that immediately corrects two numbers at once. */}
           <Row
-            label="Matched only by nickname -- fix the roster spelling"
-            items={roster.aliasMatches} color={WARN}
+            label="Matched by guess -- add to the clinician's aliases"
+            items={roster.heuristicMatches} color={WARN}
             render={a => `${a.rosterName} = "${a.scheduleName}" (${a.visits})`}
           />
           <Row
@@ -710,7 +710,11 @@ export default function DirectorDashboard({ onNavigate }) {
       fetchAllPages(applyRegion(supabase.from('visit_schedule_data').select('patient_name,staff_name,visit_date,status,event_type,region,uploaded_at').gte('visit_date', prevWk.startStr).lte('visit_date', prevWk.endStr))),
       fetchAllPages(applyRegion(supabase.from('auth_renewal_tasks').select('patient_name,region,priority,task_status,days_until_expiry,visits_remaining,expiry_date').not('task_status', 'in', '("approved","denied","closed")'))),
       fetchAllPages(applyRegion(supabase.from('on_hold_recovery').select('patient_name,region,hold_type,days_on_hold'))),
-      fetchAllPages(applyRegion(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active').eq('is_active', true))),
+      // `aliases` is required for roster reconciliation — it is the only
+      // tier that catches drift a surname heuristic cannot ("Marlene
+      // Ortega" <- "Marlene Olea"). Omitting it silently downgrades every
+      // maintained pairing back to a guess. See staffMatch.js.
+      fetchAllPages(applyRegion(supabase.from('clinicians').select('full_name,region,discipline,weekly_visit_target,is_active,aliases').eq('is_active', true))),
       fetchAllPages(applyCoords(supabase.from('coordinators').select('id,full_name,role,job_title,team,regions,is_active').eq('is_active', true))),
       fetchAllPages(applyRegion(supabase.from('census_status_log').select('patient_name,region,old_status,new_status,changed_at').gte('changed_at', thirtyDaysAgoIso))),
       fetchAllPages(supabase.from('coordinator_activity_log').select('coordinator_name,coordinator_role,action_type,created_at').gte('created_at', sevenDaysAgoIso)),

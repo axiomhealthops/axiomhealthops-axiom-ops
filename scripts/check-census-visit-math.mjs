@@ -196,16 +196,42 @@ eq('visitStaffName falls back to flipping the raw column',
 // --- Nickname drift: Abiola/Abi and Nicholas/Nick were counted as idle
 // clinicians AND as unrostered staff simultaneously.
 const ROSTER=[
-  {full_name:'Abiola Balogun', weekly_visit_target:25},
+  {full_name:'Abiola Balogun', weekly_visit_target:25, aliases:['Abi Balogun']},
   {full_name:'Andrea Schwab',  weekly_visit_target:20},
   {full_name:'Lia Davis',      weekly_visit_target:25},
 ];
 const IDX=buildStaffIndex(ROSTER);
 eq('exact match wins', matchStaff(IDX,'Andrea Schwab').via, 'exact');
-eq('nickname resolves to the roster name',
+eq('maintained alias resolves to the roster name',
   matchStaff(IDX,'Abi Balogun').clinician.full_name, 'Abiola Balogun');
-eq('nickname match is flagged as an alias', matchStaff(IDX,'Abi Balogun').via, 'alias');
+eq('maintained alias is a clean match, not a guess', matchStaff(IDX,'Abi Balogun').via, 'alias');
 eq('unknown name stays unmatched', matchStaff(IDX,'Nobody Here').clinician, null);
+
+// The maintained `aliases` column is the ONLY tier that catches drift a
+// surname heuristic cannot: different surname, or a discipline baked into
+// the name. All four of these are real rows in production.
+const REAL=buildStaffIndex([
+  {full_name:'Marlene Ortega',     weekly_visit_target:15, aliases:['Marlene Olea']},
+  {full_name:'Dawn Felix-Dawn',    weekly_visit_target:15, aliases:['Dawn Felix Wall']},
+  {full_name:'Edna Mccall',        weekly_visit_target:10, aliases:['Edna PTA McCall']},
+  {full_name:'Mary Devota Dubach', weekly_visit_target:10, aliases:['Devota Dubach']},
+]);
+eq('alias with a different surname resolves',
+  matchStaff(REAL,'Marlene Olea').clinician.full_name, 'Marlene Ortega');
+eq('alias with a changed surname resolves',
+  matchStaff(REAL,'Dawn Felix Wall').clinician.full_name, 'Dawn Felix-Dawn');
+eq('alias with an embedded discipline resolves',
+  matchStaff(REAL,'Edna PTA McCall').clinician.full_name, 'Edna Mccall');
+eq('alias with a dropped first name resolves',
+  matchStaff(REAL,'Devota Dubach').clinician.full_name, 'Mary Devota Dubach');
+
+// A real clinician's own name must never be shadowed by someone's alias.
+const SHADOW=buildStaffIndex([
+  {full_name:'Chris Young', weekly_visit_target:10},
+  {full_name:'Christopher Elder', weekly_visit_target:10, aliases:['Chris Young']},
+]);
+eq('an alias never shadows a real clinician name',
+  matchStaff(SHADOW,'Chris Young').clinician.full_name, 'Chris Young');
 
 // An alias shared by two roster rows must NEVER silently merge them —
 // combining two clinicians' visit counts is worse than reporting neither.
@@ -221,8 +247,15 @@ const REC=reconcileRoster(ROSTER,D);
 eq('claimed capacity is the raw roster sum', REC.claimedCapacity, 70);
 eq('working capacity excludes clinicians who delivered nothing', REC.workingCapacity, 45);
 eq('phantom capacity is the difference', REC.phantomCapacity, 25);
-eq('nickname visits are credited to the roster, not lost', REC.deliveredTotal, 38);
-eq('alias matches are surfaced so the roster can be fixed', REC.aliasMatches.length, 1);
+eq('alias visits are credited to the roster, not lost', REC.deliveredTotal, 38);
+eq('a maintained alias is not reported as an exception', REC.heuristicMatches.length, 0);
+// A guess IS reported, so the pairing can be promoted into `aliases`.
+const GUESS=reconcileRoster(
+  [{full_name:'Nicholas DeCandia', weekly_visit_target:25}],
+  new Map([['nick decandia',12]]));
+eq('an unmaintained guess is surfaced for promotion', GUESS.heuristicMatches,
+  [{scheduleName:'nick decandia', rosterName:'Nicholas DeCandia', visits:12}]);
+eq('a guessed match still credits the visits', GUESS.deliveredTotal, 12);
 eq('unrostered deliverers are surfaced, not silently dropped',
   REC.scheduleOnly, [{name:'ghost person', visits:9}]);
 eq('idle roster rows are surfaced with their target',
