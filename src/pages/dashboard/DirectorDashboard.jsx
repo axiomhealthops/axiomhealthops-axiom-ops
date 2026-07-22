@@ -510,6 +510,8 @@ function CoverageBand({ coverage, bookingGap, onGo }) {
 // divides by a number that was never checked against who actually works.
 function RosterReconciliation({ roster, weekLabel }) {
   if (!roster || roster.activeCount === 0) return null;
+  // Reserve staff are expected, not an exception — they must not keep the
+  // panel permanently in a "needs attention" state.
   const clean = roster.phantomCapacity === 0
     && roster.scheduleOnly.length === 0
     && roster.heuristicMatches.length === 0;
@@ -577,6 +579,14 @@ function RosterReconciliation({ roster, weekLabel }) {
             label="Contracted but under target -- visits to assign"
             items={roster.underTarget} color={BAD}
             render={u => `${u.name} ${u.delivered}/${u.target} (-${u.short})`}
+          />
+          {/* Reserve is not a problem to fix — it is shown so the gap
+              above is readable. Without it, someone reading "1,060
+              contracted" would wonder where the ADOCs went. */}
+          <Row
+            label="Reserve -- non-treating, schedule only once contracted staff are at target"
+            items={roster.reserve} color={MUTED}
+            render={r => `${r.name}${r.delivered > 0 ? ` (covered ${r.delivered})` : ''}`}
           />
           <Row
             label="On the roster, delivered nothing"

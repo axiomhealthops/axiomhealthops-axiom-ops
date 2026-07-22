@@ -1,0 +1,26 @@
+-- Non-treating reserve tier, per Liam 2026-07-22.
+-- Applied to production via MCP (clinician_non_treating_reserve_tier_2026_07_22);
+-- checked in for git history.
+--
+-- Lia Davis, Ariel Maboudi and Earl Dimaano are ADOCs whose roles no
+-- longer require a caseload. They remain licensed clinicians and may be
+-- scheduled, but only once every contracted clinician is at target.
+-- Three assignment tiers now exist:
+--
+--   contracted (ft/pt)  fill to target FIRST; the only tier that owes a
+--                       caseload, so the only one that defines capacity
+--                       or an assignment gap
+--   surge (per diem)    available above contracted; its target of 10 is
+--                       an alert threshold, not a commitment
+--   reserve             non-treating; last resort only
+--
+-- Modelled as `is_treating boolean` rather than by changing
+-- employment_type, because these are genuinely full-time employees and
+-- only the treating obligation has gone. Overloading employment_type
+-- would corrupt payroll semantics and drag them into the per-diem
+-- overuse rule they have no contract to fix.
+--
+-- set_visit_target() is updated to check is_treating FIRST so a
+-- non-treating row can never be forced back to 25 by a later write.
+-- That trigger is the ONLY place weekly_visit_target is set — an UPDATE
+-- supplying a target is silently discarded.

@@ -179,7 +179,7 @@ eq('missing census row warns',
 // Every assertion below pins a defect measured in production on
 // 2026-07-22 against the week of 2026-07-12. See the module header.
 // =====================================================================
-const {staffKey,flipName,visitStaffName,buildStaffIndex,matchStaff,reconcileRoster,
+const {staffKey,flipName,visitStaffName,buildStaffIndex,matchStaff,reconcileRoster,isContracted,isReserve,
        isPerDiem,flagPerDiemOveruse}=await import(R+'staffMatch.js');
 
 // --- Name format: the join that silently matched zero rows
@@ -291,6 +291,45 @@ eq('meeting target contributes no gap',
 eq('exceeding target never produces a negative gap',
   reconcileRoster([{full_name:'Over',employment_type:'ft',weekly_visit_target:25}],
     new Map([['over',30]])).assignmentGap, 0);
+
+// --- Reserve tier: non-treating ADOCs (Liam 2026-07-22). They are
+// full-time employees who no longer owe a caseload. They must not inflate
+// contracted capacity, must not appear as "under target", and must not
+// be counted as idle capacity — but visits they DO deliver are real.
+const RES=[
+  {full_name:'Working FT', employment_type:'ft', weekly_visit_target:25, is_treating:true},
+  {full_name:'Lia Davis',  employment_type:'ft', weekly_visit_target:0,  is_treating:false},
+  {full_name:'Ariel Maboudi', employment_type:'ft', weekly_visit_target:0, is_treating:false},
+];
+const RESREC=reconcileRoster(RES,new Map([['working ft',20],['ariel maboudi',15]]));
+eq('reserve is excluded from contracted capacity', RESREC.committedCapacity, 25);
+eq('reserve does not inflate the assignment gap', RESREC.assignmentGap, 5);
+eq('reserve never appears as under target',
+  RESREC.underTarget.map(u=>u.name), ['Working FT']);
+eq('a reserve clinician who delivered nothing is NOT idle capacity',
+  RESREC.rosterOnly.map(r=>r.name), []);
+eq('reserve is listed separately', RESREC.reserve.map(r=>r.name).sort(),
+  ['Ariel Maboudi','Lia Davis']);
+eq('visits delivered by reserve are still credited', RESREC.reserveDelivered, 15);
+eq('isContracted excludes both reserve and per diem',
+  [isContracted({employment_type:'ft',is_treating:true}),
+   isContracted({employment_type:'ft',is_treating:false}),
+   isContracted({employment_type:'prn',is_treating:true})], [true,false,false]);
+// A salaried ADOC covering shifts is reserve working as intended, not a
+// per-diem contract problem — they have no per-diem contract to fix.
+eq('reserve is never flagged for per-diem overuse',
+  flagPerDiemOveruse(
+    [{full_name:'Reserve Cover', employment_type:'prn', is_treating:false}],
+    new Map([['reserve cover', new Map([['2026-06-14',18],['2026-06-21',18]])]]),
+    ['2026-06-14','2026-06-21']).length, 0);
+// Control: the identical pattern on a genuine per-diem contract DOES fire,
+// so the assertion above is proving the reserve exemption and not just a
+// broken fixture.
+eq('the same pattern on a real per-diem contract does fire',
+  flagPerDiemOveruse(
+    [{full_name:'Real Per Diem', employment_type:'prn'}],
+    new Map([['real per diem', new Map([['2026-06-14',18],['2026-06-21',18]])]]),
+    ['2026-06-14','2026-06-21']).length, 1);
 eq('empty roster does not divide by zero', reconcileRoster([],new Map()).utilizationPct, null);
 eq('null inputs are safe', reconcileRoster(null,null).claimedCapacity, 0);
 

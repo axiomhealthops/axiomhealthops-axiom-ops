@@ -201,6 +201,34 @@ export function isPerDiem(employmentType) {
   return PER_DIEM_TYPES.has(String(employmentType || '').toLowerCase().trim());
 }
 
+// ── Assignment tiers ──────────────────────────────────────────────────
+// Three tiers, filled in order (Liam 2026-07-22):
+//
+//   contracted  full-time and part-time. Fill to target FIRST. This is
+//               the only tier that carries a caseload obligation, so it
+//               is the only one that defines capacity or a gap.
+//   surge       per diem. Available above contracted, but its target of
+//               10 is an alert threshold rather than a commitment.
+//   reserve     licensed clinicians whose role no longer requires a
+//               caseload — the ADOCs. Schedulable, but only once
+//               contracted staff are at target.
+//
+// `is_treating === false` marks reserve. Modelled as a flag rather than
+// an employment_type value because these people genuinely ARE full-time
+// employees; only the treating obligation is gone. Overloading
+// employment_type would corrupt payroll semantics and would wrongly drag
+// them into the per-diem overuse rule.
+export function isReserve(clinician) {
+  return !!clinician && clinician.is_treating === false;
+}
+
+/** True only for staff who owe a weekly caseload. */
+export function isContracted(clinician) {
+  if (!clinician) return false;
+  if (isReserve(clinician)) return false;
+  return !isPerDiem(clinician.employment_type);
+}
+
 /**
  * Flag per-diem clinicians running a part-time-shaped caseload.
  *
@@ -221,6 +249,10 @@ export function flagPerDiemOveruse(clinicians, countsByStaffWeek, weekStarts, op
 
   for (const c of clinicians || []) {
     if (!c || !c.full_name || !isPerDiem(c.employment_type)) continue;
+    // A reserve clinician covering shifts is doing exactly what reserve
+    // is for. Flagging them as a per-diem contract problem would be
+    // noise — they are salaried and have no per-diem contract to fix.
+    if (isReserve(c)) continue;
     const byWeek = counts.get(staffKey(c.full_name)) || new Map();
 
     // Longest run of consecutive over-threshold weeks, and the run itself.
@@ -298,6 +330,7 @@ export function reconcileRoster(clinicians, deliveredBy) {
   const active = (clinicians || []).filter(c => c && c.full_name);
   const rosterOnly = [];
   const underTarget = [];
+  const reserve = [];
   let claimedCapacity = 0;
   let workingCapacity = 0;
   let deliveredTotal = 0;
@@ -317,6 +350,16 @@ export function reconcileRoster(clinicians, deliveredBy) {
     const got = creditByRoster.get(rk) || 0;
     claimedCapacity += t;
     deliveredTotal += got;
+    if (isReserve(c)) {
+      // Reserve staff carry a target of 0, so they can neither be "under
+      // target" nor count as idle capacity. Tracked separately: visits
+      // they DID deliver are real work that still needs crediting.
+      reserve.push({
+        name: c.full_name, region: c.region, discipline: c.discipline,
+        jobDescription: c.job_description, delivered: got,
+      });
+      continue;
+    }
     if (got > 0) {
       workingCapacity += t;
     } else {
@@ -358,6 +401,8 @@ export function reconcileRoster(clinicians, deliveredBy) {
       ? Math.round((committedDelivered / committedCapacity) * 100)
       : null,
     underTarget,            // contracted clinicians below target, worst first
+    reserve,                // non-treating, schedulable only as last resort
+    reserveDelivered: reserve.reduce((s, r) => s + r.delivered, 0),
     rosterOnly,             // on the roster, delivered nothing
     scheduleOnly,           // delivered work, not on the roster
     heuristicMatches,       // matched by guess — promote into `aliases`
