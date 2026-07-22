@@ -139,6 +139,28 @@ export default function ProductivityPage() {
   }, [weekStart, weekEnd]);
   var isCurrentWeek = (weekStart === defaultBounds[0] && weekEnd === defaultBounds[1]);
 
+  // WHICH WEEK ARE WE LOOKING AT? The page must mean different things in
+  // each case, because "% of target completed" is only a fair question
+  // about work that has had the chance to happen.
+  //
+  //   past     every visit has resolved -> completion is the real score
+  //   current  partly run -> completion so far, plus a projection
+  //   future   NOTHING is completed by definition -> completion would
+  //            read 0% and every clinician would render "Low" in red.
+  //            The honest question for a future week is how FULL the
+  //            calendar is, so coverage replaces completion entirely.
+  //
+  // Same class of trap as Director Command's old "81% delivered": a
+  // number that is arithmetically correct and completely misleading
+  // because nobody checked what the clock was doing.
+  var weekPhase = useMemo(function() {
+    var today = defaultBounds[0];                  // Sunday of the live week
+    if (weekStart > today) return 'future';
+    if (weekEnd < today) return 'past';
+    return 'current';
+  }, [weekStart, weekEnd, defaultBounds]);
+  var isFutureWeek = weekPhase === 'future';
+
   function load() {
     var clinPromise = supabase.from('clinicians')
       // weekly_visit_target is the trigger-maintained source of truth.
@@ -300,6 +322,12 @@ export default function ProductivityPage() {
       var projectedDone = done + s.scheduled;
       var projectedPct = isReserve ? null
         : (target > 0 ? Math.min(Math.round((projectedDone / target) * 100), 100) : null);
+      // How full is the calendar, regardless of what has run yet. This
+      // is the only fair read on a future week and a useful one on any
+      // week: an under-booked clinician is a scheduling problem you can
+      // still fix, while an under-completed one may just be mid-week.
+      var coveragePct = isReserve ? null
+        : (target > 0 ? Math.round((totalAssigned / target) * 100) : null);
       var tier = isReserve ? 'reserve'
         : c.is_agency ? 'agency'
         : c.employment_type === 'prn' ? 'per-diem'
@@ -308,7 +336,7 @@ export default function ProductivityPage() {
         stats: s, target: target, done: done,
         totalAssigned: totalAssigned, pct: pct,
         projectedPct: projectedPct,
-        isReserve: isReserve, tier: tier,
+        isReserve: isReserve, tier: tier, coveragePct: coveragePct,
         // Over an explicit ceiling, or over the per-diem alert threshold.
         overCap: c.weekly_visit_cap != null && done > c.weekly_visit_cap,
       });
@@ -378,8 +406,10 @@ export default function ProductivityPage() {
         'Evals': c.stats.evals,
         'Reassessments': c.stats.reassessments,
         'Total Assigned': c.totalAssigned,
-        'Percent of Target': c.pct == null ? 'n/a' : c.pct,
-        'Projected Percent': c.projectedPct == null ? 'n/a' : c.projectedPct,
+        'Week Type': weekPhase === 'future' ? 'Upcoming' : weekPhase === 'past' ? 'Completed' : 'In progress',
+        'Coverage Percent (booked vs target)': c.coveragePct == null ? 'n/a' : c.coveragePct,
+        'Percent of Target': weekPhase === 'future' ? 'n/a - week has not run' : (c.pct == null ? 'n/a' : c.pct),
+        'Projected Percent': weekPhase === 'future' ? 'n/a - week has not run' : (c.projectedPct == null ? 'n/a' : c.projectedPct),
         'Gap to Target': c.isReserve || c.employment_type === 'prn'
           ? '' : Math.max(0, c.target - c.done),
         'Over Cap': c.overCap ? 'YES' : '',
@@ -406,10 +436,14 @@ export default function ProductivityPage() {
     var pt = treating.filter(function(c) { return c.employment_type === 'pt'; });
     var prn = treating.filter(function(c) { return c.employment_type === 'prn'; });
     var reserve = enriched.filter(function(c) { return c.isReserve; });
+    // On a future week this averages COVERAGE, matching the tile label.
+    // Averaging completion there would report 0% for everyone and read
+    // as a collapse rather than an unrun week.
     var avg = function(arr) {
-      var withPct = arr.filter(function(c) { return c.pct != null; });
+      var pick = function(c) { return isFutureWeek ? c.coveragePct : c.pct; };
+      var withPct = arr.filter(function(c) { return pick(c) != null; });
       return withPct.length > 0
-        ? Math.round(withPct.reduce(function(a, c) { return a + c.pct; }, 0) / withPct.length) : 0;
+        ? Math.round(withPct.reduce(function(a, c) { return a + pick(c); }, 0) / withPct.length) : 0;
     };
     var totalCompleted = enriched.reduce(function(a, c) { return a + c.done; }, 0);
     var totalScheduled = enriched.reduce(function(a, c) { return a + c.stats.scheduled; }, 0);
@@ -421,7 +455,11 @@ export default function ProductivityPage() {
     // every contracted clinician to target. Matches Director Command.
     var assignmentGap = treating.reduce(function(a, c) {
       if (c.employment_type === 'prn') return a;
-      return a + Math.max(0, c.target - c.done);
+      // Future weeks compare against BOOKED work: nothing is completed
+      // yet, so measuring the gap off `done` would report every
+      // clinician's whole target as unassigned.
+      var delivered = isFutureWeek ? c.totalAssigned : c.done;
+      return a + Math.max(0, c.target - delivered);
     }, 0);
     var overCap = enriched.filter(function(c) { return c.overCap; }).length;
     return {
@@ -451,7 +489,10 @@ export default function ProductivityPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Productivity Tracker"
-        subtitle={filtered.length + ' clinicians \u00b7 ' + rangeLabel + (isCurrentWeek ? ' (this week, Sun-Sat)' : ' (custom range)')}
+        subtitle={filtered.length + ' clinicians \u00b7 ' + rangeLabel + (
+          isCurrentWeek ? ' \u00b7 this week, Sun-Sat (in progress)'
+          : weekPhase === 'future' ? ' \u00b7 UPCOMING - showing booked coverage, not completion'
+          : ' \u00b7 completed week')}
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 10, color: 'var(--gray)' }}>Export {filtered.length} rows</span>
@@ -504,12 +545,16 @@ export default function ProductivityPage() {
         {/* Summary Strip — each tile is a clickable scope filter */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)', flexShrink: 0 }}>
           {[
-            { key: 'completed', label: 'Completed This Week', val: summary.totalCompleted, sub: 'click: clinicians who completed visits', color: 'var(--green)' },
-            { key: 'scheduled', label: 'Scheduled Remaining', val: summary.totalScheduled, sub: 'click: clinicians with visits still on calendar', color: 'var(--blue)' },
+            isFutureWeek
+              ? { key: 'scheduled', label: 'Visits Booked', val: summary.totalScheduled, sub: 'click: clinicians with visits on the calendar', color: 'var(--blue)' }
+              : { key: 'completed', label: 'Completed This Week', val: summary.totalCompleted, sub: 'click: clinicians who completed visits', color: 'var(--green)' },
+            isFutureWeek
+              ? { key: 'under', label: 'Unbooked Capacity', val: summary.assignmentGap, sub: 'visits still to assign to hit target', color: summary.assignmentGap > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.assignmentGap > 0 }
+              : { key: 'scheduled', label: 'Scheduled Remaining', val: summary.totalScheduled, sub: 'click: clinicians with visits still on calendar', color: 'var(--blue)' },
             { key: 'notes',     label: 'Notes Not Submitted', val: summary.totalMissedActive, sub: summary.totalMissedActive > 0 ? 'click: follow up — cannot bill' : 'All notes submitted', color: summary.totalMissedActive > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.totalMissedActive > 0 },
             { key: 'under',     label: 'Under-Scheduled', val: summary.underScheduled, sub: 'click: clinicians below target', color: summary.underScheduled > 0 ? 'var(--danger)' : 'var(--green)', alert: summary.underScheduled > 0 },
-            { key: 'ft_atrisk', label: 'FT Avg (' + summary.ft.count + ')', val: summary.ft.avg + '%', sub: summary.ft.atRisk > 0 ? 'click: ' + summary.ft.atRisk + ' FT below 70%' : 'Target: 25 visits/wk', color: summary.ft.avg >= 80 ? 'var(--green)' : summary.ft.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
-            { key: 'pt_atrisk', label: 'PT Avg (' + summary.pt.count + ')', val: summary.pt.avg + '%', sub: summary.pt.atRisk > 0 ? 'click: ' + summary.pt.atRisk + ' PT below 70%' : 'Target: 15 visits/wk', color: summary.pt.avg >= 80 ? 'var(--green)' : summary.pt.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
+            { key: 'ft_atrisk', label: 'FT Avg (' + summary.ft.count + ')', val: summary.ft.avg + '%', sub: isFutureWeek ? 'booked coverage' : (summary.ft.atRisk > 0 ? 'click: ' + summary.ft.atRisk + ' FT below 70%' : 'full-time average'), color: summary.ft.avg >= 80 ? 'var(--green)' : summary.ft.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
+            { key: 'pt_atrisk', label: 'PT Avg (' + summary.pt.count + ')', val: summary.pt.avg + '%', sub: isFutureWeek ? 'booked coverage' : (summary.pt.atRisk > 0 ? 'click: ' + summary.pt.atRisk + ' PT below 70%' : 'part-time average'), color: summary.pt.avg >= 80 ? 'var(--green)' : summary.pt.avg >= 60 ? 'var(--yellow)' : 'var(--danger)' },
           ].map(function(tile) {
             var isActive = scope === tile.key;
             var activeBg = tile.alert ? '#FEE2E2' : '#DBEAFE';
@@ -606,17 +651,27 @@ export default function ProductivityPage() {
  
             {filtered.map(function(c, i) {
               var hasData = c.totalAssigned > 0;
-              var pctBar = c.target > 0 ? Math.min((c.done / c.target) * 100, 100) : 0;
-              var schedBar = c.target > 0 ? Math.min((c.stats.scheduled / c.target) * 100, 100 - pctBar) : 0;
-              var barColor = getBarColor(c.pct);
+              var pctBar = c.target > 0 ? Math.min(((isFutureWeek ? c.totalAssigned : c.done) / c.target) * 100, 100) : 0;
+              var schedBar = (isFutureWeek || c.target === 0) ? 0 : Math.min((c.stats.scheduled / c.target) * 100, 100 - pctBar);
+              var barColor = getBarColor(isFutureWeek ? c.coveragePct : c.pct);
               var assignedColor = hasData ? getAssignedColor(c.totalAssigned, c.target, c.employment_type) : 'var(--gray)';
               var assignedBg = hasData ? getAssignedBg(c.totalAssigned, c.target, c.employment_type) : 'transparent';
               var isUnderScheduled = !c.isReserve && c.employment_type !== 'prn' && hasData && c.totalAssigned < (c.target - 2);
+              // On a future week nothing has run, so completion is not a
+              // fair measure and coverage takes its place everywhere.
+              var shownPct = isFutureWeek ? c.coveragePct : c.pct;
+              var pctLabel = isFutureWeek ? 'booked' : 'of target';
               var hasMissedActive = c.stats.missedActive > 0;
               var isAlert = !c.isReserve && c.employment_type === 'prn' && c.pct != null && c.pct >= 100;
  
               var statusLabel, statusColor, statusBg;
               if (c.isReserve) { statusLabel = 'Reserve'; statusColor = '#475569'; statusBg = '#F1F5F9'; }
+              else if (isFutureWeek) {
+                if (!hasData) { statusLabel = 'Empty'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
+                else if (c.coveragePct >= 95) { statusLabel = 'Booked'; statusColor = '#065F46'; statusBg = '#ECFDF5'; }
+                else if (c.coveragePct >= 70) { statusLabel = 'Filling'; statusColor = '#92400E'; statusBg = '#FEF3C7'; }
+                else { statusLabel = 'Under-booked'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
+              }
               else if (c.overCap) { statusLabel = '\u26A0 Over Cap'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
               else if (isAlert) { statusLabel = '\uD83D\uDD34 Alert'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
               else if (hasMissedActive) { statusLabel = '\uD83D\uDCCB Note Due'; statusColor = '#991B1B'; statusBg = '#FEF2F2'; }
@@ -650,17 +705,20 @@ export default function ProductivityPage() {
                       <>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 3 }}>
                           <span>
-                            <span style={{ color: '#065F46', fontWeight: 700 }}>{c.done} done</span>
-                            {c.stats.scheduled > 0 && <span style={{ color: '#1565C0' }}> + {c.stats.scheduled} sched</span>}
+                            {isFutureWeek
+                              ? <span style={{ color: '#1565C0', fontWeight: 700 }}>{c.totalAssigned} booked of {c.target}</span>
+                              : <span style={{ color: '#065F46', fontWeight: 700 }}>{c.done} done</span>}
+                            {!isFutureWeek && c.stats.scheduled > 0 && <span style={{ color: '#1565C0' }}> + {c.stats.scheduled} sched</span>}
                             {c.stats.missed > 0 && <span style={{ color: 'var(--danger)' }}> &middot; {c.stats.missed} missed</span>}
                           </span>
-                          <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: c.pct == null ? 'var(--gray)' : c.pct >= 90 ? '#065F46' : c.pct >= 70 ? '#92400E' : '#991B1B' }}>{c.pct == null ? 'n/a' : c.pct + '%'}</span>
+                          <span style={{ fontFamily: 'DM Mono, monospace', fontWeight: 700, color: shownPct == null ? 'var(--gray)' : shownPct >= 90 ? '#065F46' : shownPct >= 70 ? '#92400E' : '#991B1B' }}
+                            title={pctLabel}>{shownPct == null ? 'n/a' : shownPct + '%'}</span>
                         </div>
                         <div style={{ height: 8, background: 'var(--border)', borderRadius: 999, overflow: 'hidden', display: 'flex' }}>
                           {pctBar > 0 && <div style={{ height: '100%', width: pctBar + '%', background: barColor, flexShrink: 0, borderRadius: schedBar > 0 ? '999px 0 0 999px' : 999 }} />}
                           {schedBar > 0 && <div style={{ height: '100%', width: schedBar + '%', background: '#93C5FD', flexShrink: 0 }} />}
                         </div>
-                        {c.projectedPct != null && c.pct != null && c.projectedPct > c.pct && (
+                        {!isFutureWeek && c.projectedPct != null && c.pct != null && c.projectedPct > c.pct && (
                           <div style={{ fontSize: 9, color: '#1565C0', marginTop: 2 }}>
                             Projected {c.projectedPct}% if all scheduled complete
                           </div>
