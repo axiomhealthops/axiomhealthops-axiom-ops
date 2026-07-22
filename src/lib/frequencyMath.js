@@ -37,14 +37,19 @@
 //   NewW   N visits every W weeks                  "1ew2" = 1 per 2 weeks
 //   prn    as needed — never overdue
 //
-// The em/ew reading is INFERRED FROM THE DB, not from documentation:
-// `1em1` carries threshold 30 and `1em2` carries 60. If the trailing
-// digit were a duration rather than an interval, both would be 30. The
-// trailing digit on `NwD` genuinely is a duration (a 4-week course), so
-// the two forms do not read the same way. Flagged as an assumption —
-// worth one confirmation from Liam, but it is what the existing data
-// says and matching it is strictly better than the current behaviour of
-// not evaluating these patients at all.
+// CONFIRMED BY LIAM 2026-07-22: `1em2` means "once every two months",
+// NOT "once a month for two months". The trailing digit is an INTERVAL
+// on the em/ew forms and a DURATION on the NwD form — the same position
+// genuinely means two different things depending on the letter. That is
+// the one part of this notation you cannot infer from `NwD`, so it is
+// recorded here rather than left to be rediscovered.
+//
+// The DB agreed before he did: `1em1` carries threshold 30 and `1em2`
+// carries 60. Under a duration reading both would be 30, since how long
+// an order runs does not change how long you wait between visits.
+//
+// Note the two readings only diverge when the trailing digit is 2+. At
+// `1em1` — 174 of the 193 em/ew patients — they give the same answer.
 //
 // MULTI-PHASE ORDERS
 // ------------------
@@ -61,30 +66,45 @@
 // "weekly" would invent clinical expectations that nobody prescribed.
 // =====================================================================
 
-// Thresholds for the canonical values, copied from what `census_data`
-// already stores so this module can never disagree with the column on a
-// value the column knows. Keyed by visits-per-week.
-const KNOWN_THRESHOLD_BY_PER_WEEK = new Map([
+// Thresholds for the WEEKLY cadences, copied from what `census_data`
+// already stores. Keyed by visits per week. These carry a deliberate
+// grace period on top of the bare interval (1/wk is a 7-day interval but
+// only goes overdue at 10) because a weekly visit slipping a couple of
+// days is routine scheduling, not a lapse.
+const KNOWN_WEEKLY_THRESHOLD = new Map([
   [4, 3],
   [2, 4],
   [1, 10],
 ]);
 
 const NEVER_OVERDUE = 9999;
+const DAYS_PER_MONTH = 30;
 
 /**
  * Days of silence after which a patient on this cadence is overdue.
- * Falls back to twice the expected interval plus a small grace for
- * cadences the canonical table does not cover, which is the same shape
- * as the known values (1/wk: 7-day interval -> 10) without pretending to
- * be exact.
+ *
+ * Split by unit, because the two families genuinely behave differently
+ * and a single per-week formula cannot serve both:
+ *
+ *   NwD   -> table above, with its built-in grace.
+ *   NemM  -> the interval itself, M months at 30 days. `1em1` = 30 and
+ *            `1em2` = 60, matching census_data exactly.
+ *   NewW  -> the interval itself, W weeks at 7 days.
+ *
+ * An earlier version keyed everything off visits-per-week and let the
+ * monthly cadences fall through to a generic heuristic. That produced 46
+ * days for `1em1` and 88 for `1em2` against the column's 30 and 60 —
+ * precisely the second-disagreeing-source problem this module exists to
+ * prevent, and invisible until an assertion pinned the real values.
  */
-function thresholdFor(perWeek) {
+function thresholdFor(unit, n, span, perWeek) {
   if (!perWeek || perWeek <= 0) return NEVER_OVERDUE;
-  const known = KNOWN_THRESHOLD_BY_PER_WEEK.get(perWeek);
+  if (unit === 'em') return span * DAYS_PER_MONTH;
+  if (unit === 'ew') return span * 7;
+  const known = KNOWN_WEEKLY_THRESHOLD.get(n);
   if (known !== undefined) return known;
-  const intervalDays = 7 / perWeek;
-  return Math.max(3, Math.round(intervalDays * 1.4) + 3);
+  // Novel weekly cadence (3w4, 5w2...): same shape as the known values.
+  return Math.max(3, Math.round(7 / n) + 2);
 }
 
 /**
@@ -140,7 +160,7 @@ export function parseFrequency(raw) {
     recognized: true,
     perWeek,
     canonical: `${n}${unit}${span}`,
-    thresholdDays: thresholdFor(perWeek),
+    thresholdDays: thresholdFor(unit, n, span, perWeek),
     phases: tokens.length,
   };
 }

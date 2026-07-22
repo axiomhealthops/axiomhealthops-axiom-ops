@@ -281,6 +281,26 @@ eq('4w4 threshold matches the column', parseFrequency('4w4').thresholdDays, 3);
 eq('2w4 threshold matches the column', parseFrequency('2w4').thresholdDays, 4);
 eq('1w4 threshold matches the column', parseFrequency('1w4').thresholdDays, 10);
 eq('1em1 is monthly, not weekly', Math.round(parseFrequency('1em1').perWeek*100), 23);
+// Confirmed by Liam 2026-07-22: the trailing digit is an INTERVAL on the
+// em/ew forms ("once every two months") and a DURATION on NwD ("once a
+// week for four weeks"). Same position, two meanings, by letter. Pinned
+// here so the next person cannot quietly "fix" it into consistency.
+eq('1em2 is once every TWO months, not monthly for two months',
+  parseFrequency('1em2').thresholdDays, 60);
+// These two are the values census_data stores. Pinned because an earlier
+// build let the monthly cadences fall through to a generic per-week
+// heuristic and produced 46 and 88 instead — a second source of truth
+// disagreeing with the column, silently.
+eq('1em1 threshold matches the column', parseFrequency('1em1').thresholdDays, 30);
+eq('1ew2 threshold is the fortnight itself', parseFrequency('1ew2').thresholdDays, 14);
+eq('1em1 and 1em2 are not the same cadence',
+  parseFrequency('1em1').thresholdDays !== parseFrequency('1em2').thresholdDays, true);
+eq('1ew2 is fortnightly, so not owed a visit every week',
+  expectedVisitsThisWeek(parseFrequency('1ew2')), 0);
+eq('1w4 trailing digit stays a DURATION -- still one visit a week',
+  parseFrequency('1w4').perWeek, 1);
+eq('1w8 is the same weekly cadence as 1w4, just a longer course',
+  parseFrequency('1w8').perWeek, parseFrequency('1w4').perWeek);
 eq('2w4 is two visits a week', parseFrequency('2w4').perWeek, 2);
 
 // --- The 38-patient blind spot: parseable frequency buried in LOC text

@@ -140,6 +140,38 @@ codebase, and they have different rules:
   written as a denormalised "latest note" pointer because both the cron function and
   `recalculate()` read them for the clock — do not delete them without rewiring both.
 
+### Visit frequency (added 2026-07-22)
+- **`src/lib/frequencyMath.js` is the only place that interprets
+  `census_data.inferred_frequency`.** Same rule as `censusStatus.js` — never regex
+  the raw column at a call site. Before this it was open-coded across ten pages.
+- **Notation, confirmed by Liam 2026-07-22:**
+  - `NwD` — N visits **per week**, for D weeks. Trailing digit is a **DURATION**.
+    `1w4` and `1w8` are the same weekly cadence, different course lengths.
+  - `NemM` — N visits **every M months**. Trailing digit is an **INTERVAL**.
+    `1em2` is once every *two months*, NOT once a month for two months.
+  - `NewW` — N visits **every W weeks**. Trailing digit is an **INTERVAL**.
+  - `prn` — as needed. **Recognized, and never overdue.** Do not confuse it with
+    an unparseable value; that puts 24 patients in the wrong bucket.
+  - The same digit position means a duration on `NwD` and an interval on
+    `NemM`/`NewW`. This is not a bug and has been confirmed — do not "fix" it
+    into consistency. Pinned by assertions in `npm run check`.
+- **`overdue_threshold_days` is NULL for anything that is not one of six clean
+  strings** (`1em1` 30, `2w4` 4, `1w4` 10, `4w4` 3, `1em2` 60, `prn` 9999).
+  38 active patients carry a parseable cadence buried in free text like
+  `"LOC 3 DM 1w4"` and so were **never evaluated** by any overdue check — not
+  flagged and ignored, never assessed. Exactly the `"Active - Auth Pendin"`
+  defect on a different column. Parse via `frequencyMath`, never via the
+  threshold column alone.
+- **Unparseable frequencies never get a silent default.** `parseFrequency()`
+  returns `recognized:false` and callers must surface it, like
+  `censusStatus.js` `.unmapped`. Defaulting to "weekly" invents clinical
+  expectations nobody prescribed. `coverageGap()` likewise returns `null`
+  rather than `0` so "no shortfall" and "no basis to judge" stay distinct.
+- Multi-phase tapers (`"LOC 3 - 4w4, 2w2"`) take the **first** token as the
+  current phase. Tracking the active phase needs a start date the census does
+  not carry, so this over-estimates for a patient late in a taper — surfacing
+  them for review rather than hiding them.
+
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
   in production and supabase-js silently truncates:
