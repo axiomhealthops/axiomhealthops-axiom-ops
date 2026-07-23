@@ -662,5 +662,102 @@ eq('resubmission collapses to one order', DUP.stats.unique, 1);
 eq('the later submission wins', DUP.rows[0].clinical_approval_status, 'denied');
 eq('duplicates are counted, not hidden', DUP.stats.duplicates, 1);
 
+// --- Patient flow board (2026-07-21) ---------------------------------
+// The collapse rule is what keeps the daily feed readable: 34 flapping
+// patients generated 589 transitions in 30 days and would otherwise bury
+// the 5-12 real activations per day.
+const {collapseDay,findFlappers,dwellByPatient,buildFlowBoard,stageOf,latestActivityDate,movementsByTeam}
+  = await import(R+'patientFlow.js');
+const L=(pt,from,to,at,region='A')=>({patient_name:pt,old_status:from,new_status:to,changed_at:at,region});
+
+// Same-day round trip = ONE entry, marked bounced, not two movements.
+const rt=[L('Smith, A','Active','Discharge - Change I','2026-07-21T09:00:00Z'),
+          L('Smith, A','Discharge - Change I','Active','2026-07-21T15:00:00Z')];
+eq('round trip collapses to one row', collapseDay(rt,'2026-07-21').length, 1);
+eq('round trip is marked bounced', collapseDay(rt,'2026-07-21')[0].bounced, true);
+eq('round trip records both hops', collapseDay(rt,'2026-07-21')[0].hops, 2);
+
+// A->B->C nets to A->C, one movement, not bounced.
+const chain=[L('Jones, B','SOC Pending','Eval Pending','2026-07-21T09:00:00Z'),
+             L('Jones, B','Eval Pending','Active','2026-07-21T14:00:00Z')];
+const cj=collapseDay(chain,'2026-07-21');
+eqPart('multi-hop nets end to end', cj[0], {fromStage:'soc_pending',toStage:'active',bounced:false});
+eq('multi-hop is one row', cj.length, 1);
+
+// Distinct patients stay distinct.
+eq('two patients = two rows',
+  collapseDay([L('X','SOC Pending','Eval Pending','2026-07-21T09:00:00Z'),
+               L('Y','Eval Pending','Active','2026-07-21T09:00:00Z')],'2026-07-21').length, 2);
+
+// Other days are excluded.
+eq('other days excluded',
+  collapseDay([L('X','SOC Pending','Eval Pending','2026-07-20T09:00:00Z')],'2026-07-21').length, 0);
+
+// Truncated Pariox status still maps to the auth stage.
+eq('truncated status maps to stage', stageOf('Active - Auth Pendin'), 'active_auth');
+eq('truncated discharge maps to exit', stageOf('Discharge - Change I'), 'discharge');
+eq('unmodelled status maps to null', stageOf('Pending Martian Review'), null);
+
+// Uploads are weekday-only: "today" must mean latest day WITH data.
+eq('latest activity date found',
+  latestActivityDate([L('X','a','b','2026-07-17T09:00:00Z'),L('Y','a','b','2026-07-21T09:00:00Z')]),
+  '2026-07-21');
+
+// Flappers: 3+ transitions in the window; a 2-flip patient is not one.
+// Rule is REVISITS (same status entered 3+ times), not raw transition
+// count -- a legitimate SOC->Eval->Active run is already 3 transitions,
+// and on production ZERO patients move forward 3+ times without doubling
+// back. So oscillation is the only thing this should catch.
+const flapLog=[L('Flap, F','Active','Discharge - Change I','2026-07-15T09:00:00Z'),
+               L('Flap, F','Discharge - Change I','Active','2026-07-16T09:00:00Z'),
+               L('Flap, F','Active','Discharge - Change I','2026-07-17T09:00:00Z'),
+               L('Flap, F','Discharge - Change I','Active','2026-07-20T09:00:00Z'),
+               L('Flap, F','Active','Discharge - Change I','2026-07-21T09:00:00Z'),
+               L('Calm, C','SOC Pending','Eval Pending','2026-07-21T09:00:00Z')];
+const fl=findFlappers(flapLog,14,'2026-07-21');
+eq('flapper detected', fl.length, 1);
+eq('flapper revisit count', fl[0].revisits, 3);
+eq('stable patient not flagged', fl.filter(f=>/Calm/.test(f.patient)).length, 0);
+
+// Forward-only progression must NEVER be flagged, however many hops.
+eq('forward-only progression is not a flapper',
+  findFlappers([L('Fwd, F','SOC Pending','Eval Pending','2026-07-15T09:00:00Z'),
+                L('Fwd, F','Eval Pending','Auth Pending','2026-07-17T09:00:00Z'),
+                L('Fwd, F','Auth Pending','Active','2026-07-20T09:00:00Z')],14,'2026-07-21').length, 0);
+
+// Two visits to a status is churn but under threshold - stays quiet.
+eq('two revisits is below threshold',
+  findFlappers([L('Two, T','Active','On Hold','2026-07-18T09:00:00Z'),
+                L('Two, T','On Hold','Active','2026-07-19T09:00:00Z'),
+                L('Two, T','Active','On Hold','2026-07-20T09:00:00Z')],14,'2026-07-21').length, 0);
+
+// Dwell: log-derived is exact; no log row falls back to first_seen_date
+// and MUST be marked isFloor so the UI never states it as precise.
+const dwellCensus=[{patient_name:'Log, L',status:'SOC Pending',first_seen_date:'2026-01-01'},
+           {patient_name:'NoLog, N',status:'SOC Pending',first_seen_date:'2026-07-11'}];
+const dw=dwellByPatient(dwellCensus,[L('Log, L','Waitlist','SOC Pending','2026-07-14T00:00:00Z')],'2026-07-21');
+eqPart('logged dwell is exact', dw.get('log, l'), {days:7,isFloor:false});
+eqPart('unlogged dwell falls back to floor', dw.get('nolog, n'), {days:10,isFloor:true});
+
+// Board totals separate the four movement kinds Liam acts on.
+const boardLog=[
+  L('Enter, E',null,'SOC Pending','2026-07-21T09:00:00Z'),        // entered pipeline
+  L('Act, A','Eval Pending','Active','2026-07-21T09:00:00Z'),     // activated
+  L('Lost, L','SOC Pending','Discharge','2026-07-21T09:00:00Z'),  // lost
+  L('Move, M','SOC Pending','Eval Pending','2026-07-21T09:00:00Z'),// within
+  L('Bnc, B','Active','Discharge - Change I','2026-07-21T08:00:00Z'),
+  L('Bnc, B','Discharge - Change I','Active','2026-07-21T16:00:00Z'),
+];
+const board=buildFlowBoard({census:[],log:boardLog,date:'2026-07-21'});
+eqPart('board totals classify each movement kind', board.totals,
+  {entered:1,activated:1,lost:1,within:1,moved:4,bounced:1});
+eq('bounced excluded from movements', board.movements.length, 4);
+eq('movements carry an unstable tag', board.movements.every(m=>'unstable' in m), true);
+
+// Movements route to the team that owns the stage moved INTO.
+const teams=movementsByTeam(board.movements);
+eq('activation routes to clinical', teams.clinical.filter(m=>m.toStage==='active').length, 1);
+eq('eval move routes to care coord', teams.care_coord.filter(m=>m.toStage==='eval_pending').length, 1);
+
 console.log(fail?`\n${fail} FAILED`:'\nAll assertions passed');
 process.exit(fail?1:0);

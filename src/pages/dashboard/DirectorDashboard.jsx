@@ -4,6 +4,9 @@ import TopBar from '../../components/TopBar';
 import { useRealtimeTable } from '../../hooks/useRealtimeTable';
 import ManagerScorecards from '../../components/director/ManagerScorecards';
 import ExceptionFeed from '../../components/director/ExceptionFeed';
+// 2026-07-21: daily status-progression board. Reads census_status_log,
+// which this page already fetches for the census delta.
+import PatientFlowBoard from '../../components/director/PatientFlowBoard';
 import WeekSelector, { readPersistedWeekOffset } from '../../components/WeekSelector';
 import StateToggle from '../../components/StateToggle';
 import { useStateMapping, getRegionsForState, readPersistedState } from '../../lib/stateMapping';
@@ -1367,7 +1370,17 @@ export default function DirectorDashboard({ onNavigate }) {
           )}
         </div>
 
-        {/* 6. DETAIL — weekly-review depth, folded away from the daily read */}
+        {/* 6. PATIENT FLOW — daily progression through the status buckets.
+            Sits directly under the status widgets on purpose: the widgets
+            say where everyone IS, this says who MOVED and which team to
+            call about it. */}
+        <PatientFlowBoard
+          census={census}
+          statusLog={statusLog}
+          onNavigate={(page, intent) => go(page, intent)}
+        />
+
+        {/* 7. DETAIL — weekly-review depth, folded away from the daily read */}
         <details style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
           <summary style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: INK, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span>

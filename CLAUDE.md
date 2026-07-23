@@ -172,6 +172,27 @@ codebase, and they have different rules:
   not carry, so this over-estimates for a patient late in a taper — surfacing
   them for review rather than hiding them.
 
+### Patient flow board (added 2026-07-21)
+- `src/lib/patientFlow.js` turns `census_status_log` into the daily progression board
+  on Director Command. Pure functions, asserted by `npm run check`.
+- **`census_status_log` is the good transition source** — 10K+ rows, continuous, ~1.05
+  rows per patient per upload, no duplicate spam. Use it, NOT `census_data.status_changed_at`,
+  which is null on ~95% of rows.
+- **Uploads are weekday-only.** "Today" must mean `latestActivityDate(log)`, never the
+  calendar date, or the board reads empty every Monday morning.
+- **The log starts 2026-04-03.** Roughly half the patients currently in a pipeline stage
+  entered it before then and have no row for it (26 of 43 Waitlist, 21 of 35 SOC Pending).
+  Dwell falls back to `first_seen_date` and is flagged `isFloor` — render those as "N+ d",
+  never as a precise figure.
+- **Status oscillation dominates the log.** Measured 2026-07-07..21: of 251 patients with
+  any change, 92 revisited a status 2+ times, 73 revisited 3+ times, and **0 moved
+  forward 3+ times without doubling back**. `Active <-> Discharge - Change Insurance`
+  alone fired 589 times across 34 patients in 30 days. So `findFlappers()` keys on
+  REVISITS (same status re-entered 3+ times), not on transition count — a legitimate
+  SOC -> Eval -> Active run is already 3 transitions.
+- Same-day round trips are netted by `collapseDay()`, but the real churn is cross-day,
+  so movements from cycling patients are tagged `unstable` and greyed rather than hidden.
+
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
   in production and supabase-js silently truncates:
