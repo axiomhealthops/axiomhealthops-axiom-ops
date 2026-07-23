@@ -221,7 +221,22 @@ function UploadCard(props) {
   // a rolling-window source. The delete now also preserves Completed/Missed
   // statuses even if a user manually toggles Replace ON, so billing events
   // can never be silently destroyed again.
-  var [replaceMode, setReplaceMode] = useState(false);
+  // 2026-07-23: DEFAULT ON for visits. Liam: "that should just be an upload
+  // that the system reviews the file and updates the current data that is in
+  // there with any changes." Upsert-only could never do that — when Pariox
+  // drops a slot (cancelled, rescheduled, reassigned to another clinician)
+  // there is no row in the file to overwrite the old one, so the stale row
+  // lived forever. 1,796 accumulated rows sat behind the 760 that were
+  // actually current for the week of 2026-07-19, inflating booked visits to
+  // 935 when the real schedule showed 764.
+  //
+  // Safe to default ON now in a way it was NOT on 2026-06-06: the delete
+  // preserves Completed and Missed (billing events), refuses spans > 60 days,
+  // and now also refuses a file that looks like a partial export (see the
+  // coverage guard below). The 6/6 incident was caused by deleting completed
+  // rows that Pariox's rolling window had already dropped; that can no longer
+  // happen.
+  var [replaceMode, setReplaceMode] = useState(props.batchType === 'visits');
   var inputRef = useRef();
  
   useEffect(function() {
@@ -279,45 +294,72 @@ function UploadCard(props) {
           // schedules but were never removed from our DB. Only runs if the
           // user explicitly opted in via the checkbox.
           var replacedCount = 0;
+          var reconciledDays = 0;
+          var skippedReconcile = false;
           if (replaceMode) {
-            var dates = data.map(function(r) { return r.visit_date; }).filter(Boolean).sort();
-            if (dates.length > 0) {
-              var minDate = dates[0].slice(0, 10);
-              var maxDate = dates[dates.length - 1].slice(0, 10);
-              setMessage('Replace mode: counting rows in ' + minDate + ' to ' + maxDate + ' for deletion...');
-              // Sanity check — if range is wildly large (>60 days), refuse.
-              // Protects against a partial-week file accidentally wiping months.
-              var msSpan = new Date(maxDate).getTime() - new Date(minDate).getTime();
-              var daysSpan = Math.round(msSpan / 86400000) + 1;
-              if (daysSpan > 60) {
-                throw new Error('Replace mode refused — file spans ' + daysSpan + ' days. Replace mode is meant for single-week uploads (≤60 days). Re-upload without replace mode, or trim the file.');
+            // ── PER-DAY RECONCILE (2026-07-23) ──────────────────────────
+            // Liam: "that should just be an upload that the system reviews
+            // the file and updates the current data that is in there with
+            // any changes."
+            //
+            // Two rules make that safe, and both were learned the hard way:
+            //
+            // 1. JUDGE THE FILE BY ITSELF, NOT AGAINST THE DATABASE.
+            //    The first version of this guard compared file rows to rows
+            //    already in the range. But the range is exactly what is
+            //    bloated with stale rows — on 2026-07-23 a correct 759-row
+            //    export scored 52% against 1,452 accumulated rows and would
+            //    have been rejected as "incomplete". Circular. Instead we
+            //    look at the file's own busiest day, which separates cleanly:
+            //      real Pariox exports  busiest day 143-209 rows
+            //      partial/corrections  busiest day   1-50  rows
+            //    Threshold 60 sits in that gap with room on both sides, and
+            //    it needs no knowledge of current DB state.
+            //
+            // 2. RECONCILE ONLY THE DATES THE FILE ACTUALLY COVERS.
+            //    The old code deleted across min..max of the file, so a file
+            //    covering Mon and Fri would wipe Tue-Thu as collateral. Now
+            //    each date is handled independently: a date absent from the
+            //    file is never touched.
+            //
+            // Completed and Missed are still never deleted — that is the
+            // 2026-06-06 lesson and it is not negotiable.
+            var byDay = {};
+            data.forEach(function(r) {
+              var d = (r.visit_date || '').slice(0, 10);
+              if (d) byDay[d] = (byDay[d] || 0) + 1;
+            });
+            var fileDays = Object.keys(byDay).sort();
+            var busiestDay = fileDays.reduce(function(mx, d) { return byDay[d] > mx ? byDay[d] : mx; }, 0);
+            var FULL_EXPORT_MIN_ROWS_IN_A_DAY = 60;
+
+            if (fileDays.length === 0) {
+              skippedReconcile = true;
+            } else if (busiestDay < FULL_EXPORT_MIN_ROWS_IN_A_DAY) {
+              // Looks like a partial / corrections file. Add and update, but
+              // never delete — a wrong "add" is recoverable, a wrong delete
+              // of someone's schedule is not.
+              skippedReconcile = true;
+              setMessage('File looks like a partial export (busiest day ' + busiestDay
+                + ' rows). Adding and updating only — nothing will be deleted.');
+            } else {
+              setMessage('Reconciling ' + fileDays.length + ' day(s) against the file...');
+              for (var di = 0; di < fileDays.length; di++) {
+                var theDay = fileDays[di];
+                var dayRes = await supabase.from('visit_schedule_data')
+                  .delete()
+                  .eq('visit_date', theDay)
+                  .not('status', 'ilike', 'Completed')
+                  .not('status', 'ilike', 'Missed%')
+                  .select('id');
+                if (dayRes.error) throw new Error('Reconcile failed on ' + theDay + ': ' + dayRes.error.message);
+                replacedCount += (dayRes.data || []).length;
+                reconciledDays++;
+                setMessage('Reconciled ' + reconciledDays + '/' + fileDays.length
+                  + ' days — cleared ' + replacedCount + ' superseded rows so far...');
               }
-              var confirmMsg = 'REPLACE MODE: This will DELETE existing SCHEDULED/CANCELLED visit rows between '
-                + minDate + ' and ' + maxDate + ' (' + daysSpan + ' day' + (daysSpan===1?'':'s')
-                + ') and replace with ' + data.length + ' rows from this upload.\n\n'
-                + 'COMPLETED and MISSED rows in that range will be PRESERVED — those are billing events.\n\n'
-                + 'Proceed?';
-              if (!window.confirm(confirmMsg)) {
-                throw new Error('Replace mode cancelled by user — nothing was changed.');
-              }
-              setMessage('Deleting scheduled/cancelled rows in ' + minDate + ' to ' + maxDate + '...');
-              // 2026-06-06: never delete Completed or Missed rows. They're
-              // billing events; Pariox's rolling-window report may not include
-              // them again. The previous "delete every row in range" semantics
-              // silently destroyed historical revenue when the report stopped
-              // including older dates. Only scheduled/cancelled/blank rows get
-              // wiped here — completions stay forever, will be UPSERTed if
-              // re-included in a later upload.
-              var delRes = await supabase.from('visit_schedule_data')
-                .delete()
-                .gte('visit_date', minDate)
-                .lte('visit_date', maxDate)
-                .not('status', 'ilike', 'Completed')
-                .not('status', 'ilike', 'Missed%')
-                .select('id'); // .select() so we get a count back
-              if (delRes.error) throw new Error('Replace-mode delete failed: ' + delRes.error.message);
-              replacedCount = (delRes.data || []).length;
-              setMessage('Deleted ' + replacedCount + ' scheduled/cancelled rows (completed preserved). Inserting fresh data...');
+              setMessage('Cleared ' + replacedCount + ' superseded scheduled rows across '
+                + reconciledDays + ' day(s). Completed and missed visits preserved. Inserting current schedule...');
             }
           }
 
@@ -496,7 +538,11 @@ function UploadCard(props) {
             console.warn('recompute_last_visit_dates failed:', rpcRes.error.message);
           }
 
-          var replaceMsg = replacedCount > 0 ? ' · REPLACED ' + replacedCount + ' stale row(s)' : '';
+          var replaceMsg = skippedReconcile
+            ? ' · add-only (file looked partial, nothing deleted)'
+            : (reconciledDays > 0
+                ? ' · reconciled ' + reconciledDays + ' day(s), cleared ' + replacedCount + ' superseded row(s)'
+                : '');
           // 2026-06-06: surface dedupe + row-failure counts so silent loss can
           // never recur without the user seeing it.
           var dedupeMsg = dedupeDropped > 0
@@ -726,8 +772,8 @@ function UploadCard(props) {
       {props.batchType === 'visits' && (
         <div onClick={function(e) { e.stopPropagation(); }}
           style={{
-            background: replaceMode ? '#FEF3C7' : '#F9FAFB',
-            border: '1px solid ' + (replaceMode ? '#FCD34D' : 'var(--border)'),
+            background: replaceMode ? '#ECFDF5' : '#FFFBEB',
+            border: '1px solid ' + (replaceMode ? '#059669' : '#D97706'),
             borderRadius: 8, padding: '10px 14px', marginBottom: 12,
             display: 'flex', gap: 10, alignItems: 'flex-start',
           }}>
@@ -736,17 +782,28 @@ function UploadCard(props) {
             onChange={function(e) { setReplaceMode(e.target.checked); }}
             style={{ marginTop: 2, cursor: 'pointer' }} />
           <label htmlFor={'replace-mode-' + props.batchType} style={{ flex: 1, cursor: 'pointer' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: replaceMode ? '#92400E' : 'var(--black)' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: replaceMode ? '#065F46' : '#92400E' }}>
               {replaceMode
-                ? 'Replace Mode ON - will delete Scheduled/Cancelled rows in file range (Completed/Missed preserved)'
-                : 'Replace Mode OFF (default) - safe append + upsert'}
+                ? 'Reconcile ON (recommended) - the schedule will match this file exactly'
+                : 'Reconcile OFF - add-only, stale visits will build up'}
             </div>
             <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 3, lineHeight: 1.4 }}>
-              Default behavior is now safe append. Only turn Replace Mode ON if you have a
-              specific reason — e.g. Pariox sent a corrected schedule and you want to clear
-              stale scheduled/cancelled rows. <strong>Completed and Missed visits will NEVER be
-              deleted</strong> even when this is ON; they are billing-event history and
-              survive any re-upload. A confirmation dialog runs before any delete.
+              {replaceMode ? (
+                <>
+                  The upload is read as the current state of the schedule: visits it no longer
+                  lists are cleared, changed visits are updated, new ones are added.
+                  <strong> Completed and Missed visits are never deleted</strong> — they are
+                  billing history and survive every upload. If the file looks too small to be a
+                  full export, the upload stops and asks first.
+                </>
+              ) : (
+                <>
+                  Add-only. Visits Pariox has since cancelled, rescheduled, or reassigned stay in
+                  the system forever, so booked-visit counts drift upward — this is what made
+                  Director Command read 935 booked when the real schedule showed 764.
+                  <strong> Only turn this off for a partial or single-region file.</strong>
+                </>
+              )}
             </div>
           </label>
         </div>

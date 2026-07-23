@@ -193,6 +193,32 @@ codebase, and they have different rules:
 - Same-day round trips are netted by `collapseDay()`, but the real churn is cross-day,
   so movements from cycling patients are tagged `unstable` and greyed rather than hidden.
 
+### Visit upload = RECONCILE, not append (added 2026-07-23)
+- Liam: *"that should just be an upload that the system reviews the file and updates the
+  current data that is in there with any changes."* Reconcile is now **default ON** for
+  visit uploads. The upload is treated as the current state of the schedule.
+- **Judge the file by ITSELF, never against the DB.** The first attempt at a coverage
+  guard compared file rows to rows already in the range — but that range is exactly what
+  is bloated with stale rows, so a correct 759-row export scored 52% against 1,452
+  accumulated rows and would have been rejected. Circular. The working signal is the
+  file's own busiest day:
+  - real Pariox exports: busiest day **143-209** rows
+  - partial / corrections files: busiest day **1-50** rows
+  - threshold `FULL_EXPORT_MIN_ROWS_IN_A_DAY = 60` sits in that gap
+  Below the threshold the upload adds and updates but **never deletes**.
+- **Reconcile only the dates the file actually covers**, day by day. The old range-based
+  delete (min..max) would wipe Tue-Thu for a file covering only Mon and Fri.
+- **Completed and Missed are never deleted.** This is the 2026-06-06 lesson (incident 11)
+  and it is not negotiable — Pariox's window is rolling, so a completed visit that has
+  dropped off the export will never be re-inserted.
+- **Census upload already reconciled correctly** and was never the problem: it diffs each
+  row against the previous roster, updates `status`, stamps `status_changed_at`, and
+  writes `census_status_log`. That is why the flow board has good data.
+- Once a few clean reconciled uploads have run, the reader-side
+  `dedupVisitsByAuthoritativeBatch()` becomes redundant and every page can go back to
+  plain `dedupVisitsByLatestUpload()`. Do NOT retire it before then — historical bloat
+  for dates Pariox no longer exports will not self-heal.
+
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
   in production and supabase-js silently truncates:
