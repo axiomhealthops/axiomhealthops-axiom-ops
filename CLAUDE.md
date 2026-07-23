@@ -256,6 +256,51 @@ codebase, and they have different rules:
   history. They inflate "fell out" counts and the repeated-status list on the flow board
   until they age out of the 14/30-day windows.
 
+### Superseded data is ARCHIVED, never deleted (2026-07-23)
+Liam: *"i dont want to delete anything i just want to archive the data that is no longer
+valid and have it only show the most accurate data."*
+
+Invalid rows move to `census_status_log_archive` / `visit_schedule_data_archive`, each
+carrying `archived_at` and a plain-English `archive_reason`. The live tables hold only
+current data, so **every existing reader is correct with no code change**.
+
+| | Live | Archived | Reconciles to snapshot |
+|---|---|---|---|
+| `census_status_log` | 4,973 | 5,361 | 10,334 ✓ |
+| `visit_schedule_data` | 24,675 | 1,209 | 25,884 ✓ |
+| Completed / Missed visits | 20,629 | **0** | never archived |
+
+**Why archive tables and not an `archived_at` flag on the live rows:** eight-plus pages
+read `visit_schedule_data` directly. A flag would keep showing stale rows anywhere a
+filter was forgotten — the exact failure we were fixing. Moving rows out is correct by
+construction.
+
+Archive reasons in use: `phantom repeat` (identical transition re-logged on 5+ days
+because the census upsert kept failing), `superseded by a known outcome on the same slot`,
+`reconcile residue`, `duplicate scheduled row`.
+
+Restore anything with `INSERT INTO <live table> SELECT <original columns> FROM
+<archive table> WHERE id = ...`. Pre-change snapshots also remain as
+`*_backup_20260723`; those are redundant once live+archive reconciles and may be dropped.
+
+**RLS:** archive and snapshot tables hold the same PHI as their source and were created
+WITHOUT row-level security. Fixed in `enable_rls_on_archive_and_backup_tables` — they now
+carry the same `is_active_coordinator()` policy. **Any new table cloned from a
+patient table needs RLS enabled explicitly; `CREATE TABLE ... (LIKE ...)` does not
+inherit it.**
+
+**REJECTED, and worth remembering why:** rewriting `census_data.status` from the newest
+`census_status_log` row. 269 rows disagreed and it looked like the obvious fix, but
+sampling proved the log is NOT a reliable source of current truth — 30 patients sit at
+`Discharge` in census while their newest log row says `Active` from May/June, because the
+discharge happened later and was never logged. Applying it would have resurrected 30
+discharged patients as Active. **The authoritative source for current status is the next
+census upload**, which now applies correctly after the dedupe fix.
+
+Verified after: booked visits wk of 2026-07-19 went 1,156 -> 717 (Pariox showed 764);
+flow board "cycling" list ~51 -> 12; Medicare sync needed 0 corrections; named conversions
+intact with cleaner denominators (Eval->Active 5 of 13 = 38%, was 5 of 16 = 31%).
+
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
   in production and supabase-js silently truncates:
