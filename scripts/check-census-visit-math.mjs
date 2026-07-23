@@ -759,5 +759,63 @@ const teams=movementsByTeam(board.movements);
 eq('activation routes to clinical', teams.clinical.filter(m=>m.toStage==='active').length, 1);
 eq('eval move routes to care coord', teams.care_coord.filter(m=>m.toStage==='eval_pending').length, 1);
 
+// --- Conversion reporting (2026-07-23) -------------------------------
+// Every conversion carries a denominator. Week of 2026-07-19 in production:
+// 5 patients went Eval Pending -> Active, but 16 LEFT Eval Pending, so the
+// activation rate was 31% and 11 leaked elsewhere. A bare "5" hides that.
+const {transitionsInRange,measureConversion,measureAllConversions,pairMatrix,
+       conversionExportRows,NAMED_CONVERSIONS} = await import(R+'patientFlow.js');
+const CV=(pt,from,to,at)=>({patient_name:pt,old_status:from,new_status:to,changed_at:at,region:'A'});
+
+const convLog=[
+  CV('A','Eval Pending','Active','2026-07-20T09:00:00Z'),
+  CV('B','Eval Pending','Active','2026-07-21T09:00:00Z'),
+  CV('C','Eval Pending','Discharge','2026-07-21T09:00:00Z'),   // leaked
+  CV('D','Eval Pending','SOC Pending','2026-07-22T09:00:00Z'), // leaked backwards
+  CV('E','SOC Pending','Auth Pending','2026-07-22T09:00:00Z'),
+  CV('A','Eval Pending','Active','2026-07-23T09:00:00Z'),      // SAME patient repeats
+];
+const tr=transitionsInRange(convLog,'2026-07-19','2026-07-25');
+const evalToActive=measureConversion(tr,NAMED_CONVERSIONS.find(c=>c.key==='eval_to_active'));
+eq('conversion counts DISTINCT patients', evalToActive.patients, 2);
+eq('repeat move still counted as an event', evalToActive.events, 3);
+eq('denominator = everyone who left the stage', evalToActive.leftSource, 4);
+eq('rate is patients over leftSource', Math.round(evalToActive.rate*100), 50);
+
+const socToAuth=measureConversion(tr,NAMED_CONVERSIONS.find(c=>c.key==='soc_to_auth'));
+eq('second named conversion measured', socToAuth.patients, 1);
+
+// A truncated Pariox status must still land in the right conversion.
+eq('truncated source status counted',
+  measureConversion(transitionsInRange([CV('T','Active - Auth Pendin','Active','2026-07-20T09:00:00Z')],
+    '2026-07-19','2026-07-25'), NAMED_CONVERSIONS.find(c=>c.key==='activeauth_to_active')).patients, 1);
+
+// Range filtering is inclusive on both ends.
+eq('range excludes earlier days',
+  transitionsInRange(convLog,'2026-07-22','2026-07-25').length, 3);
+eq('range is inclusive of the end day',
+  transitionsInRange(convLog,'2026-07-23','2026-07-23').length, 1);
+
+// Nobody left the stage -> rate is null, never 0 or NaN.
+eq('empty denominator yields null rate',
+  measureConversion(transitionsInRange([],'2026-07-19','2026-07-25'),
+    NAMED_CONVERSIONS[0]).rate, null);
+
+// Matrix + export
+const mtx=pairMatrix(tr);
+eq('matrix ranks by distinct patients', mtx[0].patients, 2);
+eq('matrix pair label reads from -> to', mtx[0].fromStatus, 'Eval Pending');
+eq('export emits one row per real move', conversionExportRows(tr).length, 6);
+eq('export names the owning team',
+  conversionExportRows(tr).find(r=>r.To==='Auth Pending')['Owning Team'], 'Authorization');
+
+// A same-status rewrite is not a move and must not pollute either view.
+eq('same-status rewrite excluded from matrix',
+  pairMatrix(transitionsInRange([CV('Z','Active','Active','2026-07-20T09:00:00Z')],
+    '2026-07-19','2026-07-25')).length, 0);
+eq('same-status rewrite excluded from export',
+  conversionExportRows(transitionsInRange([CV('Z','Active','Active','2026-07-20T09:00:00Z')],
+    '2026-07-19','2026-07-25')).length, 0);
+
 console.log(fail?`\n${fail} FAILED`:'\nAll assertions passed');
 process.exit(fail?1:0);

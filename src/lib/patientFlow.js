@@ -357,3 +357,149 @@ export const TEAM_LABELS = {
   clinical: 'Clinical',
   other: 'Unclassified',
 };
+
+// =====================================================================
+// CONVERSION REPORTING (2026-07-23)
+//
+// Liam: "I need to have the ability to pull out a report of how many went
+// from eval pending to active so I can see exactly how many patients that
+// were scheduled for evaluation were activated this week ... Same thing
+// for how many patients went from SOC pending to auth pending by the end
+// of the day, end of the week."
+//
+// WHY EVERY CONVERSION CARRIES A DENOMINATOR
+// ------------------------------------------
+// A bare count hides the thing worth acting on. Week of 2026-07-19:
+//   Eval Pending -> Active .................  5 patients
+//   left Eval Pending for ANY status ....... 16 patients
+// So the activation rate was 31% and 11 patients went somewhere else
+// (Discharge, back to SOC Pending, On Hold). "5 activated" reads like a
+// slow week; "5 of 16, and 11 leaked" is a conversation with the Care
+// Coord and Clinical leads. Every conversion below reports both.
+//
+// COUNT DISTINCT PATIENTS, NOT EVENTS. The same patient can make the same
+// transition repeatedly — Active -> Discharge-Change-Insurance shows 18
+// patients across 50 events in one week. Patients is the honest headline;
+// events is kept alongside so repeat churn is visible rather than hidden.
+// =====================================================================
+
+/** The conversions Liam asked for by name, plus the rest of the pipeline. */
+export const NAMED_CONVERSIONS = [
+  { key: 'eval_to_active',   from: 'eval_pending', to: 'active',       label: 'Eval Pending → Active',        blurb: 'evaluations that became active patients', team: 'clinical' },
+  { key: 'soc_to_auth',      from: 'soc_pending',  to: 'auth_pending', label: 'SOC Pending → Auth Pending',   blurb: 'new charts handed to authorization',      team: 'auth' },
+  { key: 'soc_to_eval',      from: 'soc_pending',  to: 'eval_pending', label: 'SOC Pending → Eval Pending',   blurb: 'new charts scheduled for evaluation',     team: 'care_coord' },
+  { key: 'auth_to_active',   from: 'auth_pending', to: 'active',       label: 'Auth Pending → Active',        blurb: 'authorizations cleared into treatment',   team: 'auth' },
+  { key: 'activeauth_to_active', from: 'active_auth', to: 'active',    label: 'Active/Auth → Active',         blurb: 'auth resolved while already treating',    team: 'auth' },
+  { key: 'waitlist_to_eval', from: 'waitlist',     to: 'eval_pending', label: 'Waitlist → Eval Pending',      blurb: 'waitlisted patients finally scheduled',   team: 'care_coord' },
+];
+
+/**
+ * Normalize + stage-map every log row inside [startDate, endDate] inclusive.
+ * Dates are YYYY-MM-DD and compared as strings, which is safe for ISO.
+ */
+export function transitionsInRange(log, startDate, endDate) {
+  const out = [];
+  for (const r of log || []) {
+    if (!r || !r.changed_at) continue;
+    const d = dayOf(r.changed_at);
+    if (startDate && d < startDate) continue;
+    if (endDate && d > endDate) continue;
+    out.push({
+      patient: r.patient_name,
+      pk: pkOf(r.patient_name),
+      region: r.region || null,
+      fromStatus: normalizeStatus(r.old_status),
+      toStatus: normalizeStatus(r.new_status),
+      fromStage: stageOf(r.old_status),
+      toStage: stageOf(r.new_status),
+      at: r.changed_at,
+      day: d,
+    });
+  }
+  return out;
+}
+
+/**
+ * One conversion metric.
+ *
+ * @returns {{key,label,blurb,team,from,to,
+ *            patients:number, events:number,
+ *            leftSource:number, rate:number|null,
+ *            detail:Array}}
+ *   patients   distinct patients who made this exact move
+ *   events     raw transitions (>= patients when someone repeats it)
+ *   leftSource distinct patients who left the `from` stage for ANY status
+ *   rate       patients / leftSource — null when nobody left the stage
+ */
+export function measureConversion(transitions, def) {
+  const made = new Map();
+  let events = 0;
+  const leftSource = new Set();
+
+  for (const t of transitions || []) {
+    if (t.fromStage === def.from) {
+      // Moving within the same stage (a status rename) is not leaving it.
+      if (t.toStage !== def.from) leftSource.add(t.pk);
+    }
+    if (t.fromStage === def.from && t.toStage === def.to) {
+      events++;
+      if (!made.has(t.pk)) made.set(t.pk, t);
+    }
+  }
+
+  const patients = made.size;
+  return {
+    key: def.key, label: def.label, blurb: def.blurb, team: def.team,
+    from: def.from, to: def.to,
+    patients, events,
+    leftSource: leftSource.size,
+    rate: leftSource.size > 0 ? patients / leftSource.size : null,
+    detail: Array.from(made.values()).sort((a, b) => String(a.at).localeCompare(String(b.at))),
+  };
+}
+
+/** All named conversions for a period. */
+export function measureAllConversions(transitions) {
+  return NAMED_CONVERSIONS.map((d) => measureConversion(transitions, d));
+}
+
+/**
+ * Every observed from->to pair, distinct patients descending. Powers the
+ * "everything else" table and the export, so a move nobody thought to name
+ * is still visible.
+ */
+export function pairMatrix(transitions) {
+  const map = new Map();
+  for (const t of transitions || []) {
+    const from = t.fromStatus || '(new chart)';
+    const to = t.toStatus || '(none)';
+    if (from === to) continue; // same-status rewrite, not a move
+    const k = from + ' → ' + to;
+    if (!map.has(k)) map.set(k, { pair: k, fromStatus: from, toStatus: to, patients: new Set(), events: 0 });
+    const e = map.get(k);
+    e.patients.add(t.pk);
+    e.events++;
+  }
+  return Array.from(map.values())
+    .map((e) => ({ pair: e.pair, fromStatus: e.fromStatus, toStatus: e.toStatus,
+                   patients: e.patients.size, events: e.events }))
+    .sort((a, b) => b.patients - a.patients || b.events - a.events);
+}
+
+/** Flat patient-level rows for the XLSX export. */
+export function conversionExportRows(transitions) {
+  return (transitions || [])
+    .filter((t) => t.fromStatus !== t.toStatus)
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+    .map((t) => ({
+      Date: t.day,
+      Patient: t.patient,
+      Region: t.region || '',
+      From: t.fromStatus || '(new chart)',
+      To: t.toStatus || '',
+      Movement: (t.fromStatus || '(new chart)') + ' → ' + (t.toStatus || ''),
+      'Owning Team': t.toStage && stageDef(t.toStage)
+        ? (TEAM_LABELS[stageDef(t.toStage).team] || '') : '',
+      'Changed At': t.at,
+    }));
+}

@@ -219,6 +219,22 @@ codebase, and they have different rules:
   plain `dedupVisitsByLatestUpload()`. Do NOT retire it before then — historical bloat
   for dates Pariox no longer exports will not self-heal.
 
+### Status conversions (added 2026-07-23)
+- `measureConversion()` in `patientFlow.js` powers the "how many went from X to Y" tiles.
+- **Every conversion carries a denominator.** The bare count is the misleading half.
+  Week of 2026-07-19: 5 patients went Eval Pending -> Active, but **16 left Eval Pending**,
+  so 11 leaked to Discharge or backwards and the real activation rate was 31%.
+  `patients` / `leftSource` / `rate` are always reported together.
+- **Count DISTINCT patients, not events.** The same patient repeats the same move
+  constantly — `Active -> Discharge-Change-Insurance` was 18 patients across 50 events in
+  one week. `events` is kept alongside so repeat churn stays visible.
+- Conversions are DIRECT transitions only. A patient going Eval Pending -> Auth Pending ->
+  Active does not count in Eval->Active. Direct pairs match how Liam phrases the question
+  ("how many went from X to Y") and are unambiguous; the funnel view lives in
+  `buildFlowBoard().totals.activated`, which was 26 for the same week vs 5 direct.
+- Export writes three sheets: Conversions (summary), All Movements (full pair matrix),
+  Patient Detail (row per move). Weeks are Sun-Sat per project convention.
+
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
   in production and supabase-js silently truncates:

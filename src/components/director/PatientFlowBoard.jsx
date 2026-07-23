@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import {
   buildFlowBoard, movementsByTeam, TEAM_LABELS, latestActivityDate,
 } from '../../lib/patientFlow';
+// 2026-07-23: named conversion counts with denominators + XLSX export.
+import ConversionPanel from './ConversionPanel';
 
 // =====================================================================
 // PatientFlowBoard — daily patient progression (2026-07-21)
@@ -263,7 +265,13 @@ export default function PatientFlowBoard({ census, statusLog, onNavigate }) {
           )}
         </div>
 
-        {/* 3. MOVEMENTS BY TEAM — the call list */}
+        {/* 3. CONVERSIONS — "how many went from X to Y", with the
+            denominator that makes the number mean something. Has its own
+            period control because the question is inherently a range
+            ("this week", "end of day") while the rail above is a snapshot. */}
+        <ConversionPanel statusLog={statusLog} latestDay={board.date} />
+
+        {/* 4. MOVEMENTS BY TEAM — the call list */}
         {t.moved > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
             {['care_coord', 'auth', 'clinical', 'other'].map((team) => {
@@ -288,7 +296,7 @@ export default function PatientFlowBoard({ census, statusLog, onNavigate }) {
           </div>
         )}
 
-        {/* 4. FLAPPERS — a status flipping repeatedly is a data problem, not
+        {/* 5. FLAPPERS — a status flipping repeatedly is a data problem, not
             care progress, and it is why the feed above is netted per day. */}
         {board.flappers.length > 0 && (
           <div style={{ background: '#FFFBEB', border: `1px solid ${WARN}`, borderRadius: 8, padding: '10px 14px' }}>
