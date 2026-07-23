@@ -302,13 +302,16 @@ export default function PatientFlowBoard({ census, statusLog, onNavigate }) {
           <div style={{ background: '#FFFBEB', border: `1px solid ${WARN}`, borderRadius: 8, padding: '10px 14px' }}>
             <div style={{ fontSize: 11, fontWeight: 800, color: '#92400E', textTransform: 'uppercase',
                           letterSpacing: '0.05em', marginBottom: 5 }}>
-              Unstable status {'·'} {board.flappers.length} patient{board.flappers.length === 1 ? '' : 's'}
+              Repeated status writes {'·'} {board.flappers.length} patient{board.flappers.length === 1 ? '' : 's'}
             </div>
             <div style={{ fontSize: 12, color: '#78350F', lineHeight: 1.5, marginBottom: 7 }}>
-              Written back into the same status 3+ separate times in 14 days. On production
-              <strong> no patient moves forward 3+ times without doubling back</strong>, so this pattern is
-              an insurance or roster problem, not care progress. Worth fixing at the source — it is
-              currently the bulk of all logged status activity.
+              The same status change re-recorded on 3+ separate days. <strong>Most of these are not
+              real patient movement.</strong> Until 2026-07-23 a duplicate patient row in the Pariox
+              census export made the whole 100-row save chunk fail silently, so the patient kept
+              their old status and the identical change was re-logged on every upload — 446 of 791
+              log rows in 14 days were these ghosts. The upload now de-duplicates and only logs a
+              change that actually saved, so this list should shrink to genuine churn. Names still
+              here after a few uploads are worth a real look.
             </div>
             <div style={{ maxHeight: 130, overflowY: 'auto' }}>
               {board.flappers.slice(0, 12).map((f, i) => (

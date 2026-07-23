@@ -235,6 +235,27 @@ codebase, and they have different rules:
 - Export writes three sheets: Conversions (summary), All Movements (full pair matrix),
   Patient Detail (row per move). Weeks are Sun-Sat per project convention.
 
+### Census upload: duplicate rows silently killed 100-row chunks (2026-07-23)
+- The Pariox census export ships some patients **twice** (11 patients across 9 of 14
+  uploads). Postgres rejects an `ON CONFLICT` upsert whose batch carries the same conflict
+  key twice — *"cannot affect row a second time"* — and it rejects the **whole 100-row
+  chunk**, not just the offender. The error was swallowed by a `console.warn`, so the
+  upload reported success while up to 100 patients kept a stale status.
+- **`census_status_log` was written regardless**, so the same phantom transition re-fired
+  on every upload forever. Measured before the fix: 75 of 231 patients with a recent
+  logged change (32%) had a status that never landed on the row, and **446 of 791 log
+  rows in 14 days were ghosts**. Alan Dabolish logged `On Hold -> On Hold - Facility` nine
+  days running while his row never left `On Hold`.
+- Fix: de-dupe by `patient_name` before the upsert (last row wins), retry a failed chunk
+  row-by-row so one bad row cannot take out 99 others, surface failures in the UI, and
+  only insert `census_status_log` rows for changes that actually saved.
+- **Any chunked upsert in this codebase needs the same three properties**: de-dupe the
+  conflict key first, isolate failures, never swallow the error. This is incident #15
+  (silent save failures) recurring in a new place.
+- Phantom rows already in `census_status_log` were NOT retro-deleted — they are audit
+  history. They inflate "fell out" counts and the repeated-status list on the flow board
+  until they age out of the 14/30-day windows.
+
 ### Supabase queries
 - **Always wrap with `fetchAllPages()`** when querying these tables — they exceed 1000 rows
   in production and supabase-js silently truncates:

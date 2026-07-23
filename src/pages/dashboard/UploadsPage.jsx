@@ -579,6 +579,39 @@ function UploadCard(props) {
           var newHospitalizations = [];
           var newCount = 0, updatedCount = 0, unchangedCount = 0;
 
+          // ── DEDUPE BY CONFLICT KEY (2026-07-23) ──────────────────────
+          // The Pariox census export ships some patients TWICE (11 patients
+          // across 9 of the last 14 uploads). Postgres rejects an ON CONFLICT
+          // upsert whose batch contains the same conflict key twice —
+          // "cannot affect row a second time" — and it rejects the WHOLE
+          // 100-row chunk, not just the offender. The error was then swallowed
+          // by a console.warn, so ~100 patients silently kept their old status
+          // while census_status_log still recorded the change.
+          //
+          // Consequence, measured before this fix: 75 of 231 patients with a
+          // recent logged change (32%) had a status that never landed on the
+          // row, and the same phantom transition re-fired on every upload
+          // forever — 446 of 791 log rows in 14 days were one of these ghosts.
+          // Alan Dabolish logged "On Hold -> On Hold - Facility" nine days
+          // running while his row never left "On Hold".
+          //
+          // Last occurrence wins: within one export the later row is the more
+          // recent state of that patient.
+          var dupeKeys = {};
+          var dedupedData = [];
+          var dupeCount = 0;
+          for (var ri = data.length - 1; ri >= 0; ri--) {
+            var dk = (data[ri].patient_name || '').toLowerCase().trim();
+            if (!dk) continue;
+            if (dupeKeys[dk]) { dupeCount++; continue; }
+            dupeKeys[dk] = true;
+            dedupedData.unshift(data[ri]);
+          }
+          if (dupeCount > 0) {
+            console.warn('[census upload] collapsed ' + dupeCount + ' duplicate patient row(s) before upsert');
+          }
+          data = dedupedData;
+
           var upsertRows = data.map(function(r) {
             var key = r.patient_name ? r.patient_name.toLowerCase().trim() : '';
             var prev = prevMap[key];
@@ -616,20 +649,48 @@ function UploadCard(props) {
             return row;
           });
 
-          // Upsert all — new patients get inserted, existing get updated
+          // Upsert all — new patients get inserted, existing get updated.
+          //
+          // 2026-07-23: errors are no longer swallowed. This was CLAUDE.md
+          // incident #15 (silent save failures) repeating: a rejected chunk
+          // only produced a console.warn, so the upload reported success
+          // while up to 100 patients kept a stale status. A failed chunk now
+          // retries row-by-row so one bad row cannot take out the other 99,
+          // and anything still failing is surfaced in the UI.
+          var failedNames = {};
+          var failedCount = 0;
           for (var i = 0; i < upsertRows.length; i += 100) {
             var chunk = upsertRows.slice(i, i + 100);
             var res = await supabase.from('census_data').upsert(chunk, {
               onConflict: 'patient_name',
               ignoreDuplicates: false,
             });
-            if (res.error) console.warn('Census upsert error:', res.error.message);
+            if (res.error) {
+              console.warn('Census chunk failed, isolating rows:', res.error.message);
+              for (var ci = 0; ci < chunk.length; ci++) {
+                var one = await supabase.from('census_data').upsert([chunk[ci]], {
+                  onConflict: 'patient_name',
+                  ignoreDuplicates: false,
+                });
+                if (one.error) {
+                  failedCount++;
+                  failedNames[(chunk[ci].patient_name || '').toLowerCase().trim()] = true;
+                  console.warn('Census row failed:', chunk[ci].patient_name, one.error.message);
+                }
+              }
+            }
             setMessage('Saving census... ' + Math.min(i + 100, upsertRows.length) + '/' + upsertRows.length);
           }
 
-          // Log status changes
-          if (statusChanges.length > 0) {
-            await supabase.from('census_status_log').insert(statusChanges);
+          // Log ONLY the changes that actually landed on a row. Logging a
+          // transition whose upsert failed is what created the phantom
+          // "cycling" patients — the same move re-recorded every single day
+          // while the patient never actually moved.
+          var landedChanges = statusChanges.filter(function(sc) {
+            return !failedNames[(sc.patient_name || '').toLowerCase().trim()];
+          });
+          if (landedChanges.length > 0) {
+            await supabase.from('census_status_log').insert(landedChanges);
           }
 
           // Auto-create hospitalization records
@@ -717,6 +778,14 @@ function UploadCard(props) {
           var { count: totalCensus } = await supabase.from('census_data').select('*', { count: 'exact', head: true });
           var { count: masterCount } = await supabase.from('patient_master').select('*', { count: 'exact', head: true });
           var msg = '✓ Census updated. ' + newCount + ' new · ' + updatedCount + ' changed · ' + unchangedCount + ' unchanged · ' + (totalCensus || '?') + ' current · ' + (masterCount || '?') + ' total historical patients.';
+          // Never report a clean run when rows were rejected — that silence
+          // is what let 75 patients hold a stale status for weeks.
+          if (dupeCount > 0) {
+            msg += ' Collapsed ' + dupeCount + ' duplicate patient row(s) in the file.';
+          }
+          if (failedCount > 0) {
+            msg += ' WARNING: ' + failedCount + ' patient row(s) could NOT be saved — their status is unchanged and was not logged. See console for names.';
+          }
           if (newHospitalizations.length > 0) msg += ' ⚠ ' + newHospitalizations.length + ' new hospitalization(s) auto-logged.';
           if (statusChanges.length > 0) msg += ' ' + statusChanges.length + ' status change(s) recorded.';
           setMessage(msg);
