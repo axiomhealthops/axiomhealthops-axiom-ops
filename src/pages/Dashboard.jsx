@@ -94,6 +94,7 @@ import PayerMarketingReportPage from './dashboard/PayerMarketingReportPage';
 // 2026-06-05: Telehealth Team Monitor (paired with R+E Monitor rebrand of
 // SchedulingAlertsPage). docs/Reassess_Eval_Telehealth_Design.md.
 import TelehealthMonitorPage from './dashboard/TelehealthMonitorPage';
+import OnboardingRampPage from './dashboard/OnboardingRampPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
@@ -176,6 +177,7 @@ const PAGE_COMPONENTS = {
   'payroll-settings':        PayrollSettingsPage,
   'payer-marketing-report':  PayerMarketingReportPage,
   'telehealth-monitor':      TelehealthMonitorPage,
+  'onboarding-ramp':         OnboardingRampPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 
