@@ -14,11 +14,11 @@ import {
 // This is a shared board read the same way by everyone, with a role lens on top
 // so each user sees their own work first and edits only their section.
 const ROLES = [
-  { key: 'all',      person: 'Liam O’Brien', role: 'Director of Operations', board: null,       owns: [] },
-  { key: 'hr',       person: 'Danielly',           role: 'HR Director',            board: 'hr',       owns: ['offer', 'paperwork'] },
-  { key: 'training', person: 'Uma Jacobs',         role: 'ADOC – Onboarding', board: 'training', owns: ['training', 'field'] },
-  { key: 'payroll',  person: 'Quinn',              role: 'Payroll Manager',        board: 'payroll',  owns: ['active'] },
-  { key: 'supply',   person: 'Earl Dimaano',       role: 'Supply Chain',           board: 'supply',   owns: [] },
+  { key: 'all',      person: 'Liam O’Brien',    role: 'Director of Operations', board: null,       owns: [] },
+  { key: 'hr',       person: 'Danielly Moura',  role: 'HR Director',            board: 'hr',       owns: ['offer', 'paperwork'] },
+  { key: 'training', person: 'Uma Jacobs',      role: 'ADOC – Onboarding',      board: 'training', owns: ['training', 'field'] },
+  { key: 'payroll',  person: 'Quinn Mäensivu',  role: 'Payroll Manager',        board: 'payroll',  owns: ['active'] },
+  { key: 'supply',   person: 'Earl Dimaano',    role: 'Supply Chain',           board: 'supply',   owns: [] },
 ];
 
 // ── shared visual atoms ──────────────────────────────────────────────────────
@@ -242,7 +242,7 @@ export default function OnboardingRampPage() {
         </div>
 
         {/* ── your worklist ─────────────────────────────────────────────────── */}
-        <SectionH>{focus === 'all' ? 'Everything blocked right now' : `${activeRole.person} — what needs you`}</SectionH>
+        <SectionH>{focus === 'all' ? 'Everything blocked right now' : `${activeRole.person.split(' ')[0]} — what needs you`}</SectionH>
         <Card>
           {worklist.length === 0
             ? <div style={{ padding: '20px', textAlign: 'center', color: 'var(--gray)', fontSize: 13 }}>Nothing needs {focus === 'all' ? 'a decision' : activeRole.person.split(' ')[0]} right now.</div>
