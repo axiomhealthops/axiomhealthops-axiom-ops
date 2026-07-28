@@ -98,6 +98,7 @@ export default function OnboardingRampPage() {
   const [err, setErr] = useState(null);
   const [selected, setSelected] = useState(null);        // hire id in the slide-over
   const [search, setSearch] = useState('');
+  const [adding, setAdding] = useState(false);
 
   const [hires, setHires] = useState([]);
   const [docs, setDocs] = useState([]);
@@ -176,6 +177,15 @@ export default function OnboardingRampPage() {
   });
   const markPayroll = (r, state) => mutate('pay' + r.pay.id, () => supabase.from('onboarding_payroll_handoffs').update({ state, sent_at: state === 'sent' ? new Date().toISOString() : r.pay.sent_at, confirmed_at: state === 'confirmed' ? new Date().toISOString() : null, confirmed_by: state === 'confirmed' ? (profile?.full_name || 'unknown') : null, updated_at: new Date().toISOString() }).eq('id', r.pay.id));
 
+  // Add a new hire to the pipeline. The row insert is all HR does — a database
+  // trigger then builds the right document set, kit, module plan and payroll row.
+  const canAdd = allAccess || canEdit('hr') || canEdit('training');
+  const addHire = (payload) => mutate('add', async () => {
+    const r = await supabase.from('onboarding_hires').insert({ ...payload, is_active: true }).select('id').single();
+    if (!r.error) setAdding(false);
+    return r;
+  });
+
   if (loading) {
     return <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}><TopBar title="Onboarding and ramp" subtitle="Loading pipeline..." /><div style={{ padding: 40, color: 'var(--gray)' }}>Loading...</div></div>;
   }
@@ -201,6 +211,7 @@ export default function OnboardingRampPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, discipline, region"
               style={{ fontSize: 13, padding: '7px 11px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--black)', width: 210 }} />
+            {canAdd && <Btn onClick={() => setAdding(true)}>+ Add new hire</Btn>}
             <Btn kind="ghost" onClick={load}>Refresh</Btn>
           </div>
         }
@@ -285,6 +296,8 @@ export default function OnboardingRampPage() {
           })}
         </div>
       </div>
+
+      {adding && <NewHireModal saving={saving === 'add'} onClose={() => setAdding(false)} onSave={addHire} />}
 
       {sel && (
         <DetailDrawer
@@ -517,6 +530,113 @@ function Gate({ ok, title, meta }) {
       <div>
         <div style={{ fontWeight: 600, fontSize: 12.5, color: 'var(--black)' }}>{title}</div>
         <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 1 }}>{meta}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── add a new hire (HR's entry point into the pipeline) ──────────────────────
+function NewHireModal({ onClose, onSave, saving }) {
+  const [f, setF] = useState({
+    full_name: '', hire_type: 'new_hire', worker_class: 'full_time',
+    discipline: '', ls_level: '', region: '', area: '', hiring_source: '',
+    start_date: '', stage: 'offer_out', notes: '',
+  });
+  const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
+  const canSave = f.full_name.trim().length > 0 && !saving;
+
+  const submit = () => {
+    if (!canSave) return;
+    onSave({
+      full_name: f.full_name.trim(),
+      hire_type: f.hire_type,
+      worker_class: f.worker_class,
+      discipline: f.discipline.trim() || null,
+      ls_level: f.ls_level.trim() || null,
+      region: f.region.trim() || null,
+      area: f.area.trim() || null,
+      hiring_source: f.hiring_source.trim() || null,
+      start_date: f.start_date || null,
+      start_date_note: f.start_date ? null : 'TBD',
+      start_date_confirmed: false,
+      stage: f.hire_type === 'status_change' && f.stage === 'offer_out' ? 'hr_docs' : f.stage,
+      acknowledged: false,
+      notes: f.notes.trim() || null,
+    });
+  };
+
+  const label = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--gray)', marginBottom: 4 };
+  const input = { width: '100%', fontSize: 13, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--black)' };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 60, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflowY: 'auto' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px, 100%)', background: 'var(--bg)', borderRadius: 14, overflow: 'hidden', boxShadow: '0 24px 64px rgba(15,23,42,0.28)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', background: 'var(--card-bg)', borderBottom: '1px solid var(--border)' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--black)' }}>Add a new hire</div>
+            <div style={{ fontSize: 12, color: 'var(--gray)', marginTop: 1 }}>Documents, kit, and training plan build themselves from what you enter.</div>
+          </div>
+          <button onClick={onClose} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 20, color: 'var(--gray)', padding: 4 }}>{'×'}</button>
+        </div>
+
+        <div style={{ padding: '18px 20px', display: 'grid', gap: 14 }}>
+          <div>
+            <span style={label}>Full name</span>
+            <input autoFocus style={input} value={f.full_name} onChange={e => set('full_name', e.target.value)} placeholder="e.g. Jordan Alvarez" />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <span style={label}>Type</span>
+              <select style={input} value={f.hire_type} onChange={e => set('hire_type', e.target.value)}>
+                <option value="new_hire">New hire (full journey)</option>
+                <option value="status_change">Status change (skips training)</option>
+              </select>
+            </div>
+            <div>
+              <span style={label}>Worker class</span>
+              <select style={input} value={f.worker_class} onChange={e => set('worker_class', e.target.value)}>
+                <option value="full_time">Full time (W-2)</option>
+                <option value="part_time">Part time (W-2)</option>
+                <option value="contractor_1099">1099 PRN contractor</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><span style={label}>Discipline</span><input style={input} value={f.discipline} onChange={e => set('discipline', e.target.value)} placeholder="PT, PTA, OT, COTA..." /></div>
+            <div><span style={label}>Ladder level</span><input style={input} value={f.ls_level} onChange={e => set('ls_level', e.target.value)} placeholder="LS1, LS2..." /></div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><span style={label}>Region</span><input style={input} value={f.region} onChange={e => set('region', e.target.value)} placeholder="A, B, G..." /></div>
+            <div><span style={label}>Hiring source</span><input style={input} value={f.hiring_source} onChange={e => set('hiring_source', e.target.value)} placeholder="Indeed, referral..." /></div>
+          </div>
+
+          <div><span style={label}>Area / territory</span><input style={input} value={f.area} onChange={e => set('area', e.target.value)} placeholder="Cities they will cover" /></div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <span style={label}>Start date</span>
+              <input type="date" style={input} value={f.start_date} onChange={e => set('start_date', e.target.value)} />
+              <div style={{ fontSize: 10.5, color: 'var(--gray)', marginTop: 3 }}>Leave blank for TBD. A date starts Earl's 5-day supply clock.</div>
+            </div>
+            <div>
+              <span style={label}>Stage</span>
+              <select style={input} value={f.stage} onChange={e => set('stage', e.target.value)}>
+                <option value="offer_out">Offer out (awaiting acceptance)</option>
+                <option value="hr_docs">Paperwork (accepted)</option>
+              </select>
+            </div>
+          </div>
+
+          <div><span style={label}>Notes</span><textarea style={{ ...input, minHeight: 60, resize: 'vertical' }} value={f.notes} onChange={e => set('notes', e.target.value)} placeholder="Anything HR should carry forward" /></div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '14px 20px', background: 'var(--card-bg)', borderTop: '1px solid var(--border)' }}>
+          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={submit} disabled={!canSave}>{saving ? 'Adding...' : 'Add to pipeline'}</Btn>
+        </div>
       </div>
     </div>
   );
