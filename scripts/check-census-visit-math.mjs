@@ -662,6 +662,148 @@ eq('resubmission collapses to one order', DUP.stats.unique, 1);
 eq('the later submission wins', DUP.rows[0].clinical_approval_status, 'denied');
 eq('duplicates are counted, not hidden', DUP.stats.duplicates, 1);
 
+// --- garmentSla.js — stage clocks + breach bands (2026-07-24) --------
+// The old flat rule (`created_at` older than 7 days -> "Stale") flagged
+// 217 of 217 production orders. Every assertion below pins one reason
+// that happened.
+const {stageClock,orderHealth,formatAge,summarize,byUrgency,STAGE_SLA_DAYS}
+  = await import(R+'garmentSla.js');
+const SLA_NOW = new Date("2026-07-24T12:00:00Z");
+const GO = (o) => ({stage:'submitted',created_at:'2026-06-16T00:00:00Z',...o});
+
+// The clock reads the column belonging to the CURRENT stage, not one
+// global timestamp. A placed order is aged from when it was placed.
+eq('placed order clocks from order_placed_date',
+  stageClock(GO({stage:'order_placed',order_placed_date:'2026-07-20'})).basis, 'order_placed_date');
+eq('submitted order clocks from field_request_date',
+  stageClock(GO({field_request_date:'2026-07-22'})).basis, 'field_request_date');
+
+// THE NULL-TIMESTAMP TRAP. final_approval_date is null on 217/217 rows,
+// so ready_to_order falls back — and the result must be flagged as a
+// floor, never reported as a measurement.
+const RTO = GO({stage:'ready_to_order',final_approval_date:null,field_request_date:'2026-06-01'});
+eq('missing approval date falls back', stageClock(RTO).basis, 'field_request_date');
+eq('the fallback is marked as a floor', stageClock(RTO).isFloor, true);
+eq('a floor renders with a plus, never as exact', formatAge(orderHealth(RTO,SLA_NOW)), '53+ d');
+eq('the preferred column is never a floor',
+  stageClock(GO({stage:'ready_to_order',final_approval_date:'2026-07-22T00:00:00Z'})).isFloor, false);
+
+// Per-stage thresholds. 8 days is a breach awaiting sign-off and
+// perfectly normal in transit — the single 7-day rule could not say so.
+eq('8 days awaiting PT/OT is a breach',
+  orderHealth(GO({field_request_date:'2026-07-16'}),SLA_NOW).health, 'breached');
+eq('8 days in transit is on track',
+  orderHealth(GO({stage:'order_placed',order_placed_date:'2026-07-16'}),SLA_NOW).health, 'ok');
+eq('at_risk fires before the breach, not after',
+  orderHealth(GO({stage:'auth_pending',clinical_approval_date:'2026-07-18T00:00:00Z'}),SLA_NOW).health, 'at_risk');
+eq('breach reports how far over', orderHealth(GO({field_request_date:'2026-07-16'}),SLA_NOW).overBy, 5);
+
+// Terminal stages have no clock and are never late.
+eq('a delivered order is done, not breached',
+  orderHealth(GO({stage:'delivered',delivery_date:'2026-01-02'}),SLA_NOW).health, 'done');
+
+// No usable date is surfaced as unknown. Defaulting it to 'ok' would
+// hide the row; defaulting to 'breached' would cry wolf.
+eq('no date yields unknown, never a silent ok',
+  orderHealth({stage:'submitted'},SLA_NOW).health, 'unknown');
+
+// The real 1936-05-30 row: an Excel serial that was never a date. It
+// must not become a 90-year-old order at the top of every sort.
+eq('an implausible date is treated as absent',
+  stageClock(GO({stage:'order_placed',order_placed_date:'1936-05-30',created_at:'2026-07-22T00:00:00Z'})).basis,
+  'created_at');
+
+// Rollup: tiles and columns come from one pass so they cannot disagree.
+const BOARD=[
+  GO({stage:'order_placed',order_placed_date:'2026-07-20',garment_cost:100,vendor_eta_date:null,patient_id:'p'}),
+  GO({stage:'order_placed',order_placed_date:'2026-05-01',garment_cost:50,vendor:'Sigvaris',vendor_eta_date:'2026-06-01',patient_id:'p'}),
+  GO({stage:'ready_to_order',field_request_date:'2026-07-23',garment_cost:70,patient_id:'p'}),
+  GO({stage:'delivered',delivery_date:'2026-07-10',garment_cost:200,patient_id:null}),
+];
+const SUM=summarize(BOARD,SLA_NOW);
+eq('needsAction counts only stages we owe', SUM.needsAction, 1);
+eq('openValue is approved-but-not-delivered money', SUM.openValue, 220);
+eq('delivered money is not open value', SUM.byStage.delivered, 1);
+eq('in transit without an ETA is counted', SUM.inTransitNoEta, 1);
+eq('placed orders with no vendor are counted', SUM.noVendor, 1);
+eq('breached value sums only breached orders', SUM.breachedValue, 50);
+eq('unlinked patients are counted', SUM.unlinked, 1);
+eq('MTD delivery counts this month only', SUM.deliveredMtd, 1);
+
+// Worst first, so the top of the queue is the thing to do next.
+eq('urgency sorts breached ahead of on-track',
+  [...BOARD].sort(byUrgency(SLA_NOW))[0].order_placed_date, '2026-05-01');
+eq('every non-terminal stage has a target',
+  Object.keys(STAGE_SLA_DAYS).sort().join(','), 'auth_pending,order_placed,ready_to_order,submitted');
+
+// --- garmentSizeEngine.js — Sigvaris sizing (2026-07-24) -------------
+// Ported from the published size finders. Each assertion pins one branch
+// of the original `update()`, because the branches that REFUSE to give a
+// size are the clinically important ones.
+const {sizeGarment,matches,lengthBand,buildSku,supportsTool}
+  = await import(R+'garmentSizeEngine.js');
+
+// Ranges are inclusive at both ends, and they overlap on purpose.
+eq('range match is inclusive at the low end',
+  matches(29,[[29,39],[34,44]],['S','M']), ['S']);
+eq('an overlapping measurement matches both sizes',
+  matches(36,[[29,39],[34,44]],['S','M']), ['S','M']);
+
+// Length bands have real gaps between them. 33.95 is in neither.
+eq('a length inside a band names it', lengthBand(32,{Regular:[30,33.9],Tall:[34,42]}), 'Regular');
+eq('a length in the gap between bands is null',
+  lengthBand(33.95,{Regular:[30,33.9],Tall:[34,42]}), null);
+
+// The happy path: both axes agree on exactly one size.
+const OK = sizeGarment('compreflex-calf','FC',{C:30,A:20},{colour:'Black',length:32});
+eq('agreeing axes yield one size', OK.sizes, ['Small']);
+eq('one size yields an item number', OK.sku, '1401-FC-BKR');
+eq('the length band reaches the item number suffix',
+  sizeGarment('compreflex-calf','FC',{C:30,A:20},{colour:'Black',length:36}).sku, '1401-FC-BKT');
+eq('colour selects the item-number base',
+  sizeGarment('compreflex-calf','FC',{C:30,A:20},{colour:'Beige',length:32}).sku, '1411-FC-BKR');
+
+// THE BRANCH THAT MATTERS. Each axis matches, but nothing fits both.
+// The original refuses to name a size and asks for a professional
+// fitting; so must this, or the wrong garment gets ordered.
+const CONF = sizeGarment('compreflex-calf','FC',{C:63,A:20},{colour:'Black'});
+eq('conflicting axes are not resolved into a size', CONF.status, 'conflict');
+eq('a conflict never emits an item number', CONF.sku, null);
+eq('a conflict still reports the candidates', CONF.sizes.sort(), ['Small','XX Large']);
+
+// Out of range is distinct from conflict — nothing on the chart fits.
+eq('a measurement off the chart is out of range',
+  sizeGarment('compreflex-calf','FC',{C:200,A:20},{colour:'Black'}).status, 'out_of_range');
+
+// Two legitimate sizes must NOT be silently narrowed to one, and must
+// not produce an item number, because they are two different items.
+const TWO = sizeGarment('compreflex-calf','FC',{C:36},{colour:'Black',length:32});
+eq('an ambiguous single axis returns both sizes', TWO.sizes, ['Small','Medium']);
+eq('two candidate sizes yield no item number', TWO.sku, null);
+
+// No measurements is 'incomplete', never a default size.
+eq('no measurements never guesses', sizeGarment('compreflex-calf','FC',{},{}).status, 'incomplete');
+
+// Pulse stops at X Large; the five-size chart must not leak into it.
+eq('a four-size product never offers the fifth size',
+  sizeGarment('compreflex-calf','PULSE',{C:60,A:40},{colour:'Black'}).status, 'out_of_range');
+
+// The arm chart uses its own measuring points and its own length bands.
+eq('the arm chart sizes on its own axes',
+  sizeGarment('compreflex-standard-arm','ARM',{C:25,B1:24,B:22,A:15},{colour:'Black',length:40}).sizes, ['Small']);
+eq('arm length bands are Short/Regular/Long',
+  sizeGarment('compreflex-standard-arm','ARM',{C:25,B1:24,B:22,A:15},{colour:'Black',length:40}).band, 'Short');
+
+// Tools with a different sizing model are refused, not approximated.
+eq('the threshold-based Reduce chart is not claimed', supportsTool('compreflex-reduce'), false);
+eq('the profile-based Foot chart is not claimed', supportsTool('foot'), false);
+eq('an unsupported tool refuses rather than guesses',
+  sizeGarment('foot','X',{I:30},{}).status, 'unsupported');
+
+// A missing colour cannot produce a half-built item number.
+eq('no colour yields no item number', buildSku(
+  {sizes:['Small'],codeLetters:'FC',colourBase:{Black:1400}},'Small',null,'Regular'), null);
+
 // --- Patient flow board (2026-07-21) ---------------------------------
 // The collapse rule is what keeps the daily feed readable: 34 flapping
 // patients generated 589 transitions in 30 days and would otherwise bury

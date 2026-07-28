@@ -95,6 +95,7 @@ import PayerMarketingReportPage from './dashboard/PayerMarketingReportPage';
 // SchedulingAlertsPage). docs/Reassess_Eval_Telehealth_Design.md.
 import TelehealthMonitorPage from './dashboard/TelehealthMonitorPage';
 import OnboardingRampPage from './dashboard/OnboardingRampPage';
+import OnboardingJourneyPage from './dashboard/OnboardingJourneyPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
@@ -178,6 +179,7 @@ const PAGE_COMPONENTS = {
   'payer-marketing-report':  PayerMarketingReportPage,
   'telehealth-monitor':      TelehealthMonitorPage,
   'onboarding-ramp':         OnboardingRampPage,
+  'onboarding-journey':      OnboardingJourneyPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 

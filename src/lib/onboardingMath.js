@@ -174,3 +174,44 @@ export const PACE_COLOR = {
   behind:  { fg: 'var(--yellow)', bg: 'rgba(217,119,6,0.12)' },
   blocked: { fg: 'var(--danger)', bg: 'rgba(220,38,38,0.10)' },
 };
+
+// ── The journey ─────────────────────────────────────────────────────────────
+// One person moving from offer letter to active staff. This is the spine of the
+// overhauled UI: columns on the board and steps in the detail stepper both read
+// from here, so a hire can never appear in a stage the journey does not define.
+export const JOURNEY_COLUMNS = [
+  { key: 'offer',     label: 'Offer',           owner: 'Danielly', hint: 'Awaiting acceptance' },
+  { key: 'paperwork', label: 'Paperwork',       owner: 'Danielly', hint: 'HR documents' },
+  { key: 'training',  label: 'Training',        owner: 'Uma',      hint: 'Modules and quizzes' },
+  { key: 'field',     label: 'Field readiness', owner: 'Uma',      hint: 'Supervised visits' },
+  { key: 'active',    label: 'Active',          owner: 'Quinn',    hint: 'Full caseload · on payroll' },
+];
+
+// Which board column a hire currently sits in.
+export function columnForHire(hire) {
+  switch (hire.stage) {
+    case 'offer_out':          return 'offer';
+    case 'hr_docs':            return 'paperwork';
+    case 'ready_for_training':
+    case 'in_training':        return 'training';
+    case 'supervised':         return 'field';
+    case 'cleared':            return 'active';
+    default:                   return 'paperwork';
+  }
+}
+
+// A status change never enters training or field readiness, so its journey is
+// only three steps. Being explicit here keeps the stepper honest.
+export function stepsForHire(hire) {
+  if (isStatusChange(hire)) {
+    return JOURNEY_COLUMNS.filter(c => ['offer', 'paperwork', 'active'].includes(c.key));
+  }
+  return JOURNEY_COLUMNS;
+}
+
+export function stepIndexForHire(hire) {
+  const steps = stepsForHire(hire);
+  const col = columnForHire(hire);
+  const i = steps.findIndex(s => s.key === col);
+  return i < 0 ? 0 : i;
+}
