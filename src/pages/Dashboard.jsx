@@ -96,6 +96,7 @@ import PayerMarketingReportPage from './dashboard/PayerMarketingReportPage';
 import TelehealthMonitorPage from './dashboard/TelehealthMonitorPage';
 import OnboardingRampPage from './dashboard/OnboardingRampPage';
 import OnboardingJourneyPage from './dashboard/OnboardingJourneyPage';
+import OnboardingPayrollPage from './dashboard/OnboardingPayrollPage';
 // DepartmentReportsPage merged into ReportsExportPage 2026-05-17 (consolidation)
 // import DepartmentReportsPage from './dashboard/DepartmentReportsPage';
 
@@ -180,6 +181,7 @@ const PAGE_COMPONENTS = {
   'telehealth-monitor':      TelehealthMonitorPage,
   'onboarding-ramp':         OnboardingRampPage,
   'onboarding-journey':      OnboardingJourneyPage,
+  'onboarding-payroll':      OnboardingPayrollPage,
   // 'dept-reports':         DepartmentReportsPage,  // moved into ReportsExportPage
 };
 

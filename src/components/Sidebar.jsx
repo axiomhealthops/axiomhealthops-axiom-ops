@@ -20,6 +20,9 @@ const ALL_SECTIONS = [
   { key: 'SUPPLY MANAGEMENT',   label: 'SUPPLY MANAGEMENT' },
   { key: 'MARKETING',           label: 'MARKETING' },
   { key: 'PERFORMANCE',         label: 'PERFORMANCE' },
+  // 2026-07-24: HR department — onboarding tool + new-hire payroll handoff.
+  // Used by Danielly (HR), Uma (onboarding), Quinn (payroll).
+  { key: 'HUMAN RESOURCES',     label: 'HUMAN RESOURCES' },
   // 2026-06-02: New PAYROLL section per docs/Payroll_Review_Design.md (rev 2).
   // 2026-07-14: Locked to super_admin only (Liam). The variance/audit layer
   // inspects Dustin's payroll portal, so admins (Dustin, Carla, Ashley, Randi)
@@ -57,6 +60,7 @@ const PAGE_ICONS = {
   'garment-tracker': '👕',
   'my-day': '☀',
   'auth-request-form': '📄',
+  'onboarding-ramp': '🎓', 'onboarding-payroll': '💵', 'onboarding-journey': '🧭',
   users: '👥', uploads: '↑', settings: '⚙', 'insurance-settings': '🏥', 'cpt-codes-admin': '🧾', 'audit-import': '📋', 'dept-reports': '📑',
   // 2026-06-02 PAYROLL section
   'payroll-review':   '💵',
