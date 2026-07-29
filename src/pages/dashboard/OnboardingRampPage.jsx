@@ -99,6 +99,7 @@ export default function OnboardingRampPage() {
   const [selected, setSelected] = useState(null);        // hire id in the slide-over
   const [search, setSearch] = useState('');
   const [adding, setAdding] = useState(false);
+  const [hideActive, setHideActive] = useState(false);
 
   const [hires, setHires] = useState([]);
   const [docs, setDocs] = useState([]);
@@ -177,6 +178,30 @@ export default function OnboardingRampPage() {
   });
   const markPayroll = (r, state) => mutate('pay' + r.pay.id, () => supabase.from('onboarding_payroll_handoffs').update({ state, sent_at: state === 'sent' ? new Date().toISOString() : r.pay.sent_at, confirmed_at: state === 'confirmed' ? new Date().toISOString() : null, confirmed_by: state === 'confirmed' ? (profile?.full_name || 'unknown') : null, updated_at: new Date().toISOString() }).eq('id', r.pay.id));
 
+  // Move a hire directly to any stage — the manual override the guided buttons
+  // don't give you. Used to back-fill people who are already further along than
+  // the system knows. Moving to Active clears them for a full caseload.
+  const STAGE_FOR_COLUMN = { offer: 'offer_out', paperwork: 'hr_docs', training: 'in_training', field: 'supervised', active: 'cleared' };
+  const moveStage = (h, colKey) => mutate('move' + h.id, () => {
+    const now = new Date().toISOString();
+    const patch = { stage: STAGE_FOR_COLUMN[colKey], updated_at: now };
+    if (colKey === 'active') { patch.cleared_for_caseload = true; patch.cleared_at = now; patch.cleared_by = profile?.full_name || 'unknown'; }
+    else { patch.cleared_for_caseload = false; patch.cleared_at = null; }
+    if (colKey === 'training' && !h.released_to_training_at) { patch.released_to_training_at = now; patch.released_by = profile?.full_name || 'unknown'; }
+    return supabase.from('onboarding_hires').update(patch).eq('id', h.id);
+  });
+
+  // Remove a fully-onboarded person from the working board. Archives, never
+  // deletes — the record stays queryable, it just stops cluttering the pipeline.
+  const archiveHire = (h) => {
+    if (!window.confirm(`Remove ${h.full_name} from the onboarding board? They stay on record; this just clears them from the active pipeline.`)) return;
+    mutate('arch' + h.id, async () => {
+      const r = await supabase.from('onboarding_hires').update({ is_active: false, updated_at: new Date().toISOString() }).eq('id', h.id);
+      if (!r.error) setSelected(null);
+      return r;
+    });
+  };
+
   // Add a new hire to the pipeline. The row insert is all HR does — a database
   // trigger then builds the right document set, kit, module plan and payroll row.
   const canAdd = allAccess || canEdit('hr') || canEdit('training');
@@ -191,7 +216,9 @@ export default function OnboardingRampPage() {
   }
 
   const q = search.trim().toLowerCase();
-  const visible = rows.filter(r => !q || r.hire.full_name.toLowerCase().includes(q) || (r.hire.discipline || '').toLowerCase().includes(q) || (r.hire.region || '').toLowerCase().includes(q));
+  const visible = rows.filter(r =>
+    (!hideActive || r.column !== 'active') &&
+    (!q || r.hire.full_name.toLowerCase().includes(q) || (r.hire.discipline || '').toLowerCase().includes(q) || (r.hire.region || '').toLowerCase().includes(q)));
 
   const cohort = {
     total: rows.length,
@@ -211,6 +238,10 @@ export default function OnboardingRampPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, discipline, region"
               style={{ fontSize: 13, padding: '7px 11px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--black)', width: 210 }} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--gray)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={hideActive} onChange={e => setHideActive(e.target.checked)} style={{ width: 14, height: 14 }} />
+              Hide active
+            </label>
             {canAdd && <Btn onClick={() => setAdding(true)}>+ Add new hire</Btn>}
             <Btn kind="ghost" onClick={load}>Refresh</Btn>
           </div>
@@ -306,6 +337,7 @@ export default function OnboardingRampPage() {
           toggleDoc={toggleDoc} setKitState={setKitState} setModuleStatus={setModuleStatus}
           release={releaseToTraining} bump={bumpSupervised} setPreceptor={setPreceptor}
           clear={clearForCaseload} logContact={logContact} markPayroll={markPayroll}
+          moveStage={moveStage} archiveHire={archiveHire}
         />
       )}
     </div>
@@ -342,11 +374,12 @@ function HireCard({ r, onClick }) {
 
 // ── the one-person slide-over ────────────────────────────────────────────────
 function DetailDrawer(props) {
-  const { r, modules, focus, canEdit, saving, onClose, toggleDoc, setKitState, setModuleStatus, release, bump, setPreceptor, clear, logContact, markPayroll } = props;
+  const { r, modules, focus, canEdit, saving, onClose, toggleDoc, setKitState, setModuleStatus, release, bump, setPreceptor, clear, logContact, markPayroll, moveStage, archiveHire } = props;
   const h = r.hire;
   const steps = stepsForHire(h);
   const idx = stepIndexForHire(h);
   const editHr = canEdit('hr'), editTr = canEdit('training'), editSup = canEdit('supply'), editPay = canEdit('payroll');
+  const canMove = editHr || editTr;   // HR, onboarding, or all-access
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -382,6 +415,36 @@ function DetailDrawer(props) {
         <div style={{ padding: '16px 20px 40px' }}>
           {/* journey stepper */}
           <Stepper steps={steps} idx={idx} />
+
+          {/* manual stage mover — the override for back-filling reality */}
+          {canMove && (
+            <div style={{ borderRadius: 11, border: '1px solid var(--border)', background: 'var(--card-bg)', padding: '12px 14px', marginBottom: 4 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gray)', marginBottom: 8 }}>Move to stage</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {steps.map((s, i) => {
+                  const current = i === idx;
+                  return (
+                    <button key={s.key} disabled={current || saving === 'move' + h.id} onClick={() => moveStage(h, s.key)}
+                      style={{
+                        fontSize: 12, fontWeight: 600, padding: '6px 11px', borderRadius: 8, cursor: current ? 'default' : 'pointer',
+                        border: `1px solid ${current ? 'var(--ec-indigo)' : 'var(--border)'}`,
+                        background: current ? 'var(--ec-indigo)' : 'transparent',
+                        color: current ? '#fff' : 'var(--black)', opacity: saving === 'move' + h.id ? 0.6 : 1,
+                      }}>{current ? `● ${s.label}` : s.label}</button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 8, lineHeight: 1.5 }}>
+                Moving to <b>Active</b> clears them for a full caseload and files them under Active — no gates. The guided buttons below still enforce the normal path.
+              </div>
+              {editHr && (
+                <button onClick={() => archiveHire(h)} disabled={saving === 'arch' + h.id}
+                  style={{ marginTop: 10, fontSize: 11.5, fontWeight: 600, color: 'var(--danger)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                  Remove from board — fully onboarded
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Paperwork — Danielly */}
           <OwnerSection title="Paperwork" owner="Danielly, HR" locked={!editHr} highlight={focus === 'hr'}>
