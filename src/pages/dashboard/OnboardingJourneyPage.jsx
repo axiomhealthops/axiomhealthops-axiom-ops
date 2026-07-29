@@ -31,6 +31,18 @@ function SectionH({ children, style }) {
 function Check() {
   return <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.5L5 9L9.5 3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
+function Flag() {
+  return <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 1.5V11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /><path d="M3 2h6l-1.3 2L9 6H3" fill="currentColor" /></svg>;
+}
+function timeAgo(iso) {
+  if (!iso) return '';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24); if (d < 7) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
 // Who Liam should chase when a hire is stuck.
 function followUpOwner(r) {
@@ -51,21 +63,23 @@ export default function OnboardingJourneyPage() {
   const [supplies, setSupplies] = useState([]);
   const [progress, setProgress] = useState([]);
   const [payroll, setPayroll] = useState([]);
+  const [notes, setNotes] = useState([]);
   const [open, setOpen] = useState(null);
 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [h, d, s, p, pr] = await Promise.all([
+      const [h, d, s, p, pr, n] = await Promise.all([
         supabase.from('onboarding_hires').select('*').eq('is_active', true).order('start_date', { nullsFirst: false }),
         supabase.from('onboarding_documents').select('*'),
         supabase.from('onboarding_supplies').select('*'),
         supabase.from('onboarding_module_progress').select('*'),
         supabase.from('onboarding_payroll_handoffs').select('*'),
+        supabase.from('onboarding_notes').select('*').order('created_at', { ascending: false }),
       ]);
-      const bad = [h, d, s, p, pr].find(r => r.error);
+      const bad = [h, d, s, p, pr, n].find(r => r.error);
       if (bad) throw bad.error;
-      setHires(h.data || []); setDocs(d.data || []); setSupplies(s.data || []); setProgress(p.data || []); setPayroll(pr.data || []);
+      setHires(h.data || []); setDocs(d.data || []); setSupplies(s.data || []); setProgress(p.data || []); setPayroll(pr.data || []); setNotes(n.data || []);
     } catch (e) { console.error(e); setErr(e.message || 'Failed to load'); }
     finally { setLoading(false); }
   }, []);
@@ -76,8 +90,11 @@ export default function OnboardingJourneyPage() {
     const k = supplies.filter(r => r.hire_id === h.id);
     const mp = progress.filter(r => r.hire_id === h.id);
     const pay = payroll.find(p => p.hire_id === h.id) || null;
-    return { hire: h, docs: d, kit: k, mods: mp, pay, dp: docProgress(d), kp: kitProgress(k), mprog: moduleProgress(mp), pace: paceOf(h, d, mp, k), gates: rampGates(h, d, mp), column: columnForHire(h) };
-  }), [hires, docs, supplies, progress, payroll]);
+    const hnotes = notes.filter(n => n.hire_id === h.id);
+    return { hire: h, docs: d, kit: k, mods: mp, pay, notes: hnotes,
+      openBlocker: hnotes.some(n => n.is_blocker && !n.is_resolved),
+      dp: docProgress(d), kp: kitProgress(k), mprog: moduleProgress(mp), pace: paceOf(h, d, mp, k), gates: rampGates(h, d, mp), column: columnForHire(h) };
+  }), [hires, docs, supplies, progress, payroll, notes]);
 
   if (loading) return <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}><TopBar title="Onboarding journey" subtitle="Loading..." /><div style={{ padding: 40, color: 'var(--gray)' }}>Loading...</div></div>;
 
@@ -87,8 +104,8 @@ export default function OnboardingJourneyPage() {
     blocked: rows.filter(r => r.pace.key === 'blocked').length,
     active: rows.filter(r => r.hire.cleared_for_caseload).length,
   };
-  const followUp = rows.filter(r => r.pace.key !== 'ok' && !r.hire.cleared_for_caseload)
-    .sort((a, b) => (a.pace.key === 'blocked' ? -1 : 1) - (b.pace.key === 'blocked' ? -1 : 1));
+  const followUp = rows.filter(r => (r.pace.key !== 'ok' || r.openBlocker) && !r.hire.cleared_for_caseload)
+    .sort((a, b) => ((b.openBlocker ? 2 : 0) + (b.pace.key === 'blocked' ? 1 : 0)) - ((a.openBlocker ? 2 : 0) + (a.pace.key === 'blocked' ? 1 : 0)));
 
   const sel = open ? rows.find(r => r.hire.id === open) : null;
 
@@ -135,6 +152,7 @@ export default function OnboardingJourneyPage() {
                           </div>
                         </div>
                         {r.pace.key !== 'ok' && <span style={{ fontSize: 10.5, fontWeight: 700, color: c.fg }}>{r.pace.label} {'—'} {r.pace.why}</span>}
+                        {r.openBlocker && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: 'var(--danger)' }}><Flag />Blocker flagged</span>}
                       </button>
                     );
                   })}
@@ -247,7 +265,29 @@ function ReadDrawer({ r, onClose }) {
               <div style={{ fontSize: 12, color: 'var(--black)', marginTop: 4 }}>Chase {followUpOwner(r)}.</div>
             </div>
           )}
-          {h.notes && <div style={{ marginTop: 14, padding: '11px 13px', borderRadius: 9, background: 'rgba(217,119,6,0.08)', border: '1px solid rgba(217,119,6,0.25)', fontSize: 12, lineHeight: 1.55, color: 'var(--black)' }}><b>Note: </b>{h.notes}</div>}
+
+          {/* team progress notes — read only for the director */}
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--gray)', marginBottom: 8 }}>Team notes</div>
+            {(r.notes || []).length === 0
+              ? <div style={{ fontSize: 12, color: 'var(--gray)' }}>No notes from the team yet.</div>
+              : <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {r.notes.map(n => {
+                    const openBlk = n.is_blocker && !n.is_resolved;
+                    return (
+                      <div key={n.id} style={{ borderLeft: `3px solid ${openBlk ? 'var(--danger)' : n.is_blocker ? 'var(--green)' : 'var(--border)'}`, background: openBlk ? 'rgba(220,38,38,0.04)' : 'var(--bg)', borderRadius: '0 8px 8px 0', padding: '9px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--black)' }}>{n.author_name || 'Team member'}</span>
+                          <span style={{ fontSize: 11, color: 'var(--gray)' }}>{timeAgo(n.created_at)}</span>
+                          {openBlk && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--danger)', background: 'rgba(220,38,38,0.10)', padding: '2px 6px', borderRadius: 5 }}><Flag />Blocker</span>}
+                          {n.is_blocker && n.is_resolved && <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--green)', background: 'rgba(5,150,105,0.10)', padding: '2px 6px', borderRadius: 5 }}>Resolved</span>}
+                        </div>
+                        <div style={{ fontSize: 12.5, color: 'var(--black)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{n.body}</div>
+                      </div>
+                    );
+                  })}
+                </div>}
+          </div>
         </div>
       </div>
     </div>

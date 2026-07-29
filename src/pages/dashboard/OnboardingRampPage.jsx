@@ -108,12 +108,13 @@ export default function OnboardingRampPage() {
   const [progress, setProgress] = useState([]);
   const [payroll, setPayroll] = useState([]);
   const [owners, setOwners] = useState([]);
+  const [notes, setNotes] = useState([]);
   const [focus, setFocus] = useState('all');
 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [h, d, s, m, p, pr, o] = await Promise.all([
+      const [h, d, s, m, p, pr, o, n] = await Promise.all([
         supabase.from('onboarding_hires').select('*').eq('is_active', true).order('start_date', { nullsFirst: false }),
         supabase.from('onboarding_documents').select('*').order('sort_order'),
         supabase.from('onboarding_supplies').select('*').order('sort_order'),
@@ -121,11 +122,12 @@ export default function OnboardingRampPage() {
         supabase.from('onboarding_module_progress').select('*'),
         supabase.from('onboarding_payroll_handoffs').select('*'),
         supabase.from('onboarding_board_owners').select('*'),
+        supabase.from('onboarding_notes').select('*').order('created_at', { ascending: false }),
       ]);
-      const bad = [h, d, s, m, p, pr, o].find(r => r.error);
+      const bad = [h, d, s, m, p, pr, o, n].find(r => r.error);
       if (bad) throw bad.error;
       setHires(h.data || []); setDocs(d.data || []); setSupplies(s.data || []);
-      setModules(m.data || []); setProgress(p.data || []); setPayroll(pr.data || []); setOwners(o.data || []);
+      setModules(m.data || []); setProgress(p.data || []); setPayroll(pr.data || []); setOwners(o.data || []); setNotes(n.data || []);
     } catch (e) { console.error('Onboarding load failed:', e); setErr(e.message || 'Failed to load'); }
     finally { setLoading(false); }
   }, []);
@@ -148,8 +150,11 @@ export default function OnboardingRampPage() {
     const k = supplies.filter(r => r.hire_id === h.id);
     const mp = progress.filter(r => r.hire_id === h.id);
     const pay = payroll.find(p => p.hire_id === h.id) || null;
-    return { hire: h, docs: d, kit: k, mods: mp, pay, dp: docProgress(d), kp: kitProgress(k), mprog: moduleProgress(mp), pace: paceOf(h, d, mp, k), gates: rampGates(h, d, mp), column: columnForHire(h) };
-  }), [hires, docs, supplies, progress, payroll]);
+    const hnotes = notes.filter(n => n.hire_id === h.id);
+    return { hire: h, docs: d, kit: k, mods: mp, pay, notes: hnotes,
+      openBlocker: hnotes.some(n => n.is_blocker && !n.is_resolved),
+      dp: docProgress(d), kp: kitProgress(k), mprog: moduleProgress(mp), pace: paceOf(h, d, mp, k), gates: rampGates(h, d, mp), column: columnForHire(h) };
+  }), [hires, docs, supplies, progress, payroll, notes]);
 
   const rowById = useCallback((id) => rows.find(r => r.hire.id === id), [rows]);
   const activeRole = ROLES.find(r => r.key === focus) || ROLES[0];
@@ -201,6 +206,12 @@ export default function OnboardingRampPage() {
       return r;
     });
   };
+
+  // Progress notes — anyone on the team can post, and flag a blocker.
+  const addNote = (hire, body, isBlocker) => mutate('note' + hire.id, () =>
+    supabase.from('onboarding_notes').insert({ hire_id: hire.id, body, is_blocker: isBlocker, author_id: profile?.id || null, author_name: profile?.full_name || 'Team member' }));
+  const resolveNote = (note) => mutate('resolve' + note.id, () =>
+    supabase.from('onboarding_notes').update({ is_resolved: true, resolved_by: profile?.full_name || 'unknown', resolved_at: new Date().toISOString() }).eq('id', note.id));
 
   // Add a new hire to the pipeline. The row insert is all HR does — a database
   // trigger then builds the right document set, kit, module plan and payroll row.
@@ -338,6 +349,7 @@ export default function OnboardingRampPage() {
           release={releaseToTraining} bump={bumpSupervised} setPreceptor={setPreceptor}
           clear={clearForCaseload} logContact={logContact} markPayroll={markPayroll}
           moveStage={moveStage} archiveHire={archiveHire}
+          addNote={addNote} resolveNote={resolveNote} me={profile}
         />
       )}
     </div>
@@ -364,6 +376,11 @@ function HireCard({ r, onClick }) {
         </div>
       </div>
       {metric}
+      {r.openBlocker && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, color: 'var(--danger)', background: 'rgba(220,38,38,0.10)', padding: '3px 7px', borderRadius: 6, width: 'fit-content' }}>
+          <Flag />Blocker flagged
+        </span>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: isStatusChange(r.hire) ? 'var(--gray)' : 'var(--ec-indigo)' }}>{isStatusChange(r.hire) ? 'Status change' : 'New hire'}</span>
         {r.pace.key !== 'ok' && <span style={{ fontSize: 10.5, fontWeight: 700, color: c.fg }}>{r.pace.label}</span>}
@@ -372,9 +389,13 @@ function HireCard({ r, onClick }) {
   );
 }
 
+function Flag() {
+  return <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 1.5V11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /><path d="M3 2h6l-1.3 2L9 6H3" fill="currentColor" /></svg>;
+}
+
 // ── the one-person slide-over ────────────────────────────────────────────────
 function DetailDrawer(props) {
-  const { r, modules, focus, canEdit, saving, onClose, toggleDoc, setKitState, setModuleStatus, release, bump, setPreceptor, clear, logContact, markPayroll, moveStage, archiveHire } = props;
+  const { r, modules, focus, canEdit, saving, onClose, toggleDoc, setKitState, setModuleStatus, release, bump, setPreceptor, clear, logContact, markPayroll, moveStage, archiveHire, addNote, resolveNote, me } = props;
   const h = r.hire;
   const steps = stepsForHire(h);
   const idx = stepIndexForHire(h);
@@ -445,6 +466,9 @@ function DetailDrawer(props) {
               )}
             </div>
           )}
+
+          {/* Progress notes — the whole team, blockers loud */}
+          <NotesSection r={r} saving={saving} onAdd={addNote} onResolve={resolveNote} canPost={!!me?.id} />
 
           {/* Paperwork — Danielly */}
           <OwnerSection title="Paperwork" owner="Danielly, HR" locked={!editHr} highlight={focus === 'hr'}>
@@ -544,6 +568,76 @@ function DetailDrawer(props) {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24); if (d < 7) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function NotesSection({ r, saving, onAdd, onResolve, canPost }) {
+  const [body, setBody] = useState('');
+  const [blocker, setBlocker] = useState(false);
+  const notes = r.notes || [];
+  const busy = saving === 'note' + r.hire.id;
+  const submit = () => {
+    if (!body.trim() || busy) return;
+    onAdd(r.hire, body.trim(), blocker);
+    setBody(''); setBlocker(false);
+  };
+  return (
+    <div style={{ marginTop: 16, borderRadius: 11, border: `1px solid ${r.openBlocker ? 'var(--danger)' : 'var(--border)'}`, background: 'var(--card-bg)', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--border)', background: r.openBlocker ? 'rgba(220,38,38,0.05)' : 'var(--bg)' }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--black)' }}>Progress notes</div>
+        {r.openBlocker && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: 'var(--danger)' }}><Flag />Blocked</span>}
+      </div>
+      <div style={{ padding: '12px 14px' }}>
+        {canPost && (
+          <div style={{ marginBottom: notes.length ? 14 : 0 }}>
+            <textarea value={body} onChange={e => setBody(e.target.value)} placeholder="What's happening with this clinician? Add a note the team can see."
+              style={{ width: '100%', fontSize: 12.5, padding: '9px 11px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--black)', minHeight: 54, resize: 'vertical' }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, color: blocker ? 'var(--danger)' : 'var(--gray)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={blocker} onChange={e => setBlocker(e.target.checked)} style={{ width: 14, height: 14 }} />
+                This is blocking their progress
+              </label>
+              <Btn onClick={submit} disabled={!body.trim() || busy}>{busy ? 'Posting...' : 'Add note'}</Btn>
+            </div>
+          </div>
+        )}
+        {notes.length === 0
+          ? <div style={{ fontSize: 12, color: 'var(--gray)', paddingTop: canPost ? 4 : 0 }}>No notes yet. First to spot a snag, write it here.</div>
+          : <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              {notes.map(n => {
+                const openBlk = n.is_blocker && !n.is_resolved;
+                return (
+                  <div key={n.id} style={{ borderLeft: `3px solid ${openBlk ? 'var(--danger)' : n.is_blocker ? 'var(--green)' : 'var(--border)'}`, background: openBlk ? 'rgba(220,38,38,0.04)' : 'var(--bg)', borderRadius: '0 8px 8px 0', padding: '9px 12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--black)' }}>{n.author_name || 'Team member'}</span>
+                      <span style={{ fontSize: 11, color: 'var(--gray)' }}>{timeAgo(n.created_at)}</span>
+                      {openBlk && <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--danger)', background: 'rgba(220,38,38,0.10)', padding: '2px 6px', borderRadius: 5 }}>Blocker</span>}
+                      {n.is_blocker && n.is_resolved && <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--green)', background: 'rgba(5,150,105,0.10)', padding: '2px 6px', borderRadius: 5 }}>Resolved</span>}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: 'var(--black)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{n.body}</div>
+                    {openBlk && canPost && (
+                      <button onClick={() => onResolve(n)} disabled={saving === 'resolve' + n.id}
+                        style={{ marginTop: 7, fontSize: 11.5, fontWeight: 600, color: 'var(--green)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                        Mark resolved
+                      </button>
+                    )}
+                    {n.is_resolved && n.resolved_by && <div style={{ fontSize: 10.5, color: 'var(--gray)', marginTop: 4 }}>Resolved by {n.resolved_by}</div>}
+                  </div>
+                );
+              })}
+            </div>}
       </div>
     </div>
   );
