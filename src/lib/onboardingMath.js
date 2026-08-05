@@ -132,6 +132,7 @@ export function rampGates(hire, docs, mods) {
 // Pace is judged against the day, not against a bare percentage. 35 percent on
 // day 8 is blocked; 35 percent on day 3 is fine.
 export function paceOf(hire, docs, mods, kit) {
+  if (hire.stage === 'withdrawn') return { key: 'hold', label: 'On hold', why: 'Paused' };
   if (hire.cleared_for_caseload) return { key: 'ok', label: 'Cleared', why: 'Full caseload' };
 
   const started = hire.start_date && daysUntil(hire.start_date) <= 0;
@@ -173,6 +174,7 @@ export const PACE_COLOR = {
   ok:      { fg: 'var(--green)',  bg: 'rgba(5,150,105,0.10)' },
   behind:  { fg: 'var(--yellow)', bg: 'rgba(217,119,6,0.12)' },
   blocked: { fg: 'var(--danger)', bg: 'rgba(220,38,38,0.10)' },
+  hold:    { fg: 'var(--gray)',   bg: 'rgba(71,85,105,0.12)' },
 };
 
 // ── The journey ─────────────────────────────────────────────────────────────
@@ -187,7 +189,9 @@ export const JOURNEY_COLUMNS = [
   { key: 'active',    label: 'Active',          owner: 'Quinn',    hint: 'Full caseload · on payroll' },
 ];
 
-// Which board column a hire currently sits in.
+// Which board column a hire currently sits in. 'withdrawn' means pulled out of
+// the linear journey — we surface those as "On hold" in their own section, not
+// one of the five journey columns.
 export function columnForHire(hire) {
   switch (hire.stage) {
     case 'offer_out':          return 'offer';
@@ -196,8 +200,17 @@ export function columnForHire(hire) {
     case 'in_training':        return 'training';
     case 'supervised':         return 'field';
     case 'cleared':            return 'active';
+    case 'withdrawn':          return 'on_hold';
     default:                   return 'paperwork';
   }
+}
+
+// On hold = paused in-place (stays on the board). No longer moving forward =
+// dropped (archived off the board with a reason). Both use the existing schema:
+// on hold is stage 'withdrawn' while is_active stays true; dropped sets
+// is_active false. No new column needed.
+export function isOnHold(hire) {
+  return hire?.stage === 'withdrawn';
 }
 
 // A status change never enters training or field readiness, so its journey is

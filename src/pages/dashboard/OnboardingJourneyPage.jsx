@@ -99,12 +99,14 @@ export default function OnboardingJourneyPage() {
   if (loading) return <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}><TopBar title="Onboarding journey" subtitle="Loading..." /><div style={{ padding: 40, color: 'var(--gray)' }}>Loading...</div></div>;
 
   const cohort = {
-    total: rows.length,
-    soon: rows.filter(r => { const d = daysUntil(r.hire.start_date); return d !== null && d >= 0 && d <= 7; }).length,
+    total: rows.filter(r => r.column !== 'on_hold').length,
+    soon: rows.filter(r => r.column !== 'on_hold' && (() => { const d = daysUntil(r.hire.start_date); return d !== null && d >= 0 && d <= 7; })()).length,
     blocked: rows.filter(r => r.pace.key === 'blocked').length,
     active: rows.filter(r => r.hire.cleared_for_caseload).length,
+    onHold: rows.filter(r => r.column === 'on_hold').length,
   };
-  const followUp = rows.filter(r => (r.pace.key !== 'ok' || r.openBlocker) && !r.hire.cleared_for_caseload)
+  const held = rows.filter(r => r.column === 'on_hold');
+  const followUp = rows.filter(r => (r.pace.key !== 'ok' || r.openBlocker) && !r.hire.cleared_for_caseload && r.column !== 'on_hold')
     .sort((a, b) => ((b.openBlocker ? 2 : 0) + (b.pace.key === 'blocked' ? 1 : 0)) - ((a.openBlocker ? 2 : 0) + (a.pace.key === 'blocked' ? 1 : 0)));
 
   const sel = open ? rows.find(r => r.hire.id === open) : null;
@@ -122,6 +124,7 @@ export default function OnboardingJourneyPage() {
           <Kpi tone="warn" label="Starting within 7 days" value={cohort.soon} foot="Docs and kit must be ready" />
           <Kpi tone="risk" label="Blocked" value={cohort.blocked} foot="Someone needs a nudge from you" />
           <Kpi tone="info" label="Active on caseload" value={cohort.active} foot="Reached the field" />
+          {cohort.onHold > 0 && <Kpi label="On hold" value={cohort.onHold} foot="Paused" />}
         </div>
 
         {/* the journey — read only */}
@@ -162,6 +165,25 @@ export default function OnboardingJourneyPage() {
             );
           })}
         </div>
+
+        {/* on hold — paused, for awareness */}
+        {held.length > 0 && (
+          <>
+            <SectionH>On hold {'—'} paused</SectionH>
+            <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+              {held.map(r => (
+                <button key={r.hire.id} onClick={() => setOpen(r.hire.id)} style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 15px', borderBottom: '1px solid var(--border)', background: 'transparent', cursor: 'pointer' }}>
+                  <Avatar hire={r.hire} size={30} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--black)' }}>{r.hire.full_name}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--gray)' }}>{[r.hire.discipline, r.hire.region && `Region ${r.hire.region}`].filter(Boolean).join(' · ') || 'Details TBD'}</div>
+                  </div>
+                  {(r.notes || [])[0] && <div style={{ fontSize: 11.5, color: 'var(--gray)', maxWidth: '50%', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(r.notes || [])[0].body}</div>}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         {/* follow-up: who to chase */}
         <SectionH>Needs your follow-up {'—'} and who to chase</SectionH>

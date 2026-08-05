@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import {
   STAGE_LABEL, DOC_SET_LABEL, WORKER_CLASS_LABEL, SUPPLY_STATE_LABEL,
-  JOURNEY_COLUMNS, columnForHire, stepsForHire, stepIndexForHire,
+  JOURNEY_COLUMNS, columnForHire, stepsForHire, stepIndexForHire, isOnHold,
   entersTraining, isStatusChange, daysSince, daysUntil, fmtDate, startLabel,
   hasNoStartDate, docProgress, kitProgress, moduleProgress, rampGates, paceOf,
   PACE_COLOR,
@@ -207,6 +207,33 @@ export default function OnboardingRampPage() {
     });
   };
 
+  // Put a hire on hold — paused in place, stays on the board, resumable. Their
+  // stage before the hold is captured in the note so anyone can put them back.
+  const putOnHold = (h) => {
+    const reason = window.prompt(`Put ${h.full_name} on hold. Reason (optional):`, '');
+    if (reason === null) return;
+    mutate('hold' + h.id, async () => {
+      const from = STAGE_LABEL[h.stage] || h.stage;
+      const r = await supabase.from('onboarding_hires').update({ stage: 'withdrawn', updated_at: new Date().toISOString() }).eq('id', h.id);
+      if (!r.error) await supabase.from('onboarding_notes').insert({ hire_id: h.id, body: `Placed on hold (was in ${from}).${reason ? ' ' + reason : ''}`, is_blocker: false, author_id: profile?.id || null, author_name: profile?.full_name || 'Team member' });
+      return r;
+    });
+  };
+
+  // No longer moving forward — the hire dropped out. Archives them off the board
+  // with a recorded reason, distinct from "fully onboarded".
+  const dropHire = (h) => {
+    const reason = window.prompt(`Mark ${h.full_name} as no longer moving forward. Reason (optional):`, '');
+    if (reason === null) return;
+    mutate('drop' + h.id, async () => {
+      const r1 = await supabase.from('onboarding_notes').insert({ hire_id: h.id, body: `No longer moving forward.${reason ? ' ' + reason : ''}`, is_blocker: false, author_id: profile?.id || null, author_name: profile?.full_name || 'Team member' });
+      if (r1.error) return r1;
+      const r = await supabase.from('onboarding_hires').update({ stage: 'withdrawn', is_active: false, updated_at: new Date().toISOString() }).eq('id', h.id);
+      if (!r.error) setSelected(null);
+      return r;
+    });
+  };
+
   // Progress notes — anyone on the team can post, and flag a blocker.
   const addNote = (hire, body, isBlocker) => mutate('note' + hire.id, () =>
     supabase.from('onboarding_notes').insert({ hire_id: hire.id, body, is_blocker: isBlocker, author_id: profile?.id || null, author_name: profile?.full_name || 'Team member' }));
@@ -232,10 +259,11 @@ export default function OnboardingRampPage() {
     (!q || r.hire.full_name.toLowerCase().includes(q) || (r.hire.discipline || '').toLowerCase().includes(q) || (r.hire.region || '').toLowerCase().includes(q)));
 
   const cohort = {
-    total: rows.length,
-    soon: rows.filter(r => { const d = daysUntil(r.hire.start_date); return d !== null && d >= 0 && d <= 7; }).length,
+    total: rows.filter(r => r.column !== 'on_hold').length,
+    soon: rows.filter(r => r.column !== 'on_hold' && (() => { const d = daysUntil(r.hire.start_date); return d !== null && d >= 0 && d <= 7; })()).length,
     blocked: rows.filter(r => r.pace.key === 'blocked').length,
     active: rows.filter(r => r.hire.cleared_for_caseload).length,
+    onHold: rows.filter(r => r.column === 'on_hold').length,
   };
 
   const sel = selected ? rowById(selected) : null;
@@ -292,6 +320,7 @@ export default function OnboardingRampPage() {
           <Kpi tone="warn" label="Starting within 7 days" value={cohort.soon} foot="Need docs and kit ready" />
           <Kpi tone="risk" label="Blocked" value={cohort.blocked} foot="Something is stopping them" />
           <Kpi tone="info" label="Active on caseload" value={cohort.active} foot="Reached the field" />
+          {cohort.onHold > 0 && <Kpi label="On hold" value={cohort.onHold} foot="Paused" />}
         </div>
 
         {/* ── your worklist ─────────────────────────────────────────────────── */}
@@ -337,6 +366,20 @@ export default function OnboardingRampPage() {
             );
           })}
         </div>
+
+        {/* on hold — paused, out of the linear journey but still tracked */}
+        {(() => {
+          const held = visible.filter(r => r.column === 'on_hold');
+          if (held.length === 0) return null;
+          return (
+            <>
+              <SectionH>On hold {'—'} paused, awaiting a reason to resume</SectionH>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 }}>
+                {held.map(r => <HireCard key={r.hire.id} r={r} onClick={() => setSelected(r.hire.id)} />)}
+              </div>
+            </>
+          );
+        })()}
       </div>
 
       {adding && <NewHireModal saving={saving === 'add'} onClose={() => setAdding(false)} onSave={addHire} />}
@@ -349,6 +392,7 @@ export default function OnboardingRampPage() {
           release={releaseToTraining} bump={bumpSupervised} setPreceptor={setPreceptor}
           clear={clearForCaseload} logContact={logContact} markPayroll={markPayroll}
           moveStage={moveStage} archiveHire={archiveHire}
+          putOnHold={putOnHold} dropHire={dropHire}
           addNote={addNote} resolveNote={resolveNote} me={profile}
         />
       )}
@@ -395,7 +439,7 @@ function Flag() {
 
 // ── the one-person slide-over ────────────────────────────────────────────────
 function DetailDrawer(props) {
-  const { r, modules, focus, canEdit, saving, onClose, toggleDoc, setKitState, setModuleStatus, release, bump, setPreceptor, clear, logContact, markPayroll, moveStage, archiveHire, addNote, resolveNote, me } = props;
+  const { r, modules, focus, canEdit, saving, onClose, toggleDoc, setKitState, setModuleStatus, release, bump, setPreceptor, clear, logContact, markPayroll, moveStage, archiveHire, putOnHold, dropHire, addNote, resolveNote, me } = props;
   const h = r.hire;
   const steps = stepsForHire(h);
   const idx = stepIndexForHire(h);
@@ -439,11 +483,16 @@ function DetailDrawer(props) {
 
           {/* manual stage mover — the override for back-filling reality */}
           {canMove && (
-            <div style={{ borderRadius: 11, border: '1px solid var(--border)', background: 'var(--card-bg)', padding: '12px 14px', marginBottom: 4 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gray)', marginBottom: 8 }}>Move to stage</div>
+            <div style={{ borderRadius: 11, border: `1px solid ${isOnHold(h) ? 'var(--gray)' : 'var(--border)'}`, background: 'var(--card-bg)', padding: '12px 14px', marginBottom: 4 }}>
+              {isOnHold(h) && (
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray)', background: 'rgba(71,85,105,0.10)', padding: '7px 11px', borderRadius: 8, marginBottom: 10 }}>
+                  On hold. Pick a stage below to resume, or leave paused.
+                </div>
+              )}
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gray)', marginBottom: 8 }}>{isOnHold(h) ? 'Resume to stage' : 'Move to stage'}</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {steps.map((s, i) => {
-                  const current = i === idx;
+                  const current = !isOnHold(h) && i === idx;
                   return (
                     <button key={s.key} disabled={current || saving === 'move' + h.id} onClick={() => moveStage(h, s.key)}
                       style={{
@@ -455,15 +504,29 @@ function DetailDrawer(props) {
                   );
                 })}
               </div>
-              <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 8, lineHeight: 1.5 }}>
-                Moving to <b>Active</b> clears them for a full caseload and files them under Active — no gates. The guided buttons below still enforce the normal path.
-              </div>
-              {editHr && (
-                <button onClick={() => archiveHire(h)} disabled={saving === 'arch' + h.id}
-                  style={{ marginTop: 10, fontSize: 11.5, fontWeight: 600, color: 'var(--danger)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
-                  Remove from board — fully onboarded
-                </button>
+              {!isOnHold(h) && (
+                <div style={{ fontSize: 11, color: 'var(--gray)', marginTop: 8, lineHeight: 1.5 }}>
+                  Moving to <b>Active</b> clears them for a full caseload — no gates. The guided buttons below still enforce the normal path.
+                </div>
               )}
+              <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap', borderTop: '1px solid var(--border)', paddingTop: 11 }}>
+                {!isOnHold(h) && (
+                  <button onClick={() => putOnHold(h)} disabled={saving === 'hold' + h.id}
+                    style={{ fontSize: 12, fontWeight: 600, padding: '6px 11px', borderRadius: 8, cursor: 'pointer', border: '1px solid var(--border)', background: 'transparent', color: 'var(--gray)' }}>
+                    Put on hold
+                  </button>
+                )}
+                <button onClick={() => dropHire(h)} disabled={saving === 'drop' + h.id}
+                  style={{ fontSize: 12, fontWeight: 600, padding: '6px 11px', borderRadius: 8, cursor: 'pointer', border: '1px solid var(--danger)', background: 'transparent', color: 'var(--danger)' }}>
+                  No longer moving forward
+                </button>
+                {editHr && (
+                  <button onClick={() => archiveHire(h)} disabled={saving === 'arch' + h.id}
+                    style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gray)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '6px 4px', marginLeft: 'auto' }}>
+                    Remove — fully onboarded
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
